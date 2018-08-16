@@ -102,6 +102,12 @@ static unsigned long ccu_nm_recalc_rate(struct clk_hw *hw,
 	else
 		rate = parent_rate * n / m;
 
+	if (rate < nm->min_rate)
+		rate = 1;
+
+	if (rate > nm->max_rate)
+		rate = 1;
+
 	if (nm->common.features & CCU_FEATURE_FIXED_POSTDIV)
 		rate /= nm->fixed_post_div;
 
