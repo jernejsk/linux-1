@@ -20,47 +20,40 @@ static inline struct sun8i_phy_clk *hw_to_phy_clk(struct clk_hw *hw)
 static int sun8i_phy_clk_determine_rate(struct clk_hw *hw,
 					struct clk_rate_request *req)
 {
-	unsigned long rate = req->rate;
-	unsigned long best_rate = 0;
-	struct clk_hw *best_parent = NULL;
-	struct clk_hw *parent;
-	int best_div = 1;
-	int i, p;
+	unsigned long best_parent_rate = 0, best_rate = 0;
+	struct clk_hw *parent, *best_parent = NULL;
+	unsigned long parent_rate, rate;
+	int p;
 
 	for (p = 0; p < clk_hw_get_num_parents(hw); p++) {
 		parent = clk_hw_get_parent_by_index(hw, p);
 		if (!parent)
 			continue;
 
-		for (i = 1; i <= 16; i++) {
-			unsigned long ideal = rate * i;
-			unsigned long rounded;
+		parent_rate = clk_hw_get_rate(parent);
 
-			rounded = clk_hw_round_rate(parent, ideal);
+		rate = divider_round_rate_parent(hw, parent, req->rate,
+						 &parent_rate, NULL, 4,
+						 CLK_SET_RATE_PARENT);
 
-			if (rounded == ideal) {
-				best_rate = rounded;
-				best_div = i;
-				best_parent = parent;
-				break;
-			}
-
-			if (!best_rate ||
-			    abs(rate - rounded / i) <
-			    abs(rate - best_rate / best_div)) {
-				best_rate = rounded;
-				best_div = i;
-				best_parent = parent;
-			}
+		if (rate == req->rate) {
+			best_parent = parent;
+			best_parent_rate = parent_rate;
+			best_rate = rate;
+			goto out;
 		}
 
-		if (best_rate / best_div == rate)
-			break;
+		if ((req->rate - rate) < (req->rate - best_rate)) {
+			best_rate = rate;
+			best_parent_rate = parent_rate;
+			best_parent = parent;
+		}
 	}
 
-	req->rate = best_rate / best_div;
-	req->best_parent_rate = best_rate;
+out:
 	req->best_parent_hw = best_parent;
+	req->best_parent_rate = best_parent_rate;
+	req->rate = best_rate;
 
 	return 0;
 }
