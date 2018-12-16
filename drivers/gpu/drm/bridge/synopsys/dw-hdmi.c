@@ -189,6 +189,7 @@ struct dw_hdmi {
 	struct regmap *regm;
 	void (*enable_audio)(struct dw_hdmi *hdmi);
 	void (*disable_audio)(struct dw_hdmi *hdmi);
+	void (*update_eld)(struct device *dev, u8 *eld);
 
 	struct cec_notifier *cec_notifier;
 };
@@ -754,6 +755,19 @@ void dw_hdmi_audio_disable(struct dw_hdmi *hdmi)
 	spin_unlock_irqrestore(&hdmi->audio_lock, flags);
 }
 EXPORT_SYMBOL_GPL(dw_hdmi_audio_disable);
+
+static void dw_hdmi_update_eld(struct dw_hdmi *hdmi, u8 *eld)
+{
+	if (hdmi->audio && hdmi->update_eld)
+		hdmi->update_eld(&hdmi->audio->dev, eld);
+}
+
+void dw_hdmi_set_update_eld(struct dw_hdmi *hdmi,
+			    void (*update_eld)(struct device *dev, u8 *eld))
+{
+	hdmi->update_eld = update_eld;
+}
+EXPORT_SYMBOL_GPL(dw_hdmi_set_update_eld);
 
 static bool hdmi_bus_fmt_is_rgb(unsigned int bus_format)
 {
@@ -2200,6 +2214,7 @@ static int dw_hdmi_connector_update_edid(struct drm_connector *connector,
 			ret = drm_add_edid_modes(connector, edid);
 		else
 			drm_edid_to_eld(connector, edid);
+		dw_hdmi_update_eld(hdmi, connector->eld);
 		kfree(edid);
 	} else {
 		dev_dbg(hdmi->dev, "failed to get edid\n");
