@@ -639,7 +639,9 @@ void hdmi_codec_eld_notify(struct device *dev)
 	struct hdmi_codec_priv *hcp = dev_get_drvdata(dev);
 	struct snd_ctl_elem_id id;
 
-	if (!hcp->snd_card || !hcp->kctl)
+	if (!hcp ||
+	    !hcp->snd_card ||
+	    !hcp->kctl)
 		return;
 
 	id = hcp->kctl->id;
