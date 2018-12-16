@@ -2191,7 +2191,8 @@ dw_hdmi_connector_detect(struct drm_connector *connector, bool force)
 	return hdmi->phy.ops->read_hpd(hdmi, hdmi->phy.data);
 }
 
-static int dw_hdmi_connector_get_modes(struct drm_connector *connector)
+static int dw_hdmi_connector_update_edid(struct drm_connector *connector,
+					  bool add_modes)
 {
 	struct dw_hdmi *hdmi = container_of(connector, struct dw_hdmi,
 					     connector);
@@ -2210,13 +2211,19 @@ static int dw_hdmi_connector_get_modes(struct drm_connector *connector)
 		hdmi->sink_has_audio = drm_detect_monitor_audio(edid);
 		drm_connector_update_edid_property(connector, edid);
 		cec_notifier_set_phys_addr_from_edid(hdmi->cec_notifier, edid);
-		ret = drm_add_edid_modes(connector, edid);
+		if (add_modes)
+			ret = drm_add_edid_modes(connector, edid);
 		kfree(edid);
 	} else {
 		dev_dbg(hdmi->dev, "failed to get edid\n");
 	}
 
 	return ret;
+}
+
+static int dw_hdmi_connector_get_modes(struct drm_connector *connector)
+{
+	return dw_hdmi_connector_update_edid(connector, true);
 }
 
 static void dw_hdmi_connector_force(struct drm_connector *connector)
