@@ -2198,6 +2198,8 @@ static int dw_hdmi_connector_update_edid(struct drm_connector *connector,
 		cec_notifier_set_phys_addr_from_edid(hdmi->cec_notifier, edid);
 		if (add_modes)
 			ret = drm_add_edid_modes(connector, edid);
+		else
+			drm_edid_to_eld(connector, edid);
 		kfree(edid);
 	} else {
 		dev_dbg(hdmi->dev, "failed to get edid\n");
