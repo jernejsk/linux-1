@@ -131,6 +131,22 @@ static void dw_hdmi_i2s_audio_shutdown(struct device *dev, void *data)
 	dw_hdmi_audio_disable(hdmi);
 }
 
+static void dw_hdmi_i2s_update_eld(struct device *dev, u8 *eld)
+{
+	struct dw_hdmi_i2s_audio_data *audio = dev_get_platdata(dev);
+	struct platform_device *hcpdev = dev_get_drvdata(dev);
+
+	if (!audio || !hcpdev)
+		return;
+
+	if (!memcmp(audio->eld, eld, sizeof(audio->eld)))
+		return;
+
+	memcpy(audio->eld, eld, sizeof(audio->eld));
+
+	hdmi_codec_eld_notify(&hcpdev->dev);
+}
+
 static int dw_hdmi_i2s_get_eld(struct device *dev, void *data, uint8_t *buf,
 			       size_t len)
 {
@@ -194,12 +210,17 @@ static int snd_dw_hdmi_probe(struct platform_device *pdev)
 
 	dev_set_drvdata(&pdev->dev, platform);
 
+	dw_hdmi_set_update_eld(audio->hdmi, dw_hdmi_i2s_update_eld);
+
 	return 0;
 }
 
 static int snd_dw_hdmi_remove(struct platform_device *pdev)
 {
+	struct dw_hdmi_i2s_audio_data *audio = dev_get_platdata(&pdev->dev);
 	struct platform_device *platform = dev_get_drvdata(&pdev->dev);
+
+	dw_hdmi_set_update_eld(audio->hdmi, NULL);
 
 	platform_device_unregister(platform);
 
