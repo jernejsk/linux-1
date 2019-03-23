@@ -144,6 +144,8 @@ struct dw_hdmi_plat_data {
 	int (*configure_phy)(struct dw_hdmi *hdmi,
 			     const struct dw_hdmi_plat_data *pdata,
 			     unsigned long mpixelclock);
+
+	unsigned int disable_cec : 1;
 };
 
 struct dw_hdmi *dw_hdmi_probe(struct platform_device *pdev,
