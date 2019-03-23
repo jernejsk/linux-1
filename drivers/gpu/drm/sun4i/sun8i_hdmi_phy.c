@@ -503,8 +503,9 @@ static void sun8i_hdmi_phy_init_h3(struct sun8i_hdmi_phy *phy)
 	regmap_update_bits(phy->regs, SUN8I_HDMI_PHY_PLL_CFG1_REG,
 			   SUN8I_HDMI_PHY_PLL_CFG1_CKIN_SEL_MSK, 0);
 
-	/* set HW control of CEC pins */
-	regmap_write(phy->regs, SUN8I_HDMI_PHY_CEC_REG, 0);
+	/* manual control of CEC pins */
+	regmap_write(phy->regs, SUN8I_HDMI_PHY_CEC_REG,
+		     SUN8I_HDMI_PHY_CEC_PIN_CTRL);
 
 	/* read calibration data */
 	regmap_read(phy->regs, SUN8I_HDMI_PHY_ANA_STS_REG, &val);
@@ -530,7 +531,48 @@ void sun8i_hdmi_phy_set_ops(struct sun8i_hdmi_phy *phy,
 		plat_data->cur_ctr = variant->cur_ctr;
 		plat_data->phy_config = variant->phy_cfg;
 	}
+	plat_data->disable_cec = phy->variant->bit_bang_cec;
 }
+
+#ifdef CONFIG_DRM_SUN8I_DW_HDMI_CEC
+static bool sun8i_hdmi_phy_cec_pin_read(struct cec_adapter *adap)
+{
+	struct sun8i_hdmi_phy *phy = cec_get_drvdata(adap);
+	unsigned int val;
+
+	regmap_read(phy->regs, SUN8I_HDMI_PHY_CEC_REG, &val);
+
+	return val & SUN8I_HDMI_PHY_CEC_IN_DATA;
+}
+
+static void sun8i_hdmi_phy_cec_pin_low(struct cec_adapter *adap)
+{
+	struct sun8i_hdmi_phy *phy = cec_get_drvdata(adap);
+
+	/* Start driving the CEC pin low */
+	regmap_write(phy->regs, SUN8I_HDMI_PHY_CEC_REG,
+		     SUN8I_HDMI_PHY_CEC_PIN_CTRL);
+}
+
+static void sun8i_hdmi_phy_cec_pin_high(struct cec_adapter *adap)
+{
+	struct sun8i_hdmi_phy *phy = cec_get_drvdata(adap);
+
+	/*
+	 * Stop driving the CEC pin, the pull up will take over
+	 * unless another CEC device is driving the pin low.
+	 */
+	regmap_write(phy->regs, SUN8I_HDMI_PHY_CEC_REG,
+		     SUN8I_HDMI_PHY_CEC_PIN_CTRL |
+		     SUN8I_HDMI_PHY_CEC_OUT_DIS);
+}
+
+static const struct cec_pin_ops sun8i_hdmi_phy_cec_pin_ops = {
+	.read = sun8i_hdmi_phy_cec_pin_read,
+	.low = sun8i_hdmi_phy_cec_pin_low,
+	.high = sun8i_hdmi_phy_cec_pin_high,
+};
+#endif
 
 static struct regmap_config sun8i_hdmi_phy_regmap_config = {
 	.reg_bits	= 32,
@@ -548,6 +590,7 @@ static const struct sun8i_hdmi_phy_variant sun8i_a83t_hdmi_phy = {
 };
 
 static const struct sun8i_hdmi_phy_variant sun8i_h3_hdmi_phy = {
+	.bit_bang_cec = true,
 	.has_phy_clk = true,
 	.is_custom_phy = true,
 	.phy_init = &sun8i_hdmi_phy_init_h3,
@@ -556,6 +599,7 @@ static const struct sun8i_hdmi_phy_variant sun8i_h3_hdmi_phy = {
 };
 
 static const struct sun8i_hdmi_phy_variant sun8i_r40_hdmi_phy = {
+	.bit_bang_cec = true,
 	.has_phy_clk = true,
 	.has_second_pll = true,
 	.is_custom_phy = true,
@@ -565,6 +609,7 @@ static const struct sun8i_hdmi_phy_variant sun8i_r40_hdmi_phy = {
 };
 
 static const struct sun8i_hdmi_phy_variant sun50i_a64_hdmi_phy = {
+	.bit_bang_cec = true,
 	.has_phy_clk = true,
 	.is_custom_phy = true,
 	.phy_init = &sun8i_hdmi_phy_init_h3,
@@ -708,10 +753,40 @@ int sun8i_hdmi_phy_probe(struct sun8i_dw_hdmi *hdmi, struct device_node *node)
 		goto err_disable_clk_bus;
 	}
 
+#ifdef CONFIG_DRM_SUN8I_DW_HDMI_CEC
+	if (phy->variant->bit_bang_cec) {
+		phy->cec_notifier = cec_notifier_get(dev);
+		if (!phy->cec_notifier) {
+			ret = -ENOMEM;
+			goto err_disable_clk_mod;
+		}
+
+		phy->cec_adapter =
+			cec_pin_allocate_adapter(&sun8i_hdmi_phy_cec_pin_ops,
+						 phy, "sun8i-cec",
+						 CEC_CAP_DEFAULTS);
+		ret = PTR_ERR_OR_ZERO(phy->cec_adapter);
+		if (ret < 0)
+			goto err_put_cec_notifier;
+
+		ret = cec_register_adapter(phy->cec_adapter, dev);
+		if (ret < 0)
+			goto err_delete_cec_adapter;
+
+		cec_register_cec_notifier(phy->cec_adapter, phy->cec_notifier);
+	}
+#endif
+
 	hdmi->phy = phy;
 
 	return 0;
 
+err_delete_cec_adapter:
+	cec_delete_adapter(phy->cec_adapter);
+err_put_cec_notifier:
+	cec_notifier_put(phy->cec_notifier);
+err_disable_clk_mod:
+	clk_disable_unprepare(phy->clk_mod);
 err_disable_clk_bus:
 	clk_disable_unprepare(phy->clk_bus);
 err_deassert_rst_phy:
@@ -735,6 +810,10 @@ err_put_clk_bus:
 void sun8i_hdmi_phy_remove(struct sun8i_dw_hdmi *hdmi)
 {
 	struct sun8i_hdmi_phy *phy = hdmi->phy;
+
+	cec_unregister_adapter(phy->cec_adapter);
+	if (phy->cec_notifier)
+		cec_notifier_put(phy->cec_notifier);
 
 	clk_disable_unprepare(phy->clk_mod);
 	clk_disable_unprepare(phy->clk_bus);

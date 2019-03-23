@@ -60,6 +60,16 @@ config DRM_SUN8I_DW_HDMI
 	  DesignWare HDMI controller with custom HDMI PHY. If M is
 	  selected the module will be called sun8i_dw_hdmi.
 
+config DRM_SUN8I_DW_HDMI_CEC
+       bool "Allwinner DesignWare HDMI CEC Support for 40nm SoCs"
+       depends on DRM_SUN8I_DW_HDMI
+       select CEC_CORE
+       select CEC_PIN
+       help
+	  Choose this option if you have an 40nm Allwinner SoC with
+	  the DesignWare HDMI controller with custom HDMI PHY and
+	  you want to use CEC.
+
 config DRM_SUN8I_MIXER
 	tristate "Support for Allwinner Display Engine 2.0 Mixer"
 	default MACH_SUN8I

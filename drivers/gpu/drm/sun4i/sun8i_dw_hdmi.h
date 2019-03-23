@@ -12,6 +12,7 @@
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
 #include <linux/reset.h>
+#include <media/cec-pin.h>
 
 #define SUN8I_HDMI_PHY_DBG_CTRL_REG	0x0000
 #define SUN8I_HDMI_PHY_DBG_CTRL_PX_LOCK		BIT(0)
@@ -144,6 +145,13 @@
 #define SUN8I_HDMI_PHY_ANA_STS_RCAL_MASK	GENMASK(5, 0)
 
 #define SUN8I_HDMI_PHY_CEC_REG		0x003c
+#define SUN8I_HDMI_PHY_CEC_PIN_CTRL		BIT(7)
+/*
+ * Documentation says that this bit is output enable. However,
+ * it seems that this bit is actually output disable.
+ */
+#define SUN8I_HDMI_PHY_CEC_OUT_DIS		BIT(2)
+#define SUN8I_HDMI_PHY_CEC_IN_DATA		BIT(1)
 
 struct sun8i_hdmi_phy;
 
@@ -151,6 +159,7 @@ struct sun8i_hdmi_phy_variant {
 	bool has_phy_clk;
 	bool has_second_pll;
 	unsigned int is_custom_phy : 1;
+	unsigned int bit_bang_cec : 1;
 	const struct dw_hdmi_curr_ctrl *cur_ctr;
 	const struct dw_hdmi_mpll_config *mpll_cfg;
 	const struct dw_hdmi_phy_config *phy_cfg;
@@ -163,6 +172,8 @@ struct sun8i_hdmi_phy_variant {
 };
 
 struct sun8i_hdmi_phy {
+	struct cec_adapter		*cec_adapter;
+	struct cec_notifier		*cec_notifier;
 	struct clk			*clk_bus;
 	struct clk			*clk_mod;
 	struct clk			*clk_phy;
