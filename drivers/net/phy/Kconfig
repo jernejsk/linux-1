@@ -78,6 +78,14 @@ config SFP
 
 comment "MII PHY device drivers"
 
+config AC200_PHY
+	tristate "X-Powers AC200 Ethernet PHY"
+	help
+	  Enable support for the 100Mbps Ethernet PHY in the X-Powers AC200
+	  mixed-signal companion IC. The driver applies the analog tuning
+	  values recommended by the vendor and disables unsupported EEE
+	  features.
+
 config AS21XXX_PHY
 	tristate "Aeonsemi AS21xxx PHYs"
 	help
