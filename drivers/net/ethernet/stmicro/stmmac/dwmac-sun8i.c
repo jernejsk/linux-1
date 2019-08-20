@@ -17,6 +17,7 @@
 #include <linux/phy.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
+#include <linux/reboot.h>
 #include <linux/regmap.h>
 #include <linux/stmmac.h>
 
@@ -80,6 +81,7 @@ struct sunxi_priv_data {
 	struct regmap_field *regmap_field;
 	bool internal_phy_powered;
 	void *mux_handle;
+	struct notifier_block reboot_nb;
 };
 
 /* EMAC clock register @ 0x30 in the "system control" address range */
@@ -1130,6 +1132,19 @@ out_put_node:
 	return regmap;
 }
 
+
+static int sun8i_dwmac_reboot_notifier(struct notifier_block *nb,
+				       unsigned long action, void *data)
+{
+	struct sunxi_priv_data *gmac = container_of(nb, struct sunxi_priv_data,
+						    reboot_nb);
+
+	regulator_disable(gmac->regulator_phy);
+	regulator_disable(gmac->regulator_phy_io);
+
+	return NOTIFY_DONE;
+}
+
 static int sun8i_dwmac_probe(struct platform_device *pdev)
 {
 	struct plat_stmmacenet_data *plat_dat;
@@ -1181,6 +1196,13 @@ static int sun8i_dwmac_probe(struct platform_device *pdev)
 		ret = PTR_ERR(gmac->regulator_phy_io);
 		if (ret != -EPROBE_DEFER)
 			dev_err(dev, "Failed to get PHY I/O regulator (%d)\n", ret);
+		return ret;
+	}
+
+	gmac->reboot_nb.notifier_call = sun8i_dwmac_reboot_notifier;
+	ret = devm_register_reboot_notifier(dev, &gmac->reboot_nb);
+	if (ret) {
+		dev_err(dev, "Failed to register reboot notifier (%d)\n", ret);
 		return ret;
 	}
 
