@@ -40,8 +40,11 @@ static int dw_hdmi_i2s_hw_params(struct device *dev, void *data,
 {
 	struct dw_hdmi_i2s_audio_data *audio = data;
 	struct dw_hdmi *hdmi = audio->hdmi;
+	int sample_width = hparms->sample_width;
+	int ca = hparms->cea.channel_allocation;
 	u8 conf0 = 0;
 	u8 conf1 = 0;
+	u8 conf2 = 0;
 	u8 inputclkfs = 0;
 
 	/* it cares I2S only */
@@ -57,6 +60,20 @@ static int dw_hdmi_i2s_hw_params(struct device *dev, void *data,
 	inputclkfs	= HDMI_AUD_INPUTCLKFS_64FS;
 	conf0		= (HDMI_AUD_CONF0_I2S_SELECT | HDMI_AUD_CONF0_I2S_EN0);
 
+	printk("format: %d\n", hparms->format);
+	if (hparms->format == SNDRV_PCM_FORMAT_IEC958_SUBFRAME_LE) {
+		conf2 |= HDMI_AUD_CONF2_NLPCM;
+		if (hparms->channels == 8)
+			conf2 |= HDMI_AUD_CONF2_HBR;
+
+		sample_width = 21;
+		ca = 0;
+
+		printk("selecting iec958, channels: %d\n", hparms->channels);
+	}
+
+	hdmi_write(audio, conf2, HDMI_AUD_CONF2);
+
 	/* Enable the required i2s lanes */
 	switch (hparms->channels) {
 	case 7 ... 8:
@@ -70,9 +87,12 @@ static int dw_hdmi_i2s_hw_params(struct device *dev, void *data,
 		/* Fall-thru */
 	}
 
-	switch (hparms->sample_width) {
+	switch (sample_width) {
 	case 16:
 		conf1 = HDMI_AUD_CONF1_WIDTH_16;
+		break;
+	case 21:
+		conf1 = HDMI_AUD_CONF1_WIDTH_21;
 		break;
 	case 24:
 	case 32:
@@ -104,7 +124,7 @@ static int dw_hdmi_i2s_hw_params(struct device *dev, void *data,
 	dw_hdmi_set_sample_rate(hdmi, hparms->sample_rate);
 	dw_hdmi_set_channel_status(hdmi, hparms->iec.status);
 	dw_hdmi_set_channel_count(hdmi, hparms->channels);
-	dw_hdmi_set_channel_allocation(hdmi, hparms->cea.channel_allocation);
+	dw_hdmi_set_channel_allocation(hdmi, ca);
 
 	hdmi_write(audio, inputclkfs, HDMI_AUD_INPUTCLKFS);
 	hdmi_write(audio, conf0, HDMI_AUD_CONF0);

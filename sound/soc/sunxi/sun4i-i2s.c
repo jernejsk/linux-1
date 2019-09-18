@@ -674,6 +674,8 @@ static int sun4i_i2s_hw_params(struct snd_pcm_substream *substream,
 	u32 width;
 	int lines;
 
+	printk("i2s format: %d\n", params_format(params));
+
 	if (i2s->slots)
 		slots = i2s->slots;
 
@@ -1143,7 +1145,8 @@ static int sun4i_i2s_dai_probe(struct snd_soc_dai *dai)
 
 #define SUN4I_FORMATS	(SNDRV_PCM_FMTBIT_S16_LE | \
 			 SNDRV_PCM_FMTBIT_S20_LE | \
-			 SNDRV_PCM_FMTBIT_S24_LE)
+			 SNDRV_PCM_FMTBIT_S24_LE | \
+			 SNDRV_PCM_FMTBIT_IEC958_SUBFRAME_LE)
 
 static struct snd_soc_dai_driver sun4i_i2s_dai = {
 	.probe = sun4i_i2s_dai_probe,
