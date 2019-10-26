@@ -134,6 +134,8 @@ struct cedrus_ctx {
 			ssize_t		mv_col_buf_unit_size;
 			void		*neighbor_info_buf;
 			dma_addr_t	neighbor_info_buf_addr;
+			void		*entry_points_buf;
+			dma_addr_t	entry_points_buf_addr;
 		} h265;
 	} codec;
 };
