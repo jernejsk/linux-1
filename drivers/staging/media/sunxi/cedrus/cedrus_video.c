@@ -469,6 +469,18 @@ static int cedrus_buf_prepare(struct vb2_buffer *vb)
 	return 0;
 }
 
+static void cedrus_buf_cleanup(struct vb2_buffer *vb)
+{
+	struct vb2_queue *vq = vb->vb2_queue;
+	struct cedrus_ctx *ctx = vb2_get_drv_priv(vq);
+	struct cedrus_dev *dev = ctx->dev;
+	struct cedrus_dec_ops *ops = dev->dec_ops[ctx->current_codec];
+
+	if (!V4L2_TYPE_IS_OUTPUT(vq->type) && ops->buf_cleanup)
+		ops->buf_cleanup(ctx,
+				 vb2_to_cedrus_buffer(vq->bufs[vb->index]));
+}
+
 static int cedrus_start_streaming(struct vb2_queue *vq, unsigned int count)
 {
 	struct cedrus_ctx *ctx = vb2_get_drv_priv(vq);
@@ -551,6 +563,7 @@ static void cedrus_buf_request_complete(struct vb2_buffer *vb)
 static struct vb2_ops cedrus_qops = {
 	.queue_setup		= cedrus_queue_setup,
 	.buf_prepare		= cedrus_buf_prepare,
+	.buf_cleanup		= cedrus_buf_cleanup,
 	.buf_queue		= cedrus_buf_queue,
 	.buf_out_validate	= cedrus_buf_out_validate,
 	.buf_request_complete	= cedrus_buf_request_complete,
