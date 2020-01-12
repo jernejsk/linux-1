@@ -12,6 +12,7 @@
 	compatible = "oranth,tanix-tx6", "allwinner,sun50i-h6";
 
 	aliases {
+		ethernet0 = &emac;
 		serial0 = &uart0;
 	};
 
@@ -39,11 +40,27 @@
 	};
 };
 
+&ac200_ephy {
+	status = "okay";
+};
+
+&ac200_pwm_clk {
+	status = "okay";
+};
+
 &de {
 	status = "okay";
 };
 
 &dwc3 {
+	status = "okay";
+};
+
+&emac {
+	pinctrl-names = "default";
+	pinctrl-0 = <&ext_rmii_pins>;
+	phy-mode = "rmii";
+	phy-handle = <&ext_rmii_phy>;
 	status = "okay";
 };
 
@@ -69,6 +86,17 @@
 	};
 };
 
+&i2c3 {
+	status = "okay";
+};
+
+&mdio {
+	ext_rmii_phy: ethernet-phy@1 {
+		compatible = "ethernet-phy-ieee802.3-c22";
+		reg = <1>;
+	};
+};
+
 &mmc0 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&mmc0_pins>;
@@ -83,6 +111,10 @@
 };
 
 &ohci3 {
+	status = "okay";
+};
+
+&pwm {
 	status = "okay";
 };
 
