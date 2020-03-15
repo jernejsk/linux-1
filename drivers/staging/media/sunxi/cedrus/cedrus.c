@@ -289,7 +289,7 @@ static int cedrus_open(struct file *file)
 		goto err_ctrls;
 	}
 	ctx->dst_fmt.pixelformat = V4L2_PIX_FMT_SUNXI_TILED_NV12;
-	cedrus_prepare_format(&ctx->dst_fmt);
+	cedrus_prepare_format(&ctx->dst_fmt, 0);
 	ctx->src_fmt.pixelformat = V4L2_PIX_FMT_MPEG2_SLICE;
 	/*
 	 * TILED_NV12 has more strict requirements, so copy the width and
@@ -297,7 +297,7 @@ static int cedrus_open(struct file *file)
 	 */
 	ctx->src_fmt.width = ctx->dst_fmt.width;
 	ctx->src_fmt.height = ctx->dst_fmt.height;
-	cedrus_prepare_format(&ctx->src_fmt);
+	cedrus_prepare_format(&ctx->src_fmt, 0);
 
 	v4l2_fh_add(&ctx->fh);
 
