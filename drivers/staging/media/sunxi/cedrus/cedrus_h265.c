@@ -532,6 +532,18 @@ static void cedrus_h265_setup(struct cedrus_ctx *ctx,
 
 	cedrus_write(dev, VE_DEC_H265_DEC_PCM_CTRL, reg);
 
+	if (sps->bit_depth_luma_minus8 == 2) {
+		unsigned int size;
+
+		size = ALIGN(ctx->src_fmt.width, 16) * ALIGN(ctx->src_fmt.height, 16);
+
+		reg = (size * 3) / 2;
+		cedrus_write(dev, VE_DEC_H265_OFFSET_ADDR_FIRST_OUT, reg);
+
+		reg = DIV_ROUND_UP(ctx->src_fmt.width, 4);
+		cedrus_write(dev, VE_DEC_H265_10BIT_CONFIGURE, ALIGN(reg, 32));
+	}
+
 	/* PPS. */
 
 	reg = VE_DEC_H265_DEC_PPS_CTRL0_PPS_CR_QP_OFFSET(pps->pps_cr_qp_offset) |
