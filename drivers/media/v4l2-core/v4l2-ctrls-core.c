@@ -448,6 +448,12 @@ void v4l2_ctrl_type_op_log(const struct v4l2_ctrl *ctrl)
 	case V4L2_CTRL_TYPE_AV1_FILM_GRAIN:
 		pr_cont("AV1_FILM_GRAIN");
 		break;
+	case V4L2_CTRL_TYPE_VC1_SLICE_PARAMS:
+		pr_cont("VC1_SLICE_PARAMS");
+		break;
+	case V4L2_CTRL_TYPE_VC1_BITPLANES:
+		pr_cont("VC1_BITPLANES");
+		break;
 	case V4L2_CTRL_TYPE_RECT:
 		pr_cont("(%d,%d)/%ux%u",
 			ptr.p_rect->left, ptr.p_rect->top,
@@ -1346,6 +1352,10 @@ static int std_validate_compound(const struct v4l2_ctrl *ctrl, u32 idx,
 			return -EINVAL;
 		break;
 
+	case V4L2_CTRL_TYPE_VC1_SLICE_PARAMS:
+	case V4L2_CTRL_TYPE_VC1_BITPLANES:
+		break;
+
 	case V4L2_CTRL_TYPE_RECT:
 		rect = p;
 		if (!rect->width || !rect->height)
@@ -2065,6 +2075,12 @@ static struct v4l2_ctrl *v4l2_ctrl_new(struct v4l2_ctrl_handler *hdl,
 		break;
 	case V4L2_CTRL_TYPE_AREA:
 		elem_size = sizeof(struct v4l2_area);
+		break;
+	case V4L2_CTRL_TYPE_VC1_SLICE_PARAMS:
+		elem_size = sizeof(struct v4l2_ctrl_vc1_slice_params);
+		break;
+	case V4L2_CTRL_TYPE_VC1_BITPLANES:
+		elem_size = sizeof(struct v4l2_ctrl_vc1_bitplanes);
 		break;
 	case V4L2_CTRL_TYPE_RECT:
 		elem_size = sizeof(struct v4l2_rect);

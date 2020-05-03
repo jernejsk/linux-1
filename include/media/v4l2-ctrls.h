@@ -13,6 +13,12 @@
 #include <linux/videodev2.h>
 #include <media/media-request.h>
 
+/*
+ * Include the stateless codec compound control definitions.
+ * This will move to the public headers once this API is fully stable.
+ */
+#include <media/vc1-ctrls.h>
+
 /* forward references */
 struct file;
 struct poll_table_struct;
