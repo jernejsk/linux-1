@@ -1189,6 +1189,8 @@ const char *v4l2_ctrl_get_name(u32 id)
 	case V4L2_CID_STATELESS_HEVC_DECODE_MODE:		return "HEVC Decode Mode";
 	case V4L2_CID_STATELESS_HEVC_START_CODE:		return "HEVC Start Code";
 	case V4L2_CID_STATELESS_HEVC_ENTRY_POINT_OFFSETS:	return "HEVC Entry Point Offsets";
+	case V4L2_CID_STATELESS_VC1_SLICE_PARAMS:		return "VC1 Slice Parameters";
+	case V4L2_CID_STATELESS_VC1_BITPLANES:			return "VC1 Bitplanes";
 
 	/* Colorimetry controls */
 	/* Keep the order of the 'case's the same as in v4l2-controls.h! */
@@ -1538,6 +1540,12 @@ void v4l2_ctrl_fill(u32 id, const char **name, enum v4l2_ctrl_type *type,
 		break;
 	case V4L2_CID_COLORIMETRY_HDR10_MASTERING_DISPLAY:
 		*type = V4L2_CTRL_TYPE_HDR10_MASTERING_DISPLAY;
+		break;
+	case V4L2_CID_STATELESS_VC1_SLICE_PARAMS:
+		*type = V4L2_CTRL_TYPE_VC1_SLICE_PARAMS;
+		break;
+	case V4L2_CID_STATELESS_VC1_BITPLANES:
+		*type = V4L2_CTRL_TYPE_VC1_BITPLANES;
 		break;
 	default:
 		*type = V4L2_CTRL_TYPE_INTEGER;
