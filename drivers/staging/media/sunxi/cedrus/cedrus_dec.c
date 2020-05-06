@@ -86,6 +86,13 @@ void cedrus_device_run(void *priv)
 			V4L2_CID_STATELESS_VP8_FRAME);
 		break;
 
+	case V4L2_PIX_FMT_VC1_SLICE:
+		run.vc1.slice_params = cedrus_find_control_data(ctx,
+			V4L2_CID_STATELESS_VC1_SLICE_PARAMS);
+		run.vc1.bitplanes = cedrus_find_control_data(ctx,
+			V4L2_CID_STATELESS_VC1_BITPLANES);
+		break;
+
 	default:
 		break;
 	}
