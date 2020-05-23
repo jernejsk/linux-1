@@ -819,6 +819,9 @@ static int h5_serdev_probe(struct serdev_device *serdev)
 		if (!data)
 			return -ENODEV;
 
+		of_property_read_string(dev->of_node,
+					"firmware-postfix", &h5->id);
+
 		h5->vnd = (const struct h5_vnd *)data;
 	}
 
