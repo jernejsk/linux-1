@@ -88,6 +88,20 @@
 		method = "smc";
 	};
 
+	sound_hdmi: sound_hdmi {
+		compatible = "allwinner,sun9i-a80-hdmi-audio",
+			     "allwinner,sun50i-h6-hdmi-audio";
+		status = "disabled";
+
+		codec {
+			sound-dai = <&hdmi>;
+		};
+
+		cpu {
+			sound-dai = <&i2s1>;
+		};
+	};
+
 	timer {
 		compatible = "arm,armv8-timer";
 		arm,no-tick-in-suspend;
@@ -100,6 +114,7 @@
 			     <GIC_PPI 10
 			(GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_HIGH)>;
 	};
+
 
 	soc {
 		compatible = "simple-bus";
@@ -760,6 +775,7 @@
 		};
 
 		hdmi: hdmi@6000000 {
+			#sound-dai-cells = <0>;
 			compatible = "allwinner,sun50i-h6-dw-hdmi";
 			reg = <0x06000000 0x10000>;
 			reg-io-width = <1>;
