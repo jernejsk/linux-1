@@ -102,6 +102,10 @@
 	bias-pull-up;
 };
 
+&i2s2 {
+	status = "okay";
+};
+
 &mdio {
 	ext_rgmii_phy: ethernet-phy@1 {
 		compatible = "ethernet-phy-ieee802.3-c22";
@@ -250,6 +254,10 @@
 
 &simplefb_hdmi {
 	vcc-hdmi-supply = <&reg_dldo1>;
+};
+
+&sound_hdmi {
+	status = "okay";
 };
 
 &uart0 {

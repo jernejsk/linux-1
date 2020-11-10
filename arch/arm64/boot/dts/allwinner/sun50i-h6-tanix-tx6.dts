@@ -82,6 +82,10 @@
 	};
 };
 
+&i2s1 {
+	status = "okay";
+};
+
 &mmc0 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&mmc0_pins>;
@@ -101,6 +105,10 @@
 
 &r_ir {
 	linux,rc-map-name = "rc-tanix-tx5max";
+	status = "okay";
+};
+
+&sound_hdmi {
 	status = "okay";
 };
 

@@ -123,6 +123,10 @@
 	};
 };
 
+&i2s1 {
+	status = "okay";
+};
+
 &mdio {
 	ext_rgmii_phy: ethernet-phy@1 {
 		compatible = "ethernet-phy-ieee802.3-c22";
@@ -296,6 +300,10 @@
 
 &rtc {
 	clocks = <&ext_osc32k>;
+};
+
+&sound_hdmi {
+	status = "okay";
 };
 
 /*
