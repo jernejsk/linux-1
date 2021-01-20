@@ -32,6 +32,12 @@ struct de2_fmt_info {
 	u32	de2_fmt;
 };
 
+static const u32 sun8i_rgb2yuv_coef[12] = {
+	0x00000107, 0x00000204, 0x00000064, 0x00004200,
+	0x00001f68, 0x00001ed6, 0x000001c2, 0x00020200,
+	0x000001c2, 0x00001e87, 0x00001fb7, 0x00020200,
+};
+
 static const struct de2_fmt_info de2_formats[] = {
 	{
 		.drm_fmt = DRM_FORMAT_ARGB8888,
@@ -298,9 +304,28 @@ static struct drm_plane **sun8i_layers_init(struct drm_device *drm,
 	return planes;
 }
 
+static void sun8i_mixer_apply_color_correction(struct sunxi_engine *engine)
+{
+	DRM_DEBUG_DRIVER("Applying RGB to YUV color correction\n");
+
+	regmap_bulk_write(engine->regs, SUN8I_MIXER_DCSC_COEF_REG(0),
+			  sun8i_rgb2yuv_coef, 12);
+	regmap_write(engine->regs, SUN8I_MIXER_DCSC_EN, 1);
+}
+
+static void sun8i_mixer_disable_color_correction(struct sunxi_engine *engine)
+{
+	DRM_DEBUG_DRIVER("Disabling color correction\n");
+
+	/* Disable color correction */
+	regmap_write(engine->regs, SUN8I_MIXER_DCSC_EN, 0);
+}
+
 static const struct sunxi_engine_ops sun8i_engine_ops = {
-	.commit		= sun8i_mixer_commit,
-	.layers_init	= sun8i_layers_init,
+	.commit				= sun8i_mixer_commit,
+	.layers_init			= sun8i_layers_init,
+	.apply_color_correction		= sun8i_mixer_apply_color_correction,
+	.disable_color_correction	= sun8i_mixer_disable_color_correction,
 };
 
 static const struct regmap_config sun8i_mixer_regmap_config = {
@@ -560,6 +585,15 @@ static const struct sun8i_mixer_cfg sun8i_h3_mixer0_cfg = {
 	.vi_num		= 1,
 };
 
+static const struct sun8i_mixer_cfg sun8i_h3_mixer1_cfg = {
+	.ccsc		= 1,
+	.mod_rate	= 432000000,
+	.scaler_mask	= 0x3,
+	.scanline_yuv	= 2048,
+	.ui_num		= 1,
+	.vi_num		= 1,
+};
+
 static const struct sun8i_mixer_cfg sun8i_r40_mixer0_cfg = {
 	.ccsc		= 0,
 	.mod_rate	= 297000000,
@@ -627,6 +661,10 @@ static const struct of_device_id sun8i_mixer_of_table[] = {
 	{
 		.compatible = "allwinner,sun8i-h3-de2-mixer-0",
 		.data = &sun8i_h3_mixer0_cfg,
+	},
+	{
+		.compatible = "allwinner,sun8i-h3-de2-mixer-1",
+		.data = &sun8i_h3_mixer1_cfg,
 	},
 	{
 		.compatible = "allwinner,sun8i-r40-de2-mixer-0",

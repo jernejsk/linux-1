@@ -456,8 +456,18 @@ static SUNXI_CCU_M_WITH_MUX_GATE(tcon_clk, "tcon", tcon_parents,
 				 CLK_SET_RATE_PARENT);
 
 static const char * const tve_parents[] = { "pll-de", "pll-periph1" };
-static SUNXI_CCU_M_WITH_MUX_GATE(tve_clk, "tve", tve_parents,
-				 0x120, 0, 4, 24, 3, BIT(31), 0);
+struct ccu_div tve_clk = {
+	.enable	= BIT(31),
+	.div	= _SUNXI_CCU_DIV(0, 4),
+	.mux	= _SUNXI_CCU_MUX(24, 3),
+	.fixed_post_div = 16,
+	.common	= {
+		.reg		= 0x120,
+		.features	= CCU_FEATURE_FIXED_POSTDIV,
+		.hw.init	= CLK_HW_INIT_PARENTS("tve", tve_parents,
+						      &ccu_div_ops, 0),
+	},
+};
 
 static const char * const deinterlace_parents[] = { "pll-periph0", "pll-periph1" };
 static SUNXI_CCU_M_WITH_MUX_GATE(deinterlace_clk, "deinterlace", deinterlace_parents,
