@@ -184,6 +184,20 @@
 			nvmem-cell-names = "calibration";
 			#thermal-sensor-cells = <1>;
 		};
+
+		tve: tv-encoder@1e40000 {
+			compatible = "allwinner,sun50i-h5-tv-encoder";
+			reg = <0x01e40000 0x1000>;
+			clocks = <&ccu CLK_BUS_TVE>;
+			resets = <&ccu RST_BUS_TVE>;
+			status = "disabled";
+
+			port {
+				tve_in_tcon1: endpoint {
+					remote-endpoint = <&tcon1_out_tve>;
+				};
+			};
+		};
 	};
 
 	thermal-zones {
@@ -237,6 +251,10 @@
 	compatible = "allwinner,sun50i-h5-mbus";
 };
 
+&mixer1 {
+	resets = <&display_clocks RST_MIXER1>;
+};
+
 &mmc0 {
 	compatible = "allwinner,sun50i-h5-mmc",
 		     "allwinner,sun50i-a64-mmc";
@@ -271,4 +289,8 @@
 
 &sid {
 	compatible = "allwinner,sun50i-h5-sid";
+};
+
+&tcon1_out_tve {
+	remote-endpoint = <&tve_in_tcon1>;
 };

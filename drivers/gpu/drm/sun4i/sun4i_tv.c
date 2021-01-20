@@ -10,6 +10,7 @@
 #include <linux/component.h>
 #include <linux/module.h>
 #include <linux/of_address.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
@@ -157,6 +158,11 @@ struct tv_mode {
 	const struct burst_levels	*burst_levels;
 	const struct video_levels	*video_levels;
 	const struct resync_parameters	*resync_params;
+};
+
+struct sun4i_tv_quirks {
+	unsigned int calibration;
+	unsigned int unknown : 1;
 };
 
 struct sun4i_tv {
@@ -419,7 +425,7 @@ static const struct regmap_config sun4i_tv_regmap_config = {
 	.reg_bits	= 32,
 	.val_bits	= 32,
 	.reg_stride	= 4,
-	.max_register	= SUN4I_TVE_WSS_DATA2_REG,
+	.max_register	= 0x400,
 	.name		= "tv-encoder",
 };
 
@@ -429,13 +435,19 @@ static int sun4i_tv_bind(struct device *dev, struct device *master,
 	struct platform_device *pdev = to_platform_device(dev);
 	struct drm_device *drm = data;
 	struct sun4i_drv *drv = drm->dev_private;
+	const struct sun4i_tv_quirks *quirks;
 	struct sun4i_tv *tv;
 	void __iomem *regs;
 	int ret;
 
+	quirks = of_device_get_match_data(dev);
+	if (!quirks)
+		return -EINVAL;
+
 	tv = devm_kzalloc(dev, sizeof(*tv), GFP_KERNEL);
 	if (!tv)
 		return -ENOMEM;
+
 	tv->drv = drv;
 	dev_set_drvdata(dev, tv);
 
@@ -471,6 +483,11 @@ static int sun4i_tv_bind(struct device *dev, struct device *master,
 		goto err_assert_reset;
 	}
 	clk_prepare_enable(tv->clk);
+
+	if (quirks->calibration)
+		regmap_write(tv->regs, 0x304, quirks->calibration);
+	if (quirks->unknown)
+		regmap_write(tv->regs, 0x30c, 0x00101110);
 
 	drm_encoder_helper_add(&tv->encoder,
 			       &sun4i_tv_helper_funcs);
@@ -551,8 +568,22 @@ static void sun4i_tv_remove(struct platform_device *pdev)
 	component_del(&pdev->dev, &sun4i_tv_ops);
 }
 
+static const struct sun4i_tv_quirks a10_quirks = {
+};
+
+static const struct sun4i_tv_quirks h3_quirks = {
+	.calibration = 0x02000c00,
+};
+
+static const struct sun4i_tv_quirks h5_quirks = {
+	.calibration = 0x02850000,
+	.unknown = 1,
+};
+
 static const struct of_device_id sun4i_tv_of_table[] = {
-	{ .compatible = "allwinner,sun4i-a10-tv-encoder" },
+	{ .compatible = "allwinner,sun4i-a10-tv-encoder", .data = &a10_quirks },
+	{ .compatible = "allwinner,sun8i-h3-tv-encoder", .data = &h3_quirks },
+	{ .compatible = "allwinner,sun50i-h5-tv-encoder", .data = &h5_quirks },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, sun4i_tv_of_table);
