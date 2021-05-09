@@ -164,6 +164,10 @@
 
 #include "axp22x.dtsi"
 
+&i2s2 {
+	status = "okay";
+};
+
 &ir0 {
 	status = "okay";
 };
@@ -297,6 +301,10 @@
 	regulator-min-microvolt = <1200000>;
 	regulator-max-microvolt = <1200000>;
 	regulator-name = "vdd1v2-sata";
+};
+
+&sound_hdmi {
+	status = "okay";
 };
 
 &tcon_tv0 {
