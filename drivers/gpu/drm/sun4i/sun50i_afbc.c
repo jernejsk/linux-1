@@ -13,6 +13,16 @@
 #include "sun50i_afbc.h"
 #include "sun8i_mixer.h"
 
+static u32 sun50i_afbc_get_base(struct sun8i_mixer *mixer, unsigned int channel)
+{
+	u32 base = sun8i_channel_base(mixer, channel);
+
+	if (mixer->cfg->de_type == sun8i_mixer_de3)
+		return base + SUN50I_AFBC_CH_OFFSET;
+
+	return base + 0x4000;
+}
+
 bool sun50i_afbc_format_mod_supported(struct sun8i_mixer *mixer,
 				      u32 format, u64 modifier)
 {
@@ -29,7 +39,7 @@ bool sun50i_afbc_format_mod_supported(struct sun8i_mixer *mixer,
 		return true;
 	}
 
-	if (!mixer->cfg->is_de3)
+	if (mixer->cfg->de_type == sun8i_mixer_de2)
 		return false;
 
 	mode = AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 |
@@ -69,7 +79,7 @@ void sun50i_afbc_atomic_update(struct sun8i_mixer *mixer, unsigned int channel,
 	struct regmap *regs;
 	dma_addr_t dma_addr;
 
-	base = sun8i_channel_base(mixer, channel) + SUN50I_AFBC_CH_OFFSET;
+	base = sun50i_afbc_get_base(mixer, channel);
 	regs = mixer->engine.regs;
 
 	src_w = drm_rect_width(&state->src) >> 16;
@@ -234,7 +244,7 @@ void sun50i_afbc_atomic_update(struct sun8i_mixer *mixer, unsigned int channel,
 
 void sun50i_afbc_disable(struct sun8i_mixer *mixer, unsigned int channel)
 {
-	u32 base = sun8i_channel_base(mixer, channel) + SUN50I_AFBC_CH_OFFSET;
+	u32 base = sun50i_afbc_get_base(mixer, channel);
 
 	regmap_write(mixer->engine.regs, SUN50I_FBD_CTL(base), 0);
 }

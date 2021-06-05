@@ -34,41 +34,66 @@ static u32 sun50i_fmt_get_colorspace(u32 format)
 	}
 }
 
+static void sun50i_fmt_de3_limits(u32 *limits, u32 colorspace, bool bit10)
+{
+	if (colorspace != SUN50I_FMT_CS_YUV444RGB) {
+		limits[0] = SUN50I_FMT_LIMIT(64, 940);
+		limits[1] = SUN50I_FMT_LIMIT(64, 960);
+		limits[2] = SUN50I_FMT_LIMIT(64, 960);
+	} else if (bit10) {
+		limits[0] = SUN50I_FMT_LIMIT(0, 1023);
+		limits[1] = SUN50I_FMT_LIMIT(0, 1023);
+		limits[2] = SUN50I_FMT_LIMIT(0, 1023);
+	} else {
+		limits[0] = SUN50I_FMT_LIMIT(0, 1021);
+		limits[1] = SUN50I_FMT_LIMIT(0, 1021);
+		limits[2] = SUN50I_FMT_LIMIT(0, 1021);
+	}
+}
+
+static void sun50i_fmt_de33_limits(u32 *limits, u32 colorspace)
+{
+	if (colorspace == SUN50I_FMT_CS_YUV444RGB) {
+		limits[0] = SUN50I_FMT_LIMIT(0, 4095);
+		limits[1] = SUN50I_FMT_LIMIT(0, 4095);
+		limits[2] = SUN50I_FMT_LIMIT(0, 4095);
+	} else {
+		limits[0] = SUN50I_FMT_LIMIT(256, 3840);
+		limits[1] = SUN50I_FMT_LIMIT(256, 3840);
+		limits[2] = SUN50I_FMT_LIMIT(256, 3840);
+	}
+}
+
 void sun50i_fmt_setup(struct sun8i_mixer *mixer, u16 width,
 		      u16 height, u32 format)
 {
-	u32 colorspace, limit[3];
+	u32 colorspace, limit[3], base;
+	struct regmap *regs;
 	bool bit10;
 
 	colorspace = sun50i_fmt_get_colorspace(format);
 	bit10 = sun50i_fmt_is_10bit(format);
+	base = mixer->cfg->de_type == sun8i_mixer_de3 ?
+		SUN50I_FMT_DE3 : SUN50I_FMT_DE33;
+	regs = sun8i_blender_regmap(mixer);
 
-	regmap_write(mixer->engine.regs, SUN50I_FMT_CTRL, 0);
+	if (mixer->cfg->de_type == sun8i_mixer_de3)
+		sun50i_fmt_de3_limits(limit, colorspace, bit10);
+	else
+		sun50i_fmt_de33_limits(limit, colorspace);
 
-	regmap_write(mixer->engine.regs, SUN50I_FMT_SIZE,
+	regmap_write(regs, SUN50I_FMT_CTRL(base), 0);
+
+	regmap_write(regs, SUN50I_FMT_SIZE(base),
 		     SUN8I_MIXER_SIZE(width, height));
-	regmap_write(mixer->engine.regs, SUN50I_FMT_SWAP, 0);
-	regmap_write(mixer->engine.regs, SUN50I_FMT_DEPTH, bit10);
-	regmap_write(mixer->engine.regs, SUN50I_FMT_FORMAT, colorspace);
-	regmap_write(mixer->engine.regs, SUN50I_FMT_COEF, 0);
+	regmap_write(regs, SUN50I_FMT_SWAP(base), 0);
+	regmap_write(regs, SUN50I_FMT_DEPTH(base), bit10);
+	regmap_write(regs, SUN50I_FMT_FORMAT(base), colorspace);
+	regmap_write(regs, SUN50I_FMT_COEF(base), 0);
 
-	if (colorspace != SUN50I_FMT_CS_YUV444RGB) {
-		limit[0] = SUN50I_FMT_LIMIT(64, 940);
-		limit[1] = SUN50I_FMT_LIMIT(64, 960);
-		limit[2] = SUN50I_FMT_LIMIT(64, 960);
-	} else if (bit10) {
-		limit[0] = SUN50I_FMT_LIMIT(0, 1023);
-		limit[1] = SUN50I_FMT_LIMIT(0, 1023);
-		limit[2] = SUN50I_FMT_LIMIT(0, 1023);
-	} else {
-		limit[0] = SUN50I_FMT_LIMIT(0, 1021);
-		limit[1] = SUN50I_FMT_LIMIT(0, 1021);
-		limit[2] = SUN50I_FMT_LIMIT(0, 1021);
-	}
+	regmap_write(regs, SUN50I_FMT_LMT_Y(base), limit[0]);
+	regmap_write(regs, SUN50I_FMT_LMT_C0(base), limit[1]);
+	regmap_write(regs, SUN50I_FMT_LMT_C1(base), limit[2]);
 
-	regmap_write(mixer->engine.regs, SUN50I_FMT_LMT_Y, limit[0]);
-	regmap_write(mixer->engine.regs, SUN50I_FMT_LMT_C0, limit[1]);
-	regmap_write(mixer->engine.regs, SUN50I_FMT_LMT_C1, limit[2]);
-
-	regmap_write(mixer->engine.regs, SUN50I_FMT_CTRL, 1);
+	regmap_write(regs, SUN50I_FMT_CTRL(base), 1);
 }
