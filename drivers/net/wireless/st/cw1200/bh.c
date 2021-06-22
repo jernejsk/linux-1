@@ -418,8 +418,12 @@ static int cw1200_bh(void *arg)
 	int pending_tx = 0;
 	int tx_burst;
 	long status;
-	u32 dummy;
+	u32 *dummy;
 	int ret;
+
+	dummy = kmalloc_obj(*dummy);
+	if (!dummy)
+		return -ENOMEM;
 
 	for (;;) {
 		if (!priv->hw_bufs_used &&
@@ -442,7 +446,7 @@ static int cw1200_bh(void *arg)
 		    (atomic_read(&priv->bh_rx) == 0) &&
 		    (atomic_read(&priv->bh_tx) == 0))
 			cw1200_reg_read(priv, ST90TDS_CONFIG_REG_ID,
-					&dummy, sizeof(dummy));
+					dummy, sizeof(*dummy));
 
 		pr_debug("[BH] waiting ...\n");
 		status = wait_event_interruptible_timeout(priv->bh_wq, ({
@@ -604,5 +608,8 @@ static int cw1200_bh(void *arg)
 		priv->bh_error = 1;
 		/* TODO: schedule_work(recovery) */
 	}
+
+	kfree(dummy);
+
 	return 0;
 }
