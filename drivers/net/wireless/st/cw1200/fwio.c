@@ -48,6 +48,39 @@ static int cw1200_get_hw_type(u32 config_reg_val, int *major_revision)
 	return hw_type;
 }
 
+static int cw1200_load_bootloader(struct cw1200_common *priv)
+{
+	const struct firmware *bootloader = NULL;
+	const char *bl_path = BOOTLOADER_CW1X60;
+	u32 *data, i, addr = AHB_MEMORY_ADDRESS;
+	int ret;
+
+	ret = request_firmware(&bootloader, bl_path, priv->pdev);
+	if (ret) {
+		pr_err("Can't load bootloader file %s.\n", bl_path);
+		goto error;
+	}
+
+	data = (u32 *)bootloader->data;
+	for (i = 0; i < bootloader->size / 4; i++, addr += 4) {
+		ret = cw1200_reg_write_32(priv,
+					  ST90TDS_SRAM_BASE_ADDR_REG_ID, addr);
+		if (ret < 0)
+			goto error;
+		ret = cw1200_reg_write_32(priv,
+					  ST90TDS_AHB_DPORT_REG_ID, data[i]);
+		if (ret < 0)
+			goto error;
+	}
+
+	pr_info("Bootloader download complete\n");
+
+error:
+	release_firmware(bootloader);
+
+	return ret;
+}
+
 static int cw1200_load_firmware_cw1200(struct cw1200_common *priv)
 {
 	int ret, block, num_blocks;
@@ -128,9 +161,11 @@ static int cw1200_load_firmware_cw1200(struct cw1200_common *priv)
 	APB_WRITE(DOWNLOAD_STATUS_REG, DOWNLOAD_PENDING);
 	APB_WRITE(DOWNLOAD_FLAGS_REG, 0);
 
-	/* Write the NOP Instruction */
-	REG_WRITE(ST90TDS_SRAM_BASE_ADDR_REG_ID, 0xFFF20000);
-	REG_WRITE(ST90TDS_AHB_DPORT_REG_ID, 0xEAFFFFFE);
+	if (priv->hw_revision != CW1X60_HW_REV) {
+		/* Write the NOP Instruction */
+		REG_WRITE(ST90TDS_SRAM_BASE_ADDR_REG_ID, 0xFFF20000);
+		REG_WRITE(ST90TDS_AHB_DPORT_REG_ID, 0xEAFFFFFE);
+	}
 
 	/* Release CPU from RESET */
 	REG_READ(ST90TDS_CONFIG_REG_ID, val32);
@@ -469,9 +504,9 @@ int cw1200_load_firmware(struct cw1200_common *priv)
 	switch (priv->hw_type)  {
 	case HIF_8601_SILICON:
 		if (priv->hw_revision == CW1X60_HW_REV) {
-			pr_err("Can't handle CW1160/1260 firmware load yet.\n");
-			ret = -ENOTSUPP;
-			goto out;
+			ret = cw1200_load_bootloader(priv);
+			if (ret)
+				goto out;
 		}
 		ret = cw1200_load_firmware_cw1200(priv);
 		break;
