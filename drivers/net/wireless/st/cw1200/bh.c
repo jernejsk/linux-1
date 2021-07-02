@@ -226,7 +226,7 @@ static int cw1200_device_wakeup(struct cw1200_common *priv)
 void cw1200_enable_powersave(struct cw1200_common *priv,
 			     bool enable)
 {
-	pr_debug("[BH] Powerave is %s.\n",
+	pr_debug("[BH] Powersave is %s.\n",
 		 enable ? "enabled" : "disabled");
 	priv->powersave_enabled = enable;
 }
