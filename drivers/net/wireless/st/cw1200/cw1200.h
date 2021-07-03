@@ -117,6 +117,10 @@ struct cw1200_common {
 		CW1200_HW_REV_CUT22 = 22,
 		CW1X60_HW_REV       = 40,
 	} hw_revision;
+	enum cw1200_fw_api {
+		CW1200_FW_API_ORIGINAL = 0,
+		CW1200_FW_API_XRADIO,
+	} fw_api;
 	int                             hw_refclk;
 	bool				hw_have_5ghz;
 	const struct firmware		*sdd;
@@ -292,7 +296,8 @@ int cw1200_core_probe(const struct hwbus_ops *hwbus_ops,
 		      struct device *pdev,
 		      struct cw1200_common **pself,
 		      int ref_clk, const u8 *macaddr,
-		      const char *sdd_path, bool have_5ghz);
+		      const char *sdd_path, bool have_5ghz,
+		      unsigned int fw_api);
 void cw1200_core_release(struct cw1200_common *self);
 
 #define FWLOAD_BLOCK_SIZE (1024)

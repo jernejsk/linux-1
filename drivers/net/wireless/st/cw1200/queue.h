@@ -102,7 +102,12 @@ bool cw1200_queue_stats_is_empty(struct cw1200_queue_stats *stats,
 
 static inline u8 cw1200_queue_get_queue_id(u32 packet_id)
 {
-	return (packet_id >> 16) & 0xFF;
+	return (packet_id >> 16) & 0xF;
+}
+
+static inline u8 cw1200_queue_get_link_id(u32 packet_id)
+{
+	return (packet_id >> 24) & 0xF;
 }
 
 static inline u8 cw1200_queue_get_generation(u32 packet_id)

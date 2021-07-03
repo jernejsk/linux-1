@@ -343,28 +343,34 @@ int cw1200_config(struct ieee80211_hw *dev, u32 changed)
 	if ((changed & IEEE80211_CONF_CHANGE_CHANNEL) &&
 	    (priv->channel != conf->chandef.chan)) {
 		struct ieee80211_channel *ch = conf->chandef.chan;
-		struct wsm_switch_channel channel = {
-			.channel_number = ch->hw_value,
-		};
+
 		pr_debug("[STA] Freq %d (wsm ch: %d).\n",
 			 ch->center_freq, ch->hw_value);
 
-		/* __cw1200_flush() implicitly locks tx, if successful */
-		if (!__cw1200_flush(priv, false)) {
-			if (!wsm_switch_channel(priv, &channel)) {
-				ret = wait_event_timeout(priv->channel_switch_done,
-							 !priv->channel_switch_in_progress,
-							 3 * HZ);
-				if (ret) {
-					/* Already unlocks if successful */
-					priv->channel = ch;
-					ret = 0;
+		if (priv->fw_api == CW1200_FW_API_XRADIO) {
+			priv->channel = ch;
+		} else {
+			struct wsm_switch_channel channel = {
+				.channel_number = ch->hw_value,
+			};
+
+			/* __cw1200_flush() implicitly locks tx, if successful */
+			if (!__cw1200_flush(priv, false)) {
+				if (!wsm_switch_channel(priv, &channel)) {
+					ret = wait_event_timeout(priv->channel_switch_done,
+								!priv->channel_switch_in_progress,
+								3 * HZ);
+					if (ret) {
+						/* Already unlocks if successful */
+						priv->channel = ch;
+						ret = 0;
+					} else {
+						ret = -ETIMEDOUT;
+					}
 				} else {
-					ret = -ETIMEDOUT;
+					/* Unlock if switch channel fails */
+					wsm_unlock_tx(priv);
 				}
-			} else {
-				/* Unlock if switch channel fails */
-				wsm_unlock_tx(priv);
 			}
 		}
 	}
@@ -1302,7 +1308,7 @@ static void cw1200_do_join(struct cw1200_common *priv)
 	}
 
 	/* Enable asynchronous join calls */
-	if (!conf->ibss_joined) {
+	if (priv->fw_api != CW1200_FW_API_XRADIO && !conf->ibss_joined) {
 		join.flags |= WSM_JOIN_FLAGS_FORCE;
 		join.flags |= WSM_JOIN_FLAGS_FORCE_WITH_COMPLETE_IND;
 	}
@@ -1742,7 +1748,9 @@ void cw1200_set_cts_work(struct work_struct *work)
 
 	wsm_write_mib(priv, WSM_MIB_ID_NON_ERP_PROTECTION,
 		      &use_cts_prot, sizeof(use_cts_prot));
-	wsm_update_ie(priv, &update_ie);
+	if (priv->fw_api != CW1200_FW_API_XRADIO ||
+	    priv->mode != NL80211_IFTYPE_STATION)
+		wsm_update_ie(priv, &update_ie);
 
 	return;
 }

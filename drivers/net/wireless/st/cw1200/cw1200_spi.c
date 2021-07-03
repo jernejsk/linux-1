@@ -412,7 +412,8 @@ static int cw1200_spi_probe(struct spi_device *func)
 				   self->pdata->ref_clk,
 				   self->pdata->macaddr,
 				   self->pdata->sdd_file,
-				   self->pdata->have_5ghz);
+				   self->pdata->have_5ghz,
+				   CW1200_FW_API_ORIGINAL);
 
 	if (status) {
 		cw1200_spi_irq_unsubscribe(self);
