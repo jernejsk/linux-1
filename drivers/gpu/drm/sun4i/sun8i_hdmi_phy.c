@@ -507,8 +507,9 @@ static void sun8i_hdmi_phy_init_h3(struct sun8i_hdmi_phy *phy)
 	regmap_update_bits(phy->regs, SUN8I_HDMI_PHY_PLL_CFG1_REG,
 			   SUN8I_HDMI_PHY_PLL_CFG1_CKIN_SEL_MSK, 0);
 
-	/* set HW control of CEC pins */
-	regmap_write(phy->regs, SUN8I_HDMI_PHY_CEC_REG, 0);
+	/* manual control of CEC pins */
+	regmap_write(phy->regs, SUN8I_HDMI_PHY_CEC_REG,
+		     phy->bit_bang_cec ? SUN8I_HDMI_PHY_CEC_PIN_CTRL : 0);
 
 	/* read calibration data */
 	regmap_read(phy->regs, SUN8I_HDMI_PHY_ANA_STS_REG, &val);
@@ -585,7 +586,46 @@ void sun8i_hdmi_phy_set_ops(struct sun8i_hdmi_phy *phy,
 		plat_data->cur_ctr = variant->cur_ctr;
 		plat_data->phy_config = variant->phy_cfg;
 	}
+	plat_data->disable_cec = phy->disable_cec;
 }
+
+static int sun8i_hdmi_phy_cec_pin_read(struct cec_adapter *adap)
+{
+	struct sun8i_hdmi_phy *phy = cec_get_drvdata(adap);
+	unsigned int val;
+
+	regmap_read(phy->regs, SUN8I_HDMI_PHY_CEC_REG, &val);
+
+	return val & SUN8I_HDMI_PHY_CEC_IN_DATA;
+}
+
+static void sun8i_hdmi_phy_cec_pin_low(struct cec_adapter *adap)
+{
+	struct sun8i_hdmi_phy *phy = cec_get_drvdata(adap);
+
+	/* Start driving the CEC pin low */
+	regmap_write(phy->regs, SUN8I_HDMI_PHY_CEC_REG,
+		     SUN8I_HDMI_PHY_CEC_PIN_CTRL);
+}
+
+static void sun8i_hdmi_phy_cec_pin_high(struct cec_adapter *adap)
+{
+	struct sun8i_hdmi_phy *phy = cec_get_drvdata(adap);
+
+	/*
+	 * Stop driving the CEC pin, the pull up will take over
+	 * unless another CEC device is driving the pin low.
+	 */
+	regmap_write(phy->regs, SUN8I_HDMI_PHY_CEC_REG,
+		     SUN8I_HDMI_PHY_CEC_PIN_CTRL |
+		     SUN8I_HDMI_PHY_CEC_OUT_DIS);
+}
+
+static const struct cec_pin_ops sun8i_hdmi_phy_cec_pin_ops = {
+	.read = sun8i_hdmi_phy_cec_pin_read,
+	.low = sun8i_hdmi_phy_cec_pin_low,
+	.high = sun8i_hdmi_phy_cec_pin_high,
+};
 
 static const struct regmap_config sun8i_hdmi_phy_regmap_config = {
 	.reg_bits	= 32,
@@ -669,6 +709,41 @@ struct sun8i_hdmi_phy *sun8i_hdmi_phy_get(struct device_node *node)
 	return phy;
 }
 
+int sun8i_hdmi_phy_register_cec(struct sun8i_hdmi_phy *phy, struct device *dev)
+{
+	int ret;
+
+	if (!phy->bit_bang_cec)
+		return 0;
+
+	phy->cec_adapter =
+		cec_pin_allocate_adapter(&sun8i_hdmi_phy_cec_pin_ops,
+						phy, "sun8i-cec",
+						CEC_CAP_DEFAULTS);
+	if (IS_ERR(phy->cec_adapter))
+		return PTR_ERR(phy->cec_adapter);
+
+	phy->cec_notifier = cec_notifier_cec_adap_register(dev, NULL,
+							   phy->cec_adapter);
+	if (!phy->cec_notifier) {
+		ret = -ENOMEM;
+		goto err_delete_cec_adapter;
+	}
+
+	ret = cec_register_adapter(phy->cec_adapter, dev);
+	if (ret < 0)
+		goto err_put_cec_notifier;
+
+	return 0;
+
+err_put_cec_notifier:
+	cec_notifier_cec_adap_unregister(phy->cec_notifier, phy->cec_adapter);
+err_delete_cec_adapter:
+	cec_delete_adapter(phy->cec_adapter);
+
+	return ret;
+}
+
 static int sun8i_hdmi_phy_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -681,6 +756,14 @@ static int sun8i_hdmi_phy_probe(struct platform_device *pdev)
 
 	phy->variant = of_device_get_match_data(dev);
 	phy->dev = dev;
+	phy->disable_cec = of_machine_is_compatible("roofull,beelink-x2") ||
+			   of_machine_is_compatible("friendlyarm,nanopi-m1") ||
+			   of_machine_is_compatible("xunlong,orangepi-lite") ||
+			   of_machine_is_compatible("xunlong,orangepi-one") ||
+			   of_machine_is_compatible("xunlong,orangepi-pc-plus") ||
+			   of_machine_is_compatible("xunlong,orangepi-plus2e");
+	phy->bit_bang_cec = phy->disable_cec &&
+			    !of_machine_is_compatible("roofull,beelink-x2");
 
 	regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(regs))
@@ -727,8 +810,19 @@ static int sun8i_hdmi_phy_probe(struct platform_device *pdev)
 	return 0;
 }
 
+static int sun8i_hdmi_phy_remove(struct platform_device *pdev)
+{
+	struct sun8i_hdmi_phy *phy = platform_get_drvdata(pdev);
+
+	cec_notifier_cec_adap_unregister(phy->cec_notifier, phy->cec_adapter);
+	cec_unregister_adapter(phy->cec_adapter);
+
+	return 0;
+}
+
 struct platform_driver sun8i_hdmi_phy_driver = {
 	.probe  = sun8i_hdmi_phy_probe,
+	.remove = sun8i_hdmi_phy_remove,
 	.driver = {
 		.name = "sun8i-hdmi-phy",
 		.of_match_table = sun8i_hdmi_phy_of_table,

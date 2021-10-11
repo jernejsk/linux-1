@@ -287,6 +287,10 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
 		return dev_err_probe(dev, PTR_ERR(phy),
 				     "Couldn't get the HDMI PHY\n");
 
+	ret = sun8i_hdmi_phy_register_cec(phy, dev);
+	if (ret)
+		return ret;
+
 	hdmi = drmm_kzalloc(drm, sizeof(*hdmi), GFP_KERNEL);
 	if (!hdmi)
 		return -ENOMEM;

@@ -13,6 +13,8 @@
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
 #include <linux/reset.h>
+#include <media/cec-notifier.h>
+#include <media/cec-pin.h>
 
 #define SUN8I_HDMI_PHY_DBG_CTRL_REG	0x0000
 #define SUN8I_HDMI_PHY_DBG_CTRL_PX_LOCK		BIT(0)
@@ -145,6 +147,13 @@
 #define SUN8I_HDMI_PHY_ANA_STS_RCAL_MASK	GENMASK(5, 0)
 
 #define SUN8I_HDMI_PHY_CEC_REG		0x003c
+#define SUN8I_HDMI_PHY_CEC_PIN_CTRL		BIT(7)
+/*
+ * Documentation says that this bit is output enable. However,
+ * it seems that this bit is actually output disable.
+ */
+#define SUN8I_HDMI_PHY_CEC_OUT_DIS		BIT(2)
+#define SUN8I_HDMI_PHY_CEC_IN_DATA		BIT(1)
 
 struct sun8i_hdmi_phy;
 
@@ -159,6 +168,8 @@ struct sun8i_hdmi_phy_variant {
 };
 
 struct sun8i_hdmi_phy {
+	struct cec_adapter		*cec_adapter;
+	struct cec_notifier		*cec_notifier;
 	struct clk			*clk_bus;
 	struct clk			*clk_mod;
 	struct clk			*clk_phy;
@@ -169,6 +180,8 @@ struct sun8i_hdmi_phy {
 	struct regmap			*regs;
 	struct reset_control		*rst_phy;
 	const struct sun8i_hdmi_phy_variant *variant;
+	unsigned int 			disable_cec : 1;
+	unsigned int 			bit_bang_cec : 1;
 };
 
 struct sun8i_dw_hdmi_quirks {
@@ -211,5 +224,6 @@ void sun8i_hdmi_phy_set_ops(struct sun8i_hdmi_phy *phy,
 
 int sun8i_phy_clk_create(struct sun8i_hdmi_phy *phy, struct device *dev,
 			 bool second_parent);
+int sun8i_hdmi_phy_register_cec(struct sun8i_hdmi_phy *phy, struct device *dev);
 
 #endif /* _SUN8I_DW_HDMI_H_ */
