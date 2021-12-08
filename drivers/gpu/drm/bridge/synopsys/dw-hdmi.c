@@ -1631,6 +1631,8 @@ static int hdmi_phy_configure_dwc_hdmi_3d_tx(struct dw_hdmi *hdmi,
 	/* Override and disable clock termination. */
 	dw_hdmi_phy_i2c_write(hdmi, HDMI_3D_TX_PHY_CKCALCTRL_OVERRIDE,
 			      HDMI_3D_TX_PHY_CKCALCTRL);
+	if (mpixelclock == 594000000)
+		dw_hdmi_phy_i2c_write(hdmi, 0x8006, HDMI_3D_TX_PHY_MSM_CTRL);
 
 	return 0;
 }
@@ -2300,6 +2302,8 @@ static int dw_hdmi_setup(struct dw_hdmi *hdmi,
 	hdmi->hdmi_data.hdcp_enable = 0;
 	hdmi->hdmi_data.video_mode.mdataenablepolarity = true;
 
+	hdmi_writeb(hdmi, HDMI_FC_GCP_SET_AVMUTE, HDMI_FC_GCP);
+
 	/* HDMI Initialization Step B.1 */
 	hdmi_av_composer(hdmi, &connector->display_info, mode);
 
@@ -2338,6 +2342,9 @@ static int dw_hdmi_setup(struct dw_hdmi *hdmi,
 	hdmi_video_csc(hdmi);
 	hdmi_video_sample(hdmi);
 	hdmi_tx_hdcp_config(hdmi);
+
+	msleep(100);
+	hdmi_writeb(hdmi, HDMI_FC_GCP_CLEAR_AVMUTE, HDMI_FC_GCP);
 
 	dw_hdmi_clear_overflow(hdmi);
 
