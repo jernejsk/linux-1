@@ -8,6 +8,7 @@
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
 
+#include <drm/drm_atomic_helper.h>
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_of.h>
 #include <drm/drm_simple_kms_helper.h>
@@ -15,18 +16,49 @@
 #include "sun8i_dw_hdmi.h"
 #include "sun8i_tcon_top.h"
 
-static void sun8i_dw_hdmi_encoder_mode_set(struct drm_encoder *encoder,
-					   struct drm_display_mode *mode,
-					   struct drm_display_mode *adj_mode)
+#define to_sun8i_dw_hdmi(x) container_of(x, struct sun8i_dw_hdmi, x)
+
+static void
+sun8i_dw_hdmi_bridge_mode_set(struct drm_bridge *bridge,
+			      const struct drm_display_mode *mode,
+			      const struct drm_display_mode *adjusted_mode)
 {
-	struct sun8i_dw_hdmi *hdmi = encoder_to_sun8i_dw_hdmi(encoder);
+	struct sun8i_dw_hdmi *hdmi = to_sun8i_dw_hdmi(bridge);
 
 	clk_set_rate(hdmi->clk_tmds, mode->crtc_clock * 1000);
 }
 
-static const struct drm_encoder_helper_funcs
-sun8i_dw_hdmi_encoder_helper_funcs = {
-	.mode_set = sun8i_dw_hdmi_encoder_mode_set,
+static u32 *
+sun8i_dw_hdmi_get_input_bus_fmts(struct drm_bridge *bridge,
+				 struct drm_bridge_state *bridge_state,
+				 struct drm_crtc_state *crtc_state,
+				 struct drm_connector_state *conn_state,
+				 u32 output_fmt,
+				 unsigned int *num_input_fmts)
+{
+	u32 *input_fmt;
+
+	*num_input_fmts = 0;
+
+	if (output_fmt != MEDIA_BUS_FMT_RGB888_1X24)
+		return NULL;
+
+	input_fmt = kzalloc(sizeof(*input_fmt), GFP_KERNEL);
+	if (!input_fmt)
+		return NULL;
+
+	*num_input_fmts = 1;
+	*input_fmt = output_fmt;
+
+	return input_fmt;
+}
+
+static const struct drm_bridge_funcs sun8i_dw_hdmi_bridge_helper_funcs = {
+	.mode_set = sun8i_dw_hdmi_bridge_mode_set,
+	.atomic_duplicate_state = drm_atomic_helper_bridge_duplicate_state,
+	.atomic_destroy_state = drm_atomic_helper_bridge_destroy_state,
+	.atomic_reset = drm_atomic_helper_bridge_reset,
+	.atomic_get_input_bus_fmts = sun8i_dw_hdmi_get_input_bus_fmts,
 };
 
 static enum drm_mode_status
@@ -109,6 +141,7 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
 {
 	struct platform_device *pdev = to_platform_device(dev), *connector_pdev;
 	struct dw_hdmi_plat_data *plat_data;
+	struct drm_bridge *next_bridge;
 	struct drm_device *drm = data;
 	struct device_node *phy_node;
 	struct drm_encoder *encoder;
@@ -204,8 +237,10 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
 	if (ret)
 		goto err_disable_clk_tmds;
 
-	drm_encoder_helper_add(encoder, &sun8i_dw_hdmi_encoder_helper_funcs);
 	drm_simple_encoder_init(drm, encoder, DRM_MODE_ENCODER_TMDS);
+
+	hdmi->bridge.funcs = &sun8i_dw_hdmi_bridge_helper_funcs;
+	drm_bridge_attach(encoder, &hdmi->bridge, NULL, 0);
 
 	plat_data->mode_valid = sun8i_dw_hdmi_mode_valid;
 	plat_data->use_drm_infoframe = hdmi->quirks->use_drm_infoframe;
@@ -214,15 +249,27 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
 
 	platform_set_drvdata(pdev, hdmi);
 
-	hdmi->hdmi = dw_hdmi_bind(pdev, encoder, plat_data);
+	hdmi->hdmi = dw_hdmi_probe(pdev, plat_data);
 
 	if (IS_ERR(hdmi->hdmi)) {
 		ret = PTR_ERR(hdmi->hdmi);
 		goto err_disable_clk_tmds;
 	}
 
+	next_bridge = of_drm_find_bridge(dev->of_node);
+	if (!next_bridge) {
+		ret = -EPROBE_DEFER;
+		goto err_remove_dw_hdmi;
+	}
+
+	ret = drm_bridge_attach(encoder, next_bridge, &hdmi->bridge, 0);
+	if (ret)
+		goto err_remove_dw_hdmi;
+
 	return 0;
 
+err_remove_dw_hdmi:
+	dw_hdmi_remove(hdmi->hdmi);
 err_disable_clk_tmds:
 	clk_disable_unprepare(hdmi->clk_tmds);
 err_assert_ctrl_reset:
@@ -241,7 +288,7 @@ static void sun8i_dw_hdmi_unbind(struct device *dev, struct device *master,
 {
 	struct sun8i_dw_hdmi *hdmi = dev_get_drvdata(dev);
 
-	dw_hdmi_unbind(hdmi->hdmi);
+	dw_hdmi_remove(hdmi->hdmi);
 	sun8i_hdmi_phy_deinit(hdmi->phy);
 	clk_disable_unprepare(hdmi->clk_tmds);
 	reset_control_assert(hdmi->rst_ctrl);
