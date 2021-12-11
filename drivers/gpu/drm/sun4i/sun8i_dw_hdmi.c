@@ -228,19 +228,13 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
 
 	hdmi->hdmi = dw_hdmi_bind(pdev, encoder, plat_data);
 
-	/*
-	 * If dw_hdmi_bind() fails we'll never call dw_hdmi_unbind(),
-	 * which would have called the encoder cleanup.  Do it manually.
-	 */
 	if (IS_ERR(hdmi->hdmi)) {
 		ret = PTR_ERR(hdmi->hdmi);
-		goto cleanup_encoder;
+		goto err_disable_clk_tmds;
 	}
 
 	return 0;
 
-cleanup_encoder:
-	drm_encoder_cleanup(encoder);
 err_disable_clk_tmds:
 	clk_disable_unprepare(hdmi->clk_tmds);
 err_assert_ctrl_reset:
