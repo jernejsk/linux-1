@@ -243,8 +243,7 @@ err_disable_ddc_en:
 	gpiod_set_value(hdmi->ddc_en, 0);
 	regulator_disable(hdmi->regulator);
 err_unref_ddc_en:
-	if (hdmi->ddc_en)
-		gpiod_put(hdmi->ddc_en);
+	gpiod_put(hdmi->ddc_en);
 
 	return ret;
 }
@@ -260,9 +259,7 @@ static void sun8i_dw_hdmi_unbind(struct device *dev, struct device *master,
 	reset_control_assert(hdmi->rst_ctrl);
 	gpiod_set_value(hdmi->ddc_en, 0);
 	regulator_disable(hdmi->regulator);
-
-	if (hdmi->ddc_en)
-		gpiod_put(hdmi->ddc_en);
+	gpiod_put(hdmi->ddc_en);
 }
 
 static const struct component_ops sun8i_dw_hdmi_ops = {
