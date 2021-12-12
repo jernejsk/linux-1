@@ -177,9 +177,7 @@ struct sun8i_hdmi_phy {
 };
 
 struct sun8i_dw_hdmi_quirks {
-	enum drm_mode_status (*mode_valid)(struct dw_hdmi *hdmi, void *data,
-					   const struct drm_display_info *info,
-					   const struct drm_display_mode *mode);
+	unsigned int max_frequency;
 	unsigned int use_drm_infoframe : 1;
 };
 
