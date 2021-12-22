@@ -2696,6 +2696,8 @@ static u32 *dw_hdmi_bridge_atomic_get_output_bus_fmts(struct drm_bridge *bridge,
 	struct drm_display_info *info = &conn->display_info;
 	struct drm_display_mode *mode = &crtc_state->mode;
 	u8 max_bpc = conn_state->max_requested_bpc;
+	bool is_hdmi2_sink = info->hdmi.scdc.supported ||
+			     (info->color_formats & DRM_COLOR_FORMAT_YCBCR420);
 	u32 *output_fmts;
 	unsigned int i = 0;
 
@@ -2719,8 +2721,9 @@ static u32 *dw_hdmi_bridge_atomic_get_output_bus_fmts(struct drm_bridge *bridge,
 	 * If the current mode enforces 4:2:0, force the output but format
 	 * to 4:2:0 and do not add the YUV422/444/RGB formats
 	 */
-	if (conn->ycbcr_420_allowed && drm_mode_is_420(info, mode) &&
-	    (info->color_formats & DRM_COLOR_FORMAT_YCBCR420)) {
+	if (conn->ycbcr_420_allowed &&
+	    (drm_mode_is_420_only(info, mode) ||
+	     (is_hdmi2_sink && drm_mode_is_420_also(info, mode)))) {
 
 		/* Order bus formats from 16bit to 8bit if supported */
 		if (max_bpc >= 16 && info->bpc == 16 &&
