@@ -185,8 +185,6 @@ struct sun8i_mixer {
 
 	struct clk			*bus_clk;
 	struct clk			*mod_clk;
-
-	u32				out_format;
 };
 
 static inline struct sun8i_mixer *

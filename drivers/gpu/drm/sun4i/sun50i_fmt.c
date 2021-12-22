@@ -50,15 +50,16 @@ void sun50i_fmt_setup(struct sun8i_mixer *mixer, u16 width, u16 height)
 	u32 colorspace, limit[3];
 	bool bit10;
 
-	colorspace = sun50i_fmt_get_colorspace(mixer->out_format);
-	bit10 = sun50i_fmt_is_10bit(mixer->out_format);
+	colorspace = sun50i_fmt_get_colorspace(mixer->engine.format);
+	bit10 = sun50i_fmt_is_10bit(mixer->engine.format);
+
+	printk("formatting mode 0x%04x\n", mixer->engine.format);
 
 	regmap_write(mixer->engine.regs, SUN50I_FMT_CTRL, 0);
 
 	regmap_write(mixer->engine.regs, SUN50I_FMT_SIZE,
 		     SUN8I_MIXER_SIZE(width, height));
-	regmap_write(mixer->engine.regs, SUN50I_FMT_SWAP,
-		     !sun50i_fmt_is_rgb(mixer->out_format));
+	regmap_write(mixer->engine.regs, SUN50I_FMT_SWAP, 0);//!sun50i_fmt_is_rgb(mixer->engine.format));
 	regmap_write(mixer->engine.regs, SUN50I_FMT_DEPTH, bit10);
 	regmap_write(mixer->engine.regs, SUN50I_FMT_FORMAT, colorspace);
 	regmap_write(mixer->engine.regs, SUN50I_FMT_COEF, 0);

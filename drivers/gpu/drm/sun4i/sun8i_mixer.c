@@ -333,10 +333,39 @@ static void sun8i_mixer_mode_set(struct sunxi_engine *engine,
 		sun50i_fmt_setup(mixer, mode->hdisplay, mode->vdisplay);
 }
 
+static u32 *sun8i_mixer_get_supported_fmts(struct sunxi_engine *engine, u32 *num)
+{
+	struct sun8i_mixer *mixer = engine_to_sun8i_mixer(engine);
+	u32 *formats, count;
+
+	count = 0;
+
+	formats = kcalloc(8, sizeof(*formats), GFP_KERNEL);
+	if (!formats)
+		return NULL;
+
+	if (mixer->cfg->has_formatter) {
+		formats[count++] = MEDIA_BUS_FMT_UYYVYY10_0_5X30;
+		formats[count++] = MEDIA_BUS_FMT_UYVY10_1X20;
+		formats[count++] = MEDIA_BUS_FMT_YUV10_1X30;
+		formats[count++] = MEDIA_BUS_FMT_RGB101010_1X30;
+		formats[count++] = MEDIA_BUS_FMT_UYYVYY8_0_5X24;
+		formats[count++] = MEDIA_BUS_FMT_UYVY8_1X16;
+		formats[count++] = MEDIA_BUS_FMT_YUV8_1X24;
+	}
+
+	formats[count++] = MEDIA_BUS_FMT_RGB888_1X24;
+
+	*num = count;
+
+	return formats;
+}
+
 static const struct sunxi_engine_ops sun8i_engine_ops = {
-	.commit		= sun8i_mixer_commit,
-	.layers_init	= sun8i_layers_init,
-	.mode_set	= sun8i_mixer_mode_set,
+	.commit			= sun8i_mixer_commit,
+	.layers_init		= sun8i_layers_init,
+	.mode_set		= sun8i_mixer_mode_set,
+	.get_supported_fmts	= sun8i_mixer_get_supported_fmts,
 };
 
 static const struct regmap_config sun8i_mixer_regmap_config = {
@@ -398,7 +427,7 @@ static int sun8i_mixer_bind(struct device *dev, struct device *master,
 	mixer->engine.ops = &sun8i_engine_ops;
 	mixer->engine.node = dev->of_node;
 	/* default output format, supported by all mixers */
-	mixer->out_format = MEDIA_BUS_FMT_RGB888_1X24;
+	mixer->engine.format = MEDIA_BUS_FMT_RGB888_1X24;
 
 	if (of_find_property(dev->of_node, "iommus", NULL)) {
 		/*

@@ -107,6 +107,19 @@ static const u32 yuv2rgb_de3[2][3][12] = {
 	},
 };
 
+static const u32 rgb2yuv_de3[2][16] = {
+	[DRM_COLOR_YCBCR_BT601] = {
+		0x0000837A, 0x0001021D, 0x00003221, 0x00000040,
+		0xFFFFB41C, 0xFFFF6B03, 0x0000E0E1, 0x00000200,
+		0x0000E0E1, 0xFFFF43B1, 0xFFFFDB6E, 0x00000200,
+	},
+	[DRM_COLOR_YCBCR_BT709] = {
+		0x00005D7C, 0x00013A7C, 0x00001FBF, 0x00000040,
+		0xFFFFCC78, 0xFFFF52A7, 0x0000E0E1, 0x00000200,
+		0x0000E0E1, 0xFFFF33BE, 0xFFFFEB61, 0x00000200,
+	},
+};
+
 static void sun8i_csc_setup(struct regmap *map, u32 base,
 			    enum format_type fmt_type,
 			    enum drm_color_encoding encoding,
@@ -153,7 +166,7 @@ static void sun8i_de3_ccsc_setup(struct regmap *map, int layer,
 				 enum drm_color_encoding encoding,
 				 enum drm_color_range range)
 {
-	u32 addr, val, mask;
+	u32 addr, val = 0, mask;
 	const u32 *table;
 	int i;
 
@@ -162,15 +175,17 @@ static void sun8i_de3_ccsc_setup(struct regmap *map, int layer,
 
 	switch (fmt_type) {
 	case FORMAT_TYPE_RGB:
-		val = 0;
-		break;
-	case FORMAT_TYPE_YUV:
 		val = mask;
 		addr = SUN50I_MIXER_BLEND_CSC_COEFF(DE3_BLD_BASE, layer, 0);
-		regmap_bulk_write(map, addr, table, 12);
+		regmap_bulk_write(map, addr, rgb2yuv_de3[1], 12);
+		break;
+	case FORMAT_TYPE_YUV:
+		/*val = mask;
+		addr = SUN50I_MIXER_BLEND_CSC_COEFF(DE3_BLD_BASE, layer, 0);
+		regmap_bulk_write(map, addr, table, 12);*/
 		break;
 	case FORMAT_TYPE_YVU:
-		val = mask;
+		/*val = mask;
 		for (i = 0; i < 12; i++) {
 			if ((i & 3) == 1)
 				addr = SUN50I_MIXER_BLEND_CSC_COEFF(DE3_BLD_BASE,
@@ -184,7 +199,7 @@ static void sun8i_de3_ccsc_setup(struct regmap *map, int layer,
 				addr = SUN50I_MIXER_BLEND_CSC_COEFF(DE3_BLD_BASE,
 								    layer, i);
 			regmap_write(map, addr, table[i]);
-		}
+		}*/
 		break;
 	default:
 		val = 0;

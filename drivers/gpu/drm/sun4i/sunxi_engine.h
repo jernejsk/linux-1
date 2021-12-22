@@ -120,6 +120,9 @@ struct sunxi_engine_ops {
 	 */
 	void (*mode_set)(struct sunxi_engine *engine,
 			 const struct drm_display_mode *mode);
+
+	u32 *(*get_supported_fmts)(struct sunxi_engine *engine, u32 *num);
+	void (*set_output_fmt)(struct sunxi_engine *engine, u32 format);
 };
 
 /**
@@ -136,6 +139,8 @@ struct sunxi_engine {
 	struct regmap			*regs;
 
 	int id;
+
+	u32				format;
 
 	/* Engine list management */
 	struct list_head		list;
@@ -207,5 +212,21 @@ sunxi_engine_mode_set(struct sunxi_engine *engine,
 {
 	if (engine->ops && engine->ops->mode_set)
 		engine->ops->mode_set(engine, mode);
+}
+
+static inline u32 *
+sunxi_engine_get_supported_formats(struct sunxi_engine *engine, u32 *num)
+{
+	if (engine->ops && engine->ops->get_supported_fmts)
+		return engine->ops->get_supported_fmts(engine, num);
+	return NULL;
+}
+
+static inline void
+sunxi_engine_set_output_format(struct sunxi_engine *engine, u32 format)
+{
+	engine->format = format;
+	if (engine->ops && engine->ops->set_output_fmt)
+		engine->ops->set_output_fmt(engine, format);
 }
 #endif /* _SUNXI_ENGINE_H_ */

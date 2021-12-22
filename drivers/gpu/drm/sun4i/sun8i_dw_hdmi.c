@@ -13,8 +13,10 @@
 #include <drm/drm_of.h>
 #include <drm/drm_simple_kms_helper.h>
 
+#include "sun4i_crtc.h"
 #include "sun8i_dw_hdmi.h"
 #include "sun8i_tcon_top.h"
+#include "sunxi_engine.h"
 
 #define to_sun8i_dw_hdmi(x) container_of(x, struct sun8i_dw_hdmi, x)
 
@@ -36,21 +38,57 @@ sun8i_dw_hdmi_get_input_bus_fmts(struct drm_bridge *bridge,
 				 u32 output_fmt,
 				 unsigned int *num_input_fmts)
 {
-	u32 *input_fmt;
+	struct sun4i_crtc *crtc = drm_crtc_to_sun4i_crtc(crtc_state->crtc);
+	u32 *input_fmt, *supported, count, i;
 
 	*num_input_fmts = 0;
+	input_fmt = NULL;
 
-	if (output_fmt != MEDIA_BUS_FMT_RGB888_1X24)
+	supported = sunxi_engine_get_supported_formats(crtc->engine, &count);
+	if (count == 0 || !supported)
 		return NULL;
 
-	input_fmt = kzalloc(sizeof(*input_fmt), GFP_KERNEL);
-	if (!input_fmt)
-		return NULL;
+	for (i = 0; i < count; i++)
+		if (output_fmt == supported[i]) {
+			input_fmt = kzalloc(sizeof(*input_fmt), GFP_KERNEL);
+			if (!input_fmt)
+				break;
 
-	*num_input_fmts = 1;
-	*input_fmt = output_fmt;
+			*num_input_fmts = 1;
+			*input_fmt = output_fmt;
+
+			break;
+		}
+
+	kfree(supported);
 
 	return input_fmt;
+}
+
+static int
+sun8i_dw_hdmi_bridge_atomic_check(struct drm_bridge *bridge,
+				  struct drm_bridge_state *bridge_state,
+				  struct drm_crtc_state *crtc_state,
+				  struct drm_connector_state *conn_state)
+{
+	struct sun4i_crtc *crtc = drm_crtc_to_sun4i_crtc(crtc_state->crtc);
+	struct drm_atomic_state *state = bridge_state->base.state;
+	struct drm_bridge_state *next_bridge_state;
+	struct drm_bridge *next_bridge;
+	u32 format;
+
+	format = bridge_state->output_bus_cfg.format;
+
+	next_bridge = drm_bridge_get_next_bridge(bridge);
+	if (next_bridge) {
+		next_bridge_state = drm_atomic_get_new_bridge_state(state,
+								    next_bridge);
+		format = next_bridge_state->output_bus_cfg.format;
+	}
+
+	sunxi_engine_set_output_format(crtc->engine, format);
+
+	return 0;
 }
 
 static const struct drm_bridge_funcs sun8i_dw_hdmi_bridge_helper_funcs = {
@@ -59,6 +97,7 @@ static const struct drm_bridge_funcs sun8i_dw_hdmi_bridge_helper_funcs = {
 	.atomic_destroy_state = drm_atomic_helper_bridge_destroy_state,
 	.atomic_reset = drm_atomic_helper_bridge_reset,
 	.atomic_get_input_bus_fmts = sun8i_dw_hdmi_get_input_bus_fmts,
+	.atomic_check = sun8i_dw_hdmi_bridge_atomic_check,
 };
 
 static enum drm_mode_status
@@ -66,9 +105,13 @@ sun8i_dw_hdmi_mode_valid(struct dw_hdmi *hdmi, void *data,
 			 const struct drm_display_info *info,
 			 const struct drm_display_mode *mode)
 {
+	unsigned long clock = mode->crtc_clock * 1000;
 	struct sun8i_dw_hdmi *priv = data;
 
-	if (mode->clock > priv->quirks->max_frequency / 1000)
+	if (drm_mode_is_420(info, mode))
+		clock /= 2;
+
+	if (clock > priv->quirks->max_frequency)
 		return MODE_CLOCK_HIGH;
 
 	return MODE_OK;
@@ -244,6 +287,7 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
 
 	plat_data->mode_valid = sun8i_dw_hdmi_mode_valid;
 	plat_data->use_drm_infoframe = hdmi->quirks->use_drm_infoframe;
+	plat_data->ycbcr_420_allowed = hdmi->quirks->use_drm_infoframe;
 	plat_data->priv_data = hdmi;
 	sun8i_hdmi_phy_set_ops(hdmi->phy, plat_data);
 
