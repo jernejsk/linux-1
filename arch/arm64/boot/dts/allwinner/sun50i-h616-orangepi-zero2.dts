@@ -71,6 +71,14 @@
 		gpio = <&pio 2 16 GPIO_ACTIVE_HIGH>; /* PC16 */
 		status = "okay";
 	};
+
+	wifi_pwrseq: wifi-pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		//clocks = <&rtc 1>;
+		//clock-names = "ext_clock";
+		reset-gpios = <&pio 6 18 GPIO_ACTIVE_LOW>; /* PG18 */
+		post-power-on-delay-ms = <200>;
+	};
 };
 
 &de {
@@ -122,6 +130,24 @@
 	cd-gpios = <&pio 5 6 GPIO_ACTIVE_LOW>;	/* PF6 */
 	bus-width = <4>;
 	status = "okay";
+};
+
+&mmc1 {
+	vmmc-supply = <&reg_aldo2>;
+	mmc-pwrseq = <&wifi_pwrseq>;
+	bus-width = <4>;
+	non-removable;
+	status = "okay";
+
+	uwe-bsp {
+		compatible = "unisoc,uwe_bsp";
+		keep-power-on;
+		data-irq;
+		//adma-tx;
+		adma-rx;
+		//blksz-512;
+		status = "okay";
+	};
 };
 
 &ohci1 {
