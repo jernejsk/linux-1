@@ -303,6 +303,13 @@ int cedrus_hw_probe(struct cedrus_dev *dev)
 		goto err_sram;
 	}
 
+	ret = dma_set_mask_and_coherent(dev->dev, DMA_BIT_MASK(32));
+	if (ret) {
+		dev_err(dev->dev, "Could not set DMA coherent mask.\n");
+		goto err_sram;
+	}
+	vb2_dma_contig_set_max_seg_size(dev->dev, DMA_BIT_MASK(32));
+
 	ret = clk_set_rate(dev->mod_clk, variant->mod_rate);
 	if (ret) {
 		dev_err(dev->dev, "Failed to set clock rate\n");

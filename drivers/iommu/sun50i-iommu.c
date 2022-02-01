@@ -499,19 +499,16 @@ static u32 *sun50i_dte_get_page_table(struct sun50i_iommu_domain *sun50i_domain,
 		return page_table;
 
 	dte = sun50i_mk_dte(virt_to_phys(page_table));
-	old_dte = cmpxchg(dte_addr, 0, dte);
+	old_dte = xchg(dte_addr, dte);
 	if (old_dte) {
 		phys_addr_t installed_pt_phys =
 			sun50i_dte_get_pt_address(old_dte);
 		u32 *installed_pt = phys_to_virt(installed_pt_phys);
-		u32 *drop_pt = page_table;
 
-		page_table = installed_pt;
-		dte = old_dte;
-		sun50i_iommu_free_page_table(iommu, drop_pt);
+		sun50i_iommu_free_page_table(iommu, installed_pt);
 	}
 
-	sun50i_table_flush(sun50i_domain, page_table, PT_SIZE);
+	sun50i_table_flush(sun50i_domain, page_table, NUM_PT_ENTRIES);
 	sun50i_table_flush(sun50i_domain, dte_addr, 1);
 
 	return page_table;
