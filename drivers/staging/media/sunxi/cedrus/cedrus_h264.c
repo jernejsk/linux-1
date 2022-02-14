@@ -147,12 +147,15 @@ static void cedrus_write_frame_list(struct cedrus_ctx *ctx,
 		const struct v4l2_ctrl_h264_sps *sps = run->h264.sps;
 		unsigned int field_size;
 
-		field_size = DIV_ROUND_UP(ctx->src_fmt.width, 16) *
-			DIV_ROUND_UP(ctx->src_fmt.height, 16) * 16;
-		if (!(sps->flags & V4L2_H264_SPS_FLAG_DIRECT_8X8_INFERENCE))
-			field_size = field_size * 2;
+		field_size = sps->pic_height_in_map_units_minus1 + 1;
 		if (!(sps->flags & V4L2_H264_SPS_FLAG_FRAME_MBS_ONLY))
-			field_size = field_size * 2;
+			field_size *= 2;
+		field_size = DIV_ROUND_UP(field_size, 2);
+		field_size *= (sps->pic_width_in_mbs_minus1 + 1) * 32;
+		if (!(sps->flags & V4L2_H264_SPS_FLAG_DIRECT_8X8_INFERENCE))
+			field_size *= 2;
+		field_size = ALIGN(field_size, 1024);
+		field_size *= 16;
 
 		output_buf->codec.h264.mv_col_buf_size = field_size * 2;
 		output_buf->codec.h264.mv_col_buf =

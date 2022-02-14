@@ -267,9 +267,10 @@ static bool sun50i_pte_is_page_valid(u32 pte)
 
 static u32 sun50i_mk_pte(phys_addr_t page, int prot)
 {
-	enum sun50i_iommu_aci aci;
+	//enum sun50i_iommu_aci aci;
 	u32 flags = 0;
 
+	/*aci = SUN50I_IOMMU_ACI_RD_WR;
 	if (prot & (IOMMU_READ | IOMMU_WRITE))
 		aci = SUN50I_IOMMU_ACI_RD_WR;
 	else if (prot & IOMMU_READ)
@@ -279,7 +280,11 @@ static u32 sun50i_mk_pte(phys_addr_t page, int prot)
 	else
 		aci = SUN50I_IOMMU_ACI_NONE;
 
-	flags |= FIELD_PREP(SUN50I_PTE_ACI_MASK, aci);
+	flags |= FIELD_PREP(SUN50I_PTE_ACI_MASK, aci);*/
+	if (prot & IOMMU_READ)
+		flags |= BIT(2);
+	if (prot & IOMMU_WRITE)
+		flags |= BIT(3);
 	page &= SUN50I_PTE_PAGE_ADDRESS_MASK;
 	return page | flags | SUN50I_PTE_PAGE_VALID;
 }
@@ -379,7 +384,8 @@ static int sun50i_iommu_enable(struct sun50i_iommu *iommu)
 		    IOMMU_TLB_PREFETCH_MASTER_ENABLE(4) |
 		    IOMMU_TLB_PREFETCH_MASTER_ENABLE(5));
 	iommu_write(iommu, IOMMU_INT_ENABLE_REG, IOMMU_INT_MASK);
-	iommu_write(iommu, IOMMU_DM_AUT_CTRL_REG(SUN50I_IOMMU_ACI_NONE),
+	//iommu_write(iommu, IOMMU_BYPASS_REG, 0x15);
+	/*iommu_write(iommu, IOMMU_DM_AUT_CTRL_REG(SUN50I_IOMMU_ACI_NONE),
 		    IOMMU_DM_AUT_CTRL_RD_UNAVAIL(SUN50I_IOMMU_ACI_NONE, 0) |
 		    IOMMU_DM_AUT_CTRL_WR_UNAVAIL(SUN50I_IOMMU_ACI_NONE, 0) |
 		    IOMMU_DM_AUT_CTRL_RD_UNAVAIL(SUN50I_IOMMU_ACI_NONE, 1) |
@@ -407,7 +413,7 @@ static int sun50i_iommu_enable(struct sun50i_iommu *iommu)
 		    IOMMU_DM_AUT_CTRL_RD_UNAVAIL(SUN50I_IOMMU_ACI_WR, 2) |
 		    IOMMU_DM_AUT_CTRL_RD_UNAVAIL(SUN50I_IOMMU_ACI_WR, 3) |
 		    IOMMU_DM_AUT_CTRL_RD_UNAVAIL(SUN50I_IOMMU_ACI_WR, 4) |
-		    IOMMU_DM_AUT_CTRL_RD_UNAVAIL(SUN50I_IOMMU_ACI_WR, 5));
+		    IOMMU_DM_AUT_CTRL_RD_UNAVAIL(SUN50I_IOMMU_ACI_WR, 5));*/
 
 	ret = sun50i_iommu_flush_all_tlb(iommu);
 	if (ret) {
@@ -506,6 +512,7 @@ static u32 *sun50i_dte_get_page_table(struct sun50i_iommu_domain *sun50i_domain,
 		u32 *installed_pt = phys_to_virt(installed_pt_phys);
 
 		sun50i_iommu_free_page_table(iommu, installed_pt);
+		printk("IOMMU: strange, repurposing table\n");
 	}
 
 	sun50i_table_flush(sun50i_domain, page_table, NUM_PT_ENTRIES);
@@ -876,16 +883,20 @@ static irqreturn_t sun50i_iommu_irq(int irq, void *dev_id)
 		return IRQ_NONE;
 	}
 
-	if (status & IOMMU_INT_INVALID_L2PG)
+	if (status & IOMMU_INT_INVALID_L2PG) {
 		sun50i_iommu_handle_pt_irq(iommu,
 					    IOMMU_INT_ERR_ADDR_L2_REG,
 					    IOMMU_L2PG_INT_REG);
-	else if (status & IOMMU_INT_INVALID_L1PG)
+		printk("IOMMU: Level 2 page error\n");
+	} else if (status & IOMMU_INT_INVALID_L1PG) {
 		sun50i_iommu_handle_pt_irq(iommu,
 					   IOMMU_INT_ERR_ADDR_L1_REG,
 					   IOMMU_L1PG_INT_REG);
-	else
+		printk("IOMMU: Level 1 page error\n");
+	} else {
 		sun50i_iommu_handle_perm_irq(iommu);
+		printk("IOMMU: permission error\n");
+	}
 
 	iommu_write(iommu, IOMMU_INT_CLR_REG, status);
 
