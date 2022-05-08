@@ -827,7 +827,9 @@ static int cedrus_h265_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	}
 
 	/* Enable appropriate interruptions. */
-	cedrus_write(dev, VE_DEC_H265_CTRL, VE_DEC_H265_CTRL_IRQ_MASK);
+	reg = VE_DEC_H265_CTRL_IRQ_MASK;
+	reg |= VE_DEC_H265_CTRL_DDR_CONSISTENCY_EN;
+	cedrus_write(dev, VE_DEC_H265_CTRL, reg);
 
 	return 0;
 }
