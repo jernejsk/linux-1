@@ -220,6 +220,16 @@ config MFD_AC200
 	  functions. Select the Ethernet PHY control and audio codec drivers
 	  separately to use those functions.
 
+config MFD_AC200_EPHY_CTL
+	tristate "X-Powers AC200 Ethernet PHY control"
+	depends on MFD_AC200
+	depends on RESET_CONTROLLER
+	help
+	  Enable this to support the Ethernet PHY control block in the AC200
+	  mixed-signal companion IC. This driver configures the PHY interface
+	  and provides its internal clock gate and reset controls. The PHY's
+	  MDIO registers are handled by the separate AC200 Ethernet PHY driver.
+
 config MFD_AXP20X
 	tristate
 	select MFD_CORE
