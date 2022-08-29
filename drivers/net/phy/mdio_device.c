@@ -137,13 +137,14 @@ void mdio_device_reset(struct mdio_device *mdiodev, int value)
 }
 EXPORT_SYMBOL(mdio_device_reset);
 
-static void mdio_device_toggle_clock(struct mdio_device *mdiodev, int value)
+void mdio_device_toggle_clock(struct mdio_device *mdiodev, int value)
 {
 	if (value)
 		clk_prepare_enable(mdiodev->clk);
 	else
 		clk_disable_unprepare(mdiodev->clk);
 }
+EXPORT_SYMBOL(mdio_device_toggle_clock);
 
 /**
  * mdio_probe - probe an MDIO device

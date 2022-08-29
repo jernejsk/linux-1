@@ -942,6 +942,8 @@ struct phy_device *get_phy_device(struct mii_bus *bus, int addr, bool is_c45)
 }
 EXPORT_SYMBOL(get_phy_device);
 
+void mdio_device_toggle_clock(struct mdio_device *mdiodev, int value);
+
 /**
  * phy_device_register - Register the phy device on the MDIO bus
  * @phydev: phy_device structure to be added to the MDIO bus
@@ -956,6 +958,7 @@ int phy_device_register(struct phy_device *phydev)
 
 	/* Deassert the reset signal */
 	phy_device_reset(phydev, 0);
+	mdio_device_toggle_clock(&phydev->mdio, 1);
 
 	/* Run all of the fixups for this PHY */
 	err = phy_scan_fixups(phydev);
