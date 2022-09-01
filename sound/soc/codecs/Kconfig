@@ -17,6 +17,7 @@ config SND_SOC_ALL_CODECS
 	imply SND_SOC_88PM860X
 	imply SND_SOC_L3
 	imply SND_SOC_AB8500_CODEC
+	imply SND_SOC_AC200_CODEC
 	imply SND_SOC_AC97_CODEC
 	imply SND_SOC_AD1836
 	imply SND_SOC_AD193X_SPI
@@ -368,6 +369,15 @@ config SND_SOC_WM_ADSP
 config SND_SOC_AB8500_CODEC
 	tristate
 	depends on ABX500_CORE
+
+config SND_SOC_AC200_CODEC
+	tristate "AC200 Codec"
+	depends on MFD_AC200
+	help
+	  Enable support for X-Powers AC200 analog audio codec.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called snd-soc-ac200.
 
 config SND_SOC_AC97_CODEC
 	tristate "Build generic ASoC AC97 CODEC driver"
