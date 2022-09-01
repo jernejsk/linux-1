@@ -17,6 +17,22 @@
 	#address-cells = <1>;
 	#size-cells = <1>;
 
+	analog: analog-codec {
+		compatible = "simple-audio-card";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,name = "ac200-audio";
+		simple-audio-card,mclk-fs = <512>;
+		status = "disabled";
+
+		simple-audio-card,cpu {
+			sound-dai = <&i2s3>;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <&ac200_codec>;
+		};
+	};
+
 	ac200_pwm_clk: ac200_clk {
 		compatible = "pwm-clock";
 		#clock-cells = <0>;
@@ -385,6 +401,11 @@
 				bias-pull-up;
 			};
 
+			i2s3_pins: i2s3-pins {
+				pins = "PB12", "PB13", "PB14", "PB15", "PB16";
+				function = "i2s3";
+			};
+
 			mmc0_pins: mmc0-pins {
 				pins = "PF0", "PF1", "PF2", "PF3",
 				       "PF4", "PF5";
@@ -653,6 +674,12 @@
 					phy-mode = "rmii";
 					status = "disabled";
 				};
+
+				ac200_codec: codec {
+					#sound-dai-cells = <0>;
+					compatible = "x-powers,ac200-codec";
+					status = "disabled";
+				};
 			};
 		};
 
@@ -704,6 +731,21 @@
 				#address-cells = <1>;
 				#size-cells = <0>;
 			};
+		};
+
+		i2s3: i2s@508f000 {
+			#sound-dai-cells = <0>;
+			compatible = "allwinner,sun50i-h6-i2s";
+			reg = <0x0508f000 0x1000>;
+			interrupts = <GIC_SPI 30 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ccu CLK_BUS_I2S3>, <&ccu CLK_I2S3>;
+			clock-names = "apb", "mod";
+			dmas = <&dma 6>, <&dma 6>;
+			resets = <&ccu RST_BUS_I2S3>;
+			dma-names = "rx", "tx";
+			pinctrl-names = "default";
+			pinctrl-0 = <&i2s3_pins>;
+			status = "disabled";
 		};
 
 		i2s1: i2s@5091000 {
