@@ -10,6 +10,20 @@
 	compatible = "oranth,tanix-tx6-mini", "allwinner,sun50i-h6";
 };
 
+
+&ac200_codec {
+	avcc-supply = <&reg_vcc3v3>;
+	status = "okay";
+};
+
+&analog {
+	status = "okay";
+};
+
+&i2s3 {
+	status = "okay";
+};
+
 &r_ir {
 	linux,rc-map-name = "rc-tanix-tx3mini";
 };
