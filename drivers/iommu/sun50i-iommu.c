@@ -255,11 +255,6 @@ static phys_addr_t sun50i_pte_get_page_address(u32 pte)
 	return (phys_addr_t)pte & SUN50I_PTE_PAGE_ADDRESS_MASK;
 }
 
-static enum sun50i_iommu_aci sun50i_get_pte_aci(u32 pte)
-{
-	return FIELD_GET(SUN50I_PTE_ACI_MASK, pte);
-}
-
 static bool sun50i_pte_is_page_valid(u32 pte)
 {
 	return pte & SUN50I_PTE_PAGE_VALID;
@@ -791,89 +786,33 @@ static void sun50i_iommu_report_fault(struct sun50i_iommu *iommu,
 		dev_err(iommu->dev, "Page fault while iommu not attached to any domain?\n");
 }
 
-static phys_addr_t sun50i_iommu_handle_pt_irq(struct sun50i_iommu *iommu,
-					      unsigned addr_reg,
-					      unsigned blame_reg)
+static int sun50i_iommu_is_va_valid(struct sun50i_iommu *iommu, unsigned long iova)
 {
-	phys_addr_t iova;
-	unsigned master;
-	u32 blame;
+	struct sun50i_iommu_domain *sun50i_domain;
+	u32 *dte_addr, *pte_addr;
+	phys_addr_t pt_phys;
+	u32 dte;
 
-	assert_spin_locked(&iommu->iommu_lock);
+	if (!iommu->domain)
+		return 0;
 
-	iova = iommu_read(iommu, addr_reg);
-	blame = iommu_read(iommu, blame_reg);
-	master = ilog2(blame & IOMMU_INT_MASTER_MASK);
+	sun50i_domain = to_sun50i_domain(iommu->domain);
 
-	/*
-	 * If the address is not in the page table, we can't get what
-	 * operation triggered the fault. Assume it's a read
-	 * operation.
-	 */
-	sun50i_iommu_report_fault(iommu, master, iova, IOMMU_FAULT_READ);
+	dte_addr = &sun50i_domain->dt[sun50i_iova_get_dte_index(iova)];
+	dte = *dte_addr;
+	if (!sun50i_dte_is_pt_valid(dte))
+		return 0;
 
-	return iova;
-}
+	pt_phys = sun50i_dte_get_pt_address(dte);
+	pte_addr = (u32 *)phys_to_virt(pt_phys) + sun50i_iova_get_pte_index(iova);
 
-static phys_addr_t sun50i_iommu_handle_perm_irq(struct sun50i_iommu *iommu)
-{
-	enum sun50i_iommu_aci aci;
-	phys_addr_t iova;
-	unsigned master;
-	unsigned dir;
-	u32 blame;
-
-	assert_spin_locked(&iommu->iommu_lock);
-
-	blame = iommu_read(iommu, IOMMU_INT_STA_REG);
-	master = ilog2(blame & IOMMU_INT_MASTER_MASK);
-	iova = iommu_read(iommu, IOMMU_INT_ERR_ADDR_REG(master));
-	aci = sun50i_get_pte_aci(iommu_read(iommu,
-					    IOMMU_INT_ERR_DATA_REG(master)));
-
-	switch (aci) {
-		/*
-		 * If we are in the read-only domain, then it means we
-		 * tried to write.
-		 */
-	case SUN50I_IOMMU_ACI_RD:
-		dir = IOMMU_FAULT_WRITE;
-		break;
-
-		/*
-		 * If we are in the write-only domain, then it means
-		 * we tried to read.
-		 */
-	case SUN50I_IOMMU_ACI_WR:
-
-		/*
-		 * If we are in the domain without any permission, we
-		 * can't really tell. Let's default to a read
-		 * operation.
-		 */
-	case SUN50I_IOMMU_ACI_NONE:
-
-		/* WTF? */
-	case SUN50I_IOMMU_ACI_RD_WR:
-	default:
-		dir = IOMMU_FAULT_READ;
-		break;
-	}
-
-	/*
-	 * If the address is not in the page table, we can't get what
-	 * operation triggered the fault. Assume it's a read
-	 * operation.
-	 */
-	sun50i_iommu_report_fault(iommu, master, iova, dir);
-
-	return iova;
+	return sun50i_pte_is_page_valid(*pte_addr);
 }
 
 static irqreturn_t sun50i_iommu_irq(int irq, void *dev_id)
 {
+	u32 status, l1_status, l2_status, iova, masters;
 	struct sun50i_iommu *iommu = dev_id;
-	u32 status;
 
 	spin_lock(&iommu->iommu_lock);
 
@@ -883,25 +822,70 @@ static irqreturn_t sun50i_iommu_irq(int irq, void *dev_id)
 		return IRQ_NONE;
 	}
 
-	if (status & IOMMU_INT_INVALID_L2PG) {
-		sun50i_iommu_handle_pt_irq(iommu,
-					    IOMMU_INT_ERR_ADDR_L2_REG,
-					    IOMMU_L2PG_INT_REG);
-		printk("IOMMU: Level 2 page error\n");
-	} else if (status & IOMMU_INT_INVALID_L1PG) {
-		sun50i_iommu_handle_pt_irq(iommu,
-					   IOMMU_INT_ERR_ADDR_L1_REG,
-					   IOMMU_L1PG_INT_REG);
-		printk("IOMMU: Level 1 page error\n");
-	} else {
-		sun50i_iommu_handle_perm_irq(iommu);
-		printk("IOMMU: permission error\n");
+	l1_status = iommu_read(iommu, IOMMU_L1PG_INT_REG);
+	l2_status = iommu_read(iommu, IOMMU_L2PG_INT_REG);
+
+	masters = (status | l1_status | l2_status) & IOMMU_INT_MASTER_MASK;
+
+	if (status & IOMMU_INT_MASTER_PERMISSION(0))
+		iova = iommu_read(iommu, IOMMU_INT_ERR_ADDR_REG(0));
+	else if (status & IOMMU_INT_MASTER_PERMISSION(1))
+		iova = iommu_read(iommu, IOMMU_INT_ERR_ADDR_REG(1));
+	else if (status & IOMMU_INT_MASTER_PERMISSION(2))
+		iova = iommu_read(iommu, IOMMU_INT_ERR_ADDR_REG(2));
+	else if (status & IOMMU_INT_MASTER_PERMISSION(3))
+		iova = iommu_read(iommu, IOMMU_INT_ERR_ADDR_REG(3));
+	else if (status & IOMMU_INT_MASTER_PERMISSION(4))
+		iova = iommu_read(iommu, IOMMU_INT_ERR_ADDR_REG(4));
+	else if (status & IOMMU_INT_MASTER_PERMISSION(5))
+		iova = iommu_read(iommu, IOMMU_INT_ERR_ADDR_REG(5));
+	else if (status & IOMMU_INT_INVALID_L1PG)
+		iova = iommu_read(iommu, IOMMU_INT_ERR_ADDR_L1_REG);
+	else if (status & IOMMU_INT_INVALID_L2PG)
+		iova = iommu_read(iommu, IOMMU_INT_ERR_ADDR_L2_REG);
+
+	if (!sun50i_iommu_is_va_valid(iommu, iova)) {
+		/*
+		* If the address is not in the page table, we can't get what
+		* operation triggered the fault. Assume it's a read
+		* operation.
+		*/
+		dev_err(iommu->dev, "address not valid (0x%08x)!\n", iova);
+		sun50i_iommu_report_fault(iommu, ilog2(masters), iova,
+					  IOMMU_FAULT_READ);
 	}
 
-	iommu_write(iommu, IOMMU_INT_CLR_REG, status);
+	dev_err(iommu->dev, "Invalidating address 0x%08x\n", iova);
 
-	iommu_write(iommu, IOMMU_RESET_REG, ~status);
-	iommu_write(iommu, IOMMU_RESET_REG, status);
+	iommu_write(iommu, IOMMU_AUTO_GATING_REG, 0);
+
+	iommu_write(iommu, IOMMU_TLB_IVLD_ADDR_REG, iova);
+	iommu_write(iommu, IOMMU_TLB_IVLD_ADDR_MASK_REG, GENMASK(11, 0));
+	iommu_write(iommu, IOMMU_TLB_IVLD_ENABLE_REG, IOMMU_TLB_IVLD_ENABLE_ENABLE);
+	while (iommu_read(iommu, IOMMU_TLB_IVLD_ENABLE_REG) & IOMMU_TLB_IVLD_ENABLE_ENABLE)
+		;
+
+	iommu_write(iommu, IOMMU_TLB_IVLD_ADDR_REG, iova + 0x2000);
+	iommu_write(iommu, IOMMU_TLB_IVLD_ADDR_MASK_REG, GENMASK(11, 0));
+	iommu_write(iommu, IOMMU_TLB_IVLD_ENABLE_REG, IOMMU_TLB_IVLD_ENABLE_ENABLE);
+	while (iommu_read(iommu, IOMMU_TLB_IVLD_ENABLE_REG) & IOMMU_TLB_IVLD_ENABLE_ENABLE)
+		;
+
+	iommu_write(iommu, IOMMU_PC_IVLD_ADDR_REG, iova);
+	iommu_write(iommu, IOMMU_PC_IVLD_ENABLE_REG, IOMMU_PC_IVLD_ENABLE_ENABLE);
+	while (iommu_read(iommu, IOMMU_PC_IVLD_ENABLE_REG) & IOMMU_PC_IVLD_ENABLE_ENABLE)
+		;
+
+	iommu_write(iommu, IOMMU_PC_IVLD_ADDR_REG, iova + 0x200000);
+	iommu_write(iommu, IOMMU_PC_IVLD_ENABLE_REG, IOMMU_PC_IVLD_ENABLE_ENABLE);
+	while (iommu_read(iommu, IOMMU_PC_IVLD_ENABLE_REG) & IOMMU_PC_IVLD_ENABLE_ENABLE)
+		;
+
+	iommu_write(iommu, IOMMU_AUTO_GATING_REG, IOMMU_AUTO_GATING_ENABLE);
+
+	iommu_write(iommu, IOMMU_INT_CLR_REG, status);
+	iommu_write(iommu, IOMMU_RESET_REG, ~masters);
+	iommu_write(iommu, IOMMU_RESET_REG, 0xffffffff);
 
 	spin_unlock(&iommu->iommu_lock);
 
