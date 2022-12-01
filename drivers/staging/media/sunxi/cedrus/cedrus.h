@@ -117,8 +117,8 @@ struct cedrus_buffer {
 			ssize_t		mv_col_buf_size;
 		} h265;
 		struct {
-			int		interlaced;
-			int		rangeredfrm;
+			bool		interlaced;
+			bool		rangeredfrm;
 			unsigned int	ptype;
 			int		compen;
 		} vc1;
@@ -226,7 +226,6 @@ extern struct cedrus_dec_ops cedrus_dec_ops_vc1;
 
 static inline void cedrus_write(struct cedrus_dev *dev, u32 reg, u32 val)
 {
-	//printk("%.3x: %.8x\n", reg, val);
 	writel(val, dev->base + reg);
 }
 
