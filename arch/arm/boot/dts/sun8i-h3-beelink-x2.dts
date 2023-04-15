@@ -150,6 +150,7 @@
 };
 
 &hdmi {
+	snps,disable-cec;
 	status = "okay";
 };
 
