@@ -35,6 +35,10 @@ config RTW88_8703B
 	tristate
 	select RTW88_8723X
 
+config RTW88_8723B
+	tristate
+	select RTW88_8723X
+
 config RTW88_8723D
 	tristate
 	select RTW88_8723X
@@ -107,6 +111,17 @@ config RTW88_8822CU
 	  Select this option will enable support for 8822CU chipset
 
 	  802.11ac USB wireless network adapter
+
+config RTW88_8723BS
+	tristate "Realtek 8723BS SDIO wireless network adapter"
+	depends on MMC
+	select RTW88_CORE
+	select RTW88_SDIO
+	select RTW88_8723B
+	help
+	  Select this option will enable support for 8723BS chipset
+
+	  802.11n SDIO wireless network adapter
 
 config RTW88_8723DE
 	tristate "Realtek 8723DE PCI wireless network adapter"

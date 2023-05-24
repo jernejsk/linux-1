@@ -185,6 +185,7 @@ enum rtw_wireless_set {
 enum rtw_chip_type {
 	RTW_CHIP_TYPE_8822B,
 	RTW_CHIP_TYPE_8822C,
+	RTW_CHIP_TYPE_8723B,
 	RTW_CHIP_TYPE_8723D,
 	RTW_CHIP_TYPE_8821C,
 	RTW_CHIP_TYPE_8703B,
@@ -1782,6 +1783,8 @@ struct rtw_efuse {
 	/* bt share antenna with wifi */
 	bool share_ant;
 	u8 bt_setting;
+
+	u8 package_type;
 
 	struct {
 		u8 hci;
