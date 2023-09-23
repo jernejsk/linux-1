@@ -173,10 +173,23 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
 	struct device_node *phy_node;
 	struct drm_encoder *encoder;
 	struct sun8i_dw_hdmi *hdmi;
+	struct sun8i_hdmi_phy *phy;
 	int ret;
 
 	if (!pdev->dev.of_node)
 		return -ENODEV;
+
+	phy_node = of_parse_phandle(dev->of_node, "phys", 0);
+	if (!phy_node) {
+		dev_err(dev, "Can't find PHY phandle\n");
+		return -EINVAL;
+	}
+
+	phy = sun8i_hdmi_phy_get(phy_node);
+	of_node_put(phy_node);
+	if (IS_ERR(phy))
+		return dev_err_probe(dev, PTR_ERR(phy),
+				     "Couldn't get the HDMI PHY\n");
 
 	hdmi = drmm_kzalloc(drm, sizeof(*hdmi), GFP_KERNEL);
 	if (!hdmi)
@@ -185,6 +198,7 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
 	plat_data = &hdmi->plat_data;
 	hdmi->dev = &pdev->dev;
 	encoder = &hdmi->encoder;
+	hdmi->phy = phy;
 
 	hdmi->quirks = of_device_get_match_data(dev);
 
@@ -232,22 +246,7 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
 		goto err_assert_ctrl_reset;
 	}
 
-	phy_node = of_parse_phandle(dev->of_node, "phys", 0);
-	if (!phy_node) {
-		dev_err(dev, "Can't found PHY phandle\n");
-		ret = -EINVAL;
-		goto err_disable_clk_tmds;
-	}
-
-	hdmi->phy = sun8i_hdmi_phy_get(phy_node);
-	of_node_put(phy_node);
-	if (IS_ERR(hdmi->phy)) {
-		dev_err(dev, "Couldn't get the HDMI PHY\n");
-		ret = PTR_ERR(hdmi->phy);
-		goto err_disable_clk_tmds;
-	}
-
-	ret = sun8i_hdmi_phy_init(hdmi->phy);
+	ret = sun8i_hdmi_phy_init(phy);
 	if (ret)
 		goto err_disable_clk_tmds;
 
@@ -259,7 +258,7 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
 	plat_data->mode_valid = hdmi->quirks->mode_valid;
 	plat_data->use_drm_infoframe = hdmi->quirks->use_drm_infoframe;
 	plat_data->output_port = 1;
-	sun8i_hdmi_phy_set_ops(hdmi->phy, plat_data);
+	sun8i_hdmi_phy_set_ops(phy, plat_data);
 
 	platform_set_drvdata(pdev, hdmi);
 
@@ -310,7 +309,7 @@ err_remove_dw_hdmi:
 	drm_bridge_remove(&hdmi->enc_bridge);
 	dw_hdmi_remove(hdmi->hdmi);
 err_deinit_phy:
-	sun8i_hdmi_phy_deinit(hdmi->phy);
+	sun8i_hdmi_phy_deinit(phy);
 err_disable_clk_tmds:
 	clk_disable_unprepare(hdmi->clk_tmds);
 err_assert_ctrl_reset:
