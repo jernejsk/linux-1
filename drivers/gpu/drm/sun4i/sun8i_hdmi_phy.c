@@ -729,10 +729,11 @@ static int sun8i_hdmi_phy_probe(struct platform_device *pdev)
 	return 0;
 }
 
-struct platform_driver sun8i_hdmi_phy_driver = {
+static struct platform_driver sun8i_hdmi_phy_driver = {
 	.probe  = sun8i_hdmi_phy_probe,
 	.driver = {
 		.name = "sun8i-hdmi-phy",
 		.of_match_table = sun8i_hdmi_phy_of_table,
 	},
 };
+module_platform_driver(sun8i_hdmi_phy_driver);

@@ -194,8 +194,6 @@ struct sun8i_dw_hdmi {
 	struct reset_control		*rst_ctrl;
 };
 
-extern struct platform_driver sun8i_hdmi_phy_driver;
-
 static inline struct sun8i_dw_hdmi *
 encoder_to_sun8i_dw_hdmi(struct drm_encoder *encoder)
 {

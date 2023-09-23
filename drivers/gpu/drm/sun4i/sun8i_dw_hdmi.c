@@ -378,32 +378,7 @@ static struct platform_driver sun8i_dw_hdmi_pltfm_driver = {
 		.of_match_table = sun8i_dw_hdmi_dt_ids,
 	},
 };
-
-static int __init sun8i_dw_hdmi_init(void)
-{
-	int ret;
-
-	ret = platform_driver_register(&sun8i_dw_hdmi_pltfm_driver);
-	if (ret)
-		return ret;
-
-	ret = platform_driver_register(&sun8i_hdmi_phy_driver);
-	if (ret) {
-		platform_driver_unregister(&sun8i_dw_hdmi_pltfm_driver);
-		return ret;
-	}
-
-	return ret;
-}
-
-static void __exit sun8i_dw_hdmi_exit(void)
-{
-	platform_driver_unregister(&sun8i_dw_hdmi_pltfm_driver);
-	platform_driver_unregister(&sun8i_hdmi_phy_driver);
-}
-
-module_init(sun8i_dw_hdmi_init);
-module_exit(sun8i_dw_hdmi_exit);
+module_platform_driver(sun8i_dw_hdmi_pltfm_driver);
 
 MODULE_AUTHOR("Jernej Skrabec <jernej.skrabec@siol.net>");
 MODULE_DESCRIPTION("Allwinner DW HDMI bridge");
