@@ -88,7 +88,8 @@ static int sun4i_drv_bind(struct device *dev)
 
 	ret = component_bind_all(drm->dev, drm);
 	if (ret) {
-		dev_err(drm->dev, "Couldn't bind all pipelines components\n");
+		dev_err_probe(drm->dev, ret,
+			      "Couldn't bind all pipelines components\n");
 		goto cleanup_mode_config;
 	}
 
