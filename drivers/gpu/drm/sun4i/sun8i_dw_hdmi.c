@@ -239,10 +239,11 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
 		goto err_disable_clk_tmds;
 	}
 
-	ret = sun8i_hdmi_phy_get(hdmi, phy_node);
+	hdmi->phy = sun8i_hdmi_phy_get(phy_node);
 	of_node_put(phy_node);
-	if (ret) {
+	if (IS_ERR(hdmi->phy)) {
 		dev_err(dev, "Couldn't get the HDMI PHY\n");
+		ret = PTR_ERR(hdmi->phy);
 		goto err_disable_clk_tmds;
 	}
 
