@@ -430,7 +430,14 @@ void
 __drm_atomic_helper_connector_state_reset(struct drm_connector_state *conn_state,
 					  struct drm_connector *connector)
 {
+	struct drm_property *prop;
+
 	conn_state->connector = connector;
+	prop = connector->max_bpc_property;
+	if (prop) {
+		conn_state->max_bpc = prop->values[1];
+		conn_state->max_requested_bpc = prop->values[1];
+	}
 }
 EXPORT_SYMBOL(__drm_atomic_helper_connector_state_reset);
 
