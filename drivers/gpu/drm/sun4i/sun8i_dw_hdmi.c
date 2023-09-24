@@ -7,6 +7,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/videodev2.h>
 
 #include <drm/drm_atomic_state_helper.h>
 #include <drm/drm_bridge_connector.h>
@@ -17,8 +18,10 @@
 
 #include <media/cec-notifier.h>
 
+#include "sun4i_crtc.h"
 #include "sun8i_dw_hdmi.h"
 #include "sun8i_tcon_top.h"
+#include "sunxi_engine.h"
 
 #define bridge_to_sun8i_dw_hdmi(x) \
 	container_of(x, struct sun8i_dw_hdmi, enc_bridge)
@@ -64,14 +67,84 @@ static int sun8i_hdmi_enc_atomic_check(struct drm_bridge *bridge,
 				       struct drm_crtc_state *crtc_state,
 				       struct drm_connector_state *conn_state)
 {
+	struct sun4i_crtc *crtc = drm_crtc_to_sun4i_crtc(crtc_state->crtc);
 	struct drm_connector_state *old_conn_state =
 		drm_atomic_get_old_connector_state(conn_state->state,
 						   conn_state->connector);
+
+	switch (conn_state->colorspace) {
+	case DRM_MODE_COLORIMETRY_SMPTE_170M_YCC:
+	case DRM_MODE_COLORIMETRY_XVYCC_601:
+	case DRM_MODE_COLORIMETRY_SYCC_601:
+	case DRM_MODE_COLORIMETRY_OPYCC_601:
+	case DRM_MODE_COLORIMETRY_BT601_YCC:
+		crtc->engine->encoding = DRM_COLOR_YCBCR_BT601;
+		break;
+
+	default:
+	case DRM_MODE_COLORIMETRY_NO_DATA:
+	case DRM_MODE_COLORIMETRY_BT709_YCC:
+	case DRM_MODE_COLORIMETRY_XVYCC_709:
+	case DRM_MODE_COLORIMETRY_RGB_WIDE_FIXED:
+	case DRM_MODE_COLORIMETRY_RGB_WIDE_FLOAT:
+		crtc->engine->encoding = DRM_COLOR_YCBCR_BT709;
+		break;
+
+	case DRM_MODE_COLORIMETRY_BT2020_CYCC:
+	case DRM_MODE_COLORIMETRY_BT2020_YCC:
+	case DRM_MODE_COLORIMETRY_BT2020_RGB:
+	case DRM_MODE_COLORIMETRY_DCI_P3_RGB_D65:
+	case DRM_MODE_COLORIMETRY_DCI_P3_RGB_THEATER:
+		crtc->engine->encoding = DRM_COLOR_YCBCR_BT2020;
+		break;
+	}
+
+	if (crtc->engine->format != bridge_state->output_bus_cfg.format) {
+		crtc->engine->format = bridge_state->output_bus_cfg.format;
+		crtc_state->mode_changed = true;
+	}
+
+	printk("HDMI output_bus_fmt %x\n", bridge_state->output_bus_cfg.format);
 
 	if (!drm_connector_atomic_hdr_metadata_equal(old_conn_state, conn_state))
 		crtc_state->mode_changed = true;
 
 	return 0;
+}
+
+static u32 *
+sun8i_hdmi_enc_get_input_bus_fmts(struct drm_bridge *bridge,
+				  struct drm_bridge_state *bridge_state,
+				  struct drm_crtc_state *crtc_state,
+				  struct drm_connector_state *conn_state,
+				  u32 output_fmt,
+				  unsigned int *num_input_fmts)
+{
+	struct sun4i_crtc *crtc = drm_crtc_to_sun4i_crtc(crtc_state->crtc);
+	u32 *input_fmt, *supported, count, i;
+
+	*num_input_fmts = 0;
+	input_fmt = NULL;
+
+	supported = sunxi_engine_get_supported_formats(crtc->engine, &count);
+	if (count == 0 || !supported)
+		return NULL;
+
+	for (i = 0; i < count; i++)
+		if (output_fmt == supported[i]) {
+			input_fmt = kzalloc(sizeof(*input_fmt), GFP_KERNEL);
+			if (!input_fmt)
+				break;
+
+			*num_input_fmts = 1;
+			*input_fmt = output_fmt;
+
+			break;
+		}
+
+	kfree(supported);
+
+	return input_fmt;
 }
 
 static const struct drm_bridge_funcs sun8i_hdmi_enc_bridge_funcs = {
@@ -81,6 +154,7 @@ static const struct drm_bridge_funcs sun8i_hdmi_enc_bridge_funcs = {
 	.atomic_check = sun8i_hdmi_enc_atomic_check,
 	.atomic_duplicate_state = drm_atomic_helper_bridge_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_bridge_destroy_state,
+	.atomic_get_input_bus_fmts = sun8i_hdmi_enc_get_input_bus_fmts,
 	.atomic_reset = drm_atomic_helper_bridge_reset,
 };
 
@@ -114,6 +188,11 @@ sun8i_dw_hdmi_mode_valid_h6(struct dw_hdmi *hdmi, void *data,
 			    const struct drm_display_info *info,
 			    const struct drm_display_mode *mode)
 {
+	unsigned long clock = mode->crtc_clock * 1000;
+
+	if (drm_mode_is_420(info, mode))
+		clock /= 2;
+
 	/*
 	 * Controller support maximum of 594 MHz, which correlates to
 	 * 4K@60Hz 4:4:4 or RGB.
@@ -257,6 +336,8 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
 
 	plat_data->mode_valid = hdmi->quirks->mode_valid;
 	plat_data->use_drm_infoframe = hdmi->quirks->use_drm_infoframe;
+	plat_data->ycbcr_420_allowed = hdmi->quirks->use_drm_infoframe;
+	plat_data->input_bus_encoding = V4L2_YCBCR_ENC_709;
 	plat_data->output_port = 1;
 	sun8i_hdmi_phy_set_ops(phy, plat_data);
 
@@ -291,8 +372,17 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
 	hdmi->connector = connector;
 	drm_connector_attach_encoder(connector, encoder);
 
-	if (hdmi->quirks->use_drm_infoframe)
+	drm_atomic_helper_connector_reset(connector);
+
+	drm_mode_create_hdmi_colorspace_property(connector, 0);
+
+	if (hdmi->quirks->use_drm_infoframe) {
 		drm_connector_attach_hdr_output_metadata_property(connector);
+		drm_connector_attach_max_bpc_property(connector, 8, 12);
+		drm_connector_attach_colorspace_property(connector);
+	}
+
+	connector->ycbcr_420_allowed = hdmi->quirks->use_drm_infoframe;
 
 	cec_fill_conn_info_from_drm(&conn_info, connector);
 
