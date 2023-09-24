@@ -1018,19 +1018,15 @@ static void hdmi_video_sample(struct dw_hdmi *hdmi)
 		color_format = 0x07;
 		break;
 
-	case MEDIA_BUS_FMT_YUV8_1X24:
 	case MEDIA_BUS_FMT_UYYVYY8_0_5X24:
 		color_format = 0x09;
 		break;
-	case MEDIA_BUS_FMT_YUV10_1X30:
 	case MEDIA_BUS_FMT_UYYVYY10_0_5X30:
 		color_format = 0x0B;
 		break;
-	case MEDIA_BUS_FMT_YUV12_1X36:
 	case MEDIA_BUS_FMT_UYYVYY12_0_5X36:
 		color_format = 0x0D;
 		break;
-	case MEDIA_BUS_FMT_YUV16_1X48:
 	case MEDIA_BUS_FMT_UYYVYY16_0_5X48:
 		color_format = 0x0F;
 		break;
@@ -1043,6 +1039,19 @@ static void hdmi_video_sample(struct dw_hdmi *hdmi)
 		break;
 	case MEDIA_BUS_FMT_UYVY12_1X24:
 		color_format = 0x12;
+		break;
+
+	case MEDIA_BUS_FMT_YUV8_1X24:
+		color_format = 0x17;
+		break;
+	case MEDIA_BUS_FMT_YUV10_1X30:
+		color_format = 0x18;
+		break;
+	case MEDIA_BUS_FMT_YUV12_1X36:
+		color_format = 0x19;
+		break;
+	case MEDIA_BUS_FMT_YUV16_1X48:
+		color_format = 0x1a;
 		break;
 
 	default:
@@ -1164,7 +1173,7 @@ static void hdmi_video_csc(struct dw_hdmi *hdmi)
 	if (is_color_space_interpolation(hdmi))
 		interpolation = HDMI_CSC_CFG_INTMODE_CHROMA_INT_FORMULA1;
 	else if (is_color_space_decimation(hdmi))
-		decimation = HDMI_CSC_CFG_DECMODE_CHROMA_INT_FORMULA3;
+		decimation = HDMI_CSC_CFG_DECMODE_CHROMA_INT_FORMULA1;
 
 	switch (hdmi_bus_fmt_color_depth(hdmi->hdmi_data.enc_out_bus_format)) {
 	case 8:
@@ -1205,7 +1214,6 @@ static void hdmi_video_packetize(struct dw_hdmi *hdmi)
 	struct hdmi_data_info *hdmi_data = &hdmi->hdmi_data;
 	u8 val, vp_conf;
 	u8 clear_gcp_auto = 0;
-
 
 	if (hdmi_bus_fmt_is_rgb(hdmi->hdmi_data.enc_out_bus_format) ||
 	    hdmi_bus_fmt_is_yuv444(hdmi->hdmi_data.enc_out_bus_format) ||
@@ -1800,7 +1808,9 @@ static void hdmi_config_AVI(struct dw_hdmi *hdmi,
 		frame.colorspace = HDMI_COLORSPACE_RGB;
 
 	/* Set up colorimetry */
-	if (!hdmi_bus_fmt_is_rgb(hdmi->hdmi_data.enc_out_bus_format)) {
+	if (connector->colorspace_property) {
+		drm_hdmi_avi_infoframe_colorimetry(&frame, connector->state);
+	} else if (!hdmi_bus_fmt_is_rgb(hdmi->hdmi_data.enc_out_bus_format)) {
 		switch (hdmi->hdmi_data.enc_out_encoding) {
 		case V4L2_YCBCR_ENC_601:
 			if (hdmi->hdmi_data.enc_in_encoding == V4L2_YCBCR_ENC_XV601)
