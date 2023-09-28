@@ -133,6 +133,9 @@ struct sunxi_engine_ops {
 	 * This function is optional.
 	 */
 	u32 *(*get_supported_fmts)(struct sunxi_engine *engine, u32 *num);
+
+	void (*set_format)(struct sunxi_engine *engine, u32 format,
+			   enum drm_color_encoding encoding);
 };
 
 /**
@@ -241,5 +244,16 @@ sunxi_engine_get_supported_formats(struct sunxi_engine *engine, u32 *num)
 	*num = 0;
 
 	return NULL;
+}
+
+static inline void
+sunxi_engine_set_format(struct sunxi_engine *engine, u32 format,
+			enum drm_color_encoding encoding)
+{
+	if (engine->ops && engine->ops->set_format)
+		return engine->ops->set_format(engine, format, encoding);
+
+	engine->format = format;
+	engine->encoding = encoding;
 }
 #endif /* _SUNXI_ENGINE_H_ */

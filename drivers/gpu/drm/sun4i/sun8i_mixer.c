@@ -330,7 +330,18 @@ static void sun8i_mixer_mode_set(struct sunxi_engine *engine,
 	DRM_DEBUG_DRIVER("Switching display mixer interlaced mode %s\n",
 			 interlaced ? "on" : "off");
 
-	printk("mixer format: %x\n", mixer->engine.format);
+	bld_base = sun8i_blender_base(mixer);
+
+	if (engine->format == MEDIA_BUS_FMT_RGB888_1X24)
+		val = SUN8I_MIXER_BLEND_COLOR_BLACK;
+	else
+		val = 0xff108080;
+
+	regmap_write(mixer->engine.regs,
+		     SUN8I_MIXER_BLEND_BKCOLOR(bld_base), val);
+	regmap_write(mixer->engine.regs,
+		     SUN8I_MIXER_BLEND_ATTR_FCOLOR(bld_base, 0), val);
+
 	if (mixer->cfg->has_formatter)
 		sun50i_fmt_setup(mixer, mode->hdisplay,
 				 mode->vdisplay, mixer->engine.format);
@@ -351,8 +362,8 @@ static u32 *sun8i_mixer_get_supported_fmts(struct sunxi_engine *engine, u32 *num
 		formats[count++] = MEDIA_BUS_FMT_UYYVYY10_0_5X30;
 		//formats[count++] = MEDIA_BUS_FMT_UYVY10_1X20;
 		//formats[count++] = MEDIA_BUS_FMT_UYYVYY8_0_5X24;
-		formats[count++] = MEDIA_BUS_FMT_UYVY8_1X16;
 		formats[count++] = MEDIA_BUS_FMT_YUV8_1X24;
+		formats[count++] = MEDIA_BUS_FMT_UYVY8_1X16;
 	}
 
 	formats[count++] = MEDIA_BUS_FMT_RGB888_1X24;
@@ -362,11 +373,31 @@ static u32 *sun8i_mixer_get_supported_fmts(struct sunxi_engine *engine, u32 *num
 	return formats;
 }
 
+void sun8i_mixer_set_format(struct sunxi_engine *engine, u32 format,
+			    enum drm_color_encoding encoding)
+{
+	struct sun8i_mixer *mixer = engine_to_sun8i_mixer(engine);
+	u32 bld_base, val;
+
+	bld_base = sun8i_blender_base(mixer);
+
+	if (format == MEDIA_BUS_FMT_RGB888_1X24)
+		val = SUN8I_MIXER_BLEND_COLOR_BLACK;
+	else
+		val = 0xff108080;
+
+	regmap_write(mixer->engine.regs,
+		     SUN8I_MIXER_BLEND_BKCOLOR(bld_base), val);
+	regmap_write(mixer->engine.regs,
+		     SUN8I_MIXER_BLEND_ATTR_FCOLOR(bld_base, 0), val);
+}
+
 static const struct sunxi_engine_ops sun8i_engine_ops = {
 	.commit			= sun8i_mixer_commit,
 	.layers_init		= sun8i_layers_init,
 	.mode_set		= sun8i_mixer_mode_set,
 	.get_supported_fmts	= sun8i_mixer_get_supported_fmts,
+	//.set_format		= sun8i_mixer_set_format,
 };
 
 static const struct regmap_config sun8i_mixer_regmap_config = {

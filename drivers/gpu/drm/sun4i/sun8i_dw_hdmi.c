@@ -68,7 +68,11 @@ static int sun8i_hdmi_enc_atomic_check(struct drm_bridge *bridge,
 				       struct drm_connector_state *conn_state)
 {
 	struct sun4i_crtc *crtc = drm_crtc_to_sun4i_crtc(crtc_state->crtc);
-	struct drm_connector_state *old_conn_state =
+	struct sunxi_engine *engine = crtc->engine;
+	struct drm_connector_state *old_conn_state;
+	enum drm_color_encoding encoding;
+
+	old_conn_state =
 		drm_atomic_get_old_connector_state(conn_state->state,
 						   conn_state->connector);
 
@@ -78,7 +82,7 @@ static int sun8i_hdmi_enc_atomic_check(struct drm_bridge *bridge,
 	case DRM_MODE_COLORIMETRY_SYCC_601:
 	case DRM_MODE_COLORIMETRY_OPYCC_601:
 	case DRM_MODE_COLORIMETRY_BT601_YCC:
-		crtc->engine->encoding = DRM_COLOR_YCBCR_BT601;
+		encoding = DRM_COLOR_YCBCR_BT601;
 		break;
 
 	default:
@@ -87,7 +91,7 @@ static int sun8i_hdmi_enc_atomic_check(struct drm_bridge *bridge,
 	case DRM_MODE_COLORIMETRY_XVYCC_709:
 	case DRM_MODE_COLORIMETRY_RGB_WIDE_FIXED:
 	case DRM_MODE_COLORIMETRY_RGB_WIDE_FLOAT:
-		crtc->engine->encoding = DRM_COLOR_YCBCR_BT709;
+		encoding = DRM_COLOR_YCBCR_BT709;
 		break;
 
 	case DRM_MODE_COLORIMETRY_BT2020_CYCC:
@@ -95,14 +99,15 @@ static int sun8i_hdmi_enc_atomic_check(struct drm_bridge *bridge,
 	case DRM_MODE_COLORIMETRY_BT2020_RGB:
 	case DRM_MODE_COLORIMETRY_DCI_P3_RGB_D65:
 	case DRM_MODE_COLORIMETRY_DCI_P3_RGB_THEATER:
-		crtc->engine->encoding = DRM_COLOR_YCBCR_BT2020;
+		encoding = DRM_COLOR_YCBCR_BT2020;
 		break;
 	}
 
-	if (crtc->engine->format != bridge_state->output_bus_cfg.format) {
-		crtc->engine->format = bridge_state->output_bus_cfg.format;
+	if (crtc->engine->format != bridge_state->output_bus_cfg.format)
 		crtc_state->mode_changed = true;
-	}
+
+	sunxi_engine_set_format(engine, bridge_state->output_bus_cfg.format,
+				encoding);
 
 	printk("HDMI output_bus_fmt %x\n", bridge_state->output_bus_cfg.format);
 
