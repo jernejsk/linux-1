@@ -7,6 +7,7 @@
 #define _SUNXI_ENGINE_H_
 
 #include <drm/drm_color_mgmt.h>
+#include <linux/hdmi.h>
 
 struct drm_plane;
 struct drm_device;
@@ -155,6 +156,8 @@ struct sunxi_engine {
 
 	u32				format;
 	enum drm_color_encoding		encoding;
+	enum hdmi_eotf			eotf;
+	unsigned int			is_eotf_supported : 1;
 
 	/* Engine list management */
 	struct list_head		list;

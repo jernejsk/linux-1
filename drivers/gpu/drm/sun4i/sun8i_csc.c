@@ -7,6 +7,7 @@
 
 #include <uapi/linux/media-bus-format.h>
 
+#include "sun50i_cdc.h"
 #include "sun8i_csc.h"
 #include "sun8i_mixer.h"
 
@@ -128,234 +129,273 @@ static const u32 rgb2yuv_de3[3][12] = {
 	},
 };
 
+static const u32 identity_de3[12] = {
+	0x00020000, 0x00000000, 0x00000000, 0x00000000,
+	0x00000000, 0x00020000, 0x00000000, 0x00000000,
+	0x00000000, 0x00000000, 0x00020000, 0x00000000,
+};
+
+static const u32 yuv_601_lim_to_709_lim_de3[12] = {
+	0x00020000, 0xFFFFC4D7, 0xFFFF9589, 0xFFC00040,
+	0x00000000, 0x0002098B, 0x00003AAF, 0xFE000200,
+	0x00000000, 0x0000266D, 0x00020CF8, 0xFE000200,
+};
+
+static const u32 yuv_601_lim_to_2020_lim_de3[12] = {
+	0x00020000, 0xFFFFBFCE, 0xFFFFC5FF, 0xFFC00040,
+	0x00000000, 0x00020521, 0x00001F89, 0xFE000200,
+	0x00000000, 0x00002C87, 0x00020F07, 0xFE000200,
+};
+
+static const u32 yuv_709_lim_to_601_lim_de3[12] = {
+	0x00020000, 0x000032D9, 0x00006226, 0xFFC00040,
+	0x00000000, 0x0001FACE, 0xFFFFC759, 0xFE000200,
+	0x00000000, 0xFFFFDAE7, 0x0001F780, 0xFE000200,
+};
+
+static const u32 yuv_709_lim_to_2020_lim_de3[12] = {
+	0x00020000, 0xFFFFF782, 0x00003036, 0xFFC00040,
+	0x00000000, 0x0001FD99, 0xFFFFE5CA, 0xFE000200,
+	0x00000000, 0x000005E4, 0x0002015A, 0xFE000200,
+};
+
+static const u32 yuv_2020_lim_to_601_lim_de3[12] = {
+	0x00020000, 0x00003B03, 0x000034D2, 0xFFC00040,
+	0x00000000, 0x0001FD8C, 0xFFFFE183, 0xFE000200,
+	0x00000000, 0xFFFFD4F3, 0x0001F3FA, 0xFE000200,
+};
+
+static const u32 yuv_2020_lim_to_709_lim_de3[12] = {
+	0x00020000, 0x00000916, 0xFFFFD061, 0xFFC00040,
+	0x00000000, 0x0002021C, 0x00001A40, 0xFE000200,
+	0x00000000, 0xFFFFFA19, 0x0001FE5A, 0xFE000200,
+};
+
+static const u32 yuv_full_to_lim_de3[12] = {
+	0x0001B7B8, 0x00000000, 0x00000000, 0x00000040,
+	0x00000000, 0x0001C1C2, 0x00000000, 0xFE000200,
+	0x00000000, 0x00000000, 0x0001C1C2, 0xFE000200,
+};
+
+static const u32 yuv_601_full_to_709_lim_de3[12] = {
+	0x0001B7B8, 0xFFFFCC08, 0xFFFFA27B, 0x00000040,
+	0x00000000, 0x0001CA24, 0x0000338D, 0xFE000200,
+	0x00000000, 0x000021C1, 0x0001CD26, 0xFE000200,
+};
+
+static const u32 yuv_601_full_to_2020_lim_de3[12] = {
+	0x0001B7B8, 0xFFFFC79C, 0xFFFFCD0C, 0x00000040,
+	0x00000000, 0x0001C643, 0x00001BB4, 0xFE000200,
+	0x00000000, 0x0000271D, 0x0001CEF5, 0xFE000200,
+};
+
+static const u32 yuv_709_full_to_601_lim_de3[12] = {
+	0x0001B7B8, 0x00002CAB, 0x00005638, 0x00000040,
+	0x00000000, 0x0001BD32, 0xFFFFCE3C, 0xFE000200,
+	0x00000000, 0xFFFFDF6A, 0x0001BA4A, 0xFE000200,
+};
+
+static const u32 yuv_709_full_to_2020_lim_de3[12] = {
+	0x0001B7B8, 0xFFFFF88A, 0x00002A5A, 0x00000040,
+	0x00000000, 0x0001BFA5, 0xFFFFE8FA, 0xFE000200,
+	0x00000000, 0x0000052D, 0x0001C2F1, 0xFE000200,
+};
+
+static const u32 yuv_2020_full_to_601_lim_de3[12] = {
+	0x0001B7B8, 0x000033D6, 0x00002E66, 0x00000040,
+	0x00000000, 0x0001BF9A, 0xFFFFE538, 0xFE000200,
+	0x00000000, 0xFFFFDA2F, 0x0001B732, 0xFE000200,
+};
+
+static const u32 yuv_2020_full_to_709_lim_de3[12] = {
+	0x0001B7B8, 0x000007FB, 0xFFFFD62B, 0x00000040,
+	0x00000000, 0x0001C39D, 0x0000170F, 0xFE000200,
+	0x00000000, 0xFFFFFAD1, 0x0001C04F, 0xFE000200,
+};
+
 /* always convert to limited mode */
-static const u32 yuv2yuv_de3[2][3][3][12] = {
+static const u32 *yuv2yuv_de3[2][3][3] = {
 	[DRM_COLOR_YCBCR_LIMITED_RANGE] = {
 		[DRM_COLOR_YCBCR_BT601] = {
-			[DRM_COLOR_YCBCR_BT601] = {
-				0x00020000, 0x00000000, 0x00000000, 0x00000000,
-				0x00000000, 0x00020000, 0x00000000, 0x00000000,
-				0x00000000, 0x00000000, 0x00020000, 0x00000000,
-			},
-			[DRM_COLOR_YCBCR_BT709] = {
-				0x00020000, 0xFFFFC4D7, 0xFFFF9589, 0xFFC00040,
-				0x00000000, 0x0002098B, 0x00003AAF, 0xFE000200,
-				0x00000000, 0x0000266D, 0x00020CF8, 0xFE000200,
-			},
-			[DRM_COLOR_YCBCR_BT2020] = {
-				0x00020000, 0xFFFFBFCE, 0xFFFFC5FF, 0xFFC00040,
-				0x00000000, 0x00020521, 0x00001F89, 0xFE000200,
-				0x00000000, 0x00002C87, 0x00020F07, 0xFE000200,
-			},
+			[DRM_COLOR_YCBCR_BT601] = identity_de3,
+			[DRM_COLOR_YCBCR_BT709] = yuv_601_lim_to_709_lim_de3,
+			[DRM_COLOR_YCBCR_BT2020] = yuv_601_lim_to_2020_lim_de3,
 		},
 		[DRM_COLOR_YCBCR_BT709] = {
-			[DRM_COLOR_YCBCR_BT601] = {
-				0x00020000, 0x000032D9, 0x00006226, 0xFFC00040,
-				0x00000000, 0x0001FACE, 0xFFFFC759, 0xFE000200,
-				0x00000000, 0xFFFFDAE7, 0x0001F780, 0xFE000200,
-			},
-			[DRM_COLOR_YCBCR_BT709] = {
-				0x00020000, 0x00000000, 0x00000000, 0x00000000,
-				0x00000000, 0x00020000, 0x00000000, 0x00000000,
-				0x00000000, 0x00000000, 0x00020000, 0x00000000,
-			},
-			[DRM_COLOR_YCBCR_BT2020] = {
-				0x00020000, 0xFFFFF782, 0x00003036, 0xFFC00040,
-				0x00000000, 0x0001FD99, 0xFFFFE5CA, 0xFE000200,
-				0x00000000, 0x000005E4, 0x0002015A, 0xFE000200,
-			},
+			[DRM_COLOR_YCBCR_BT601] = yuv_709_lim_to_601_lim_de3,
+			[DRM_COLOR_YCBCR_BT709] = identity_de3,
+			[DRM_COLOR_YCBCR_BT2020] = yuv_709_lim_to_2020_lim_de3,
 		},
 		[DRM_COLOR_YCBCR_BT2020] = {
-			[DRM_COLOR_YCBCR_BT601] = {
-				0x00020000, 0x00003B03, 0x000034D2, 0xFFC00040,
-				0x00000000, 0x0001FD8C, 0xFFFFE183, 0xFE000200,
-				0x00000000, 0xFFFFD4F3, 0x0001F3FA, 0xFE000200,
-			},
-			[DRM_COLOR_YCBCR_BT709] = {
-				0x00020000, 0x00000916, 0xFFFFD061, 0xFFC00040,
-				0x00000000, 0x0002021C, 0x00001A40, 0xFE000200,
-				0x00000000, 0xFFFFFA19, 0x0001FE5A, 0xFE000200,
-			},
-			[DRM_COLOR_YCBCR_BT2020] = {
-				0x00020000, 0x00000000, 0x00000000, 0x00000000,
-				0x00000000, 0x00020000, 0x00000000, 0x00000000,
-				0x00000000, 0x00000000, 0x00020000, 0x00000000,
-			},
+			[DRM_COLOR_YCBCR_BT601] = yuv_2020_lim_to_601_lim_de3,
+			[DRM_COLOR_YCBCR_BT709] = yuv_2020_lim_to_709_lim_de3,
+			[DRM_COLOR_YCBCR_BT2020] = identity_de3,
 		},
 	},
 	[DRM_COLOR_YCBCR_FULL_RANGE] = {
 		[DRM_COLOR_YCBCR_BT601] = {
-			[DRM_COLOR_YCBCR_BT601] = {
-				0x0001B7B8, 0x00000000, 0x00000000, 0x00000040,
-				0x00000000, 0x0001C1C2, 0x00000000, 0xFE000200,
-				0x00000000, 0x00000000, 0x0001C1C2, 0xFE000200,
-			},
-			[DRM_COLOR_YCBCR_BT709] = {
-				0x0001B7B8, 0xFFFFCC08, 0xFFFFA27B, 0x00000040,
-				0x00000000, 0x0001CA24, 0x0000338D, 0xFE000200,
-				0x00000000, 0x000021C1, 0x0001CD26, 0xFE000200,
-			},
-			[DRM_COLOR_YCBCR_BT2020] = {
-				0x0001B7B8, 0xFFFFC79C, 0xFFFFCD0C, 0x00000040,
-				0x00000000, 0x0001C643, 0x00001BB4, 0xFE000200,
-				0x00000000, 0x0000271D, 0x0001CEF5, 0xFE000200,
-			},
+			[DRM_COLOR_YCBCR_BT601] = yuv_full_to_lim_de3,
+			[DRM_COLOR_YCBCR_BT709] = yuv_601_full_to_709_lim_de3,
+			[DRM_COLOR_YCBCR_BT2020] = yuv_601_full_to_2020_lim_de3,
 		},
 		[DRM_COLOR_YCBCR_BT709] = {
-			[DRM_COLOR_YCBCR_BT601] = {
-				0x0001B7B8, 0x00002CAB, 0x00005638, 0x00000040,
-				0x00000000, 0x0001BD32, 0xFFFFCE3C, 0xFE000200,
-				0x00000000, 0xFFFFDF6A, 0x0001BA4A, 0xFE000200,
-			},
-			[DRM_COLOR_YCBCR_BT709] = {
-				0x0001B7B8, 0x00000000, 0x00000000, 0x00000040,
-				0x00000000, 0x0001C1C2, 0x00000000, 0xFE000200,
-				0x00000000, 0x00000000, 0x0001C1C2, 0xFE000200,
-			},
-			[DRM_COLOR_YCBCR_BT2020] = {
-				0x0001B7B8, 0xFFFFF88A, 0x00002A5A, 0x00000040,
-				0x00000000, 0x0001BFA5, 0xFFFFE8FA, 0xFE000200,
-				0x00000000, 0x0000052D, 0x0001C2F1, 0xFE000200,
-			},
+			[DRM_COLOR_YCBCR_BT601] = yuv_709_full_to_601_lim_de3,
+			[DRM_COLOR_YCBCR_BT709] = yuv_full_to_lim_de3,
+			[DRM_COLOR_YCBCR_BT2020] = yuv_709_full_to_2020_lim_de3,
 		},
 		[DRM_COLOR_YCBCR_BT2020] = {
-			[DRM_COLOR_YCBCR_BT601] = {
-				0x0001B7B8, 0x000033D6, 0x00002E66, 0x00000040,
-				0x00000000, 0x0001BF9A, 0xFFFFE538, 0xFE000200,
-				0x00000000, 0xFFFFDA2F, 0x0001B732, 0xFE000200,
-			},
-			[DRM_COLOR_YCBCR_BT709] = {
-				0x0001B7B8, 0x000007FB, 0xFFFFD62B, 0x00000040,
-				0x00000000, 0x0001C39D, 0x0000170F, 0xFE000200,
-				0x00000000, 0xFFFFFAD1, 0x0001C04F, 0xFE000200,
-			},
-			[DRM_COLOR_YCBCR_BT2020] = {
-				0x0001B7B8, 0x00000000, 0x00000000, 0x00000040,
-				0x00000000, 0x0001C1C2, 0x00000000, 0xFE000200,
-				0x00000000, 0x00000000, 0x0001C1C2, 0xFE000200,
-			},
+			[DRM_COLOR_YCBCR_BT601] = yuv_2020_full_to_601_lim_de3,
+			[DRM_COLOR_YCBCR_BT709] = yuv_2020_full_to_709_lim_de3,
+			[DRM_COLOR_YCBCR_BT2020] = yuv_full_to_lim_de3,
 		},
 	},
 };
+
+static u32 *sun8i_csc_yvu_remap(const u32 *in_table, u32 *out_table)
+{
+	int i;
+
+	for (i = 0; i < 12; i++)
+		if ((i & 3) == 1)
+			out_table[i] = in_table[i + 1];
+		else if ((i & 3) == 2)
+			out_table[i] = in_table[i - 1];
+		else
+			out_table[i] = in_table[i];
+
+	return out_table;
+}
 
 static void sun8i_csc_setup(struct regmap *map, u32 base,
 			    enum format_type fmt_type,
 			    enum drm_color_encoding encoding,
 			    enum drm_color_range range)
 {
-	u32 base_reg, val = 0;
-	const u32 *table;
-	int i;
+	u32 base_reg, yvu_table[12];
+	const u32 *table = NULL;
 
-	table = yuv2rgb[range][encoding];
+	base_reg = SUN8I_CSC_COEFF(base, 0);
 
 	switch (fmt_type) {
 	case FORMAT_TYPE_RGB:
-		val = 0;
+		/* nothing to convert */
 		break;
 	case FORMAT_TYPE_YUV:
-		val = SUN8I_CSC_CTRL_EN;
-		base_reg = SUN8I_CSC_COEFF(base, 0);
-		regmap_bulk_write(map, base_reg, table, 12);
-		break;
 	case FORMAT_TYPE_YVU:
-		val = SUN8I_CSC_CTRL_EN;
-		for (i = 0; i < 12; i++) {
-			if ((i & 3) == 1)
-				base_reg = SUN8I_CSC_COEFF(base, i + 1);
-			else if ((i & 3) == 2)
-				base_reg = SUN8I_CSC_COEFF(base, i - 1);
-			else
-				base_reg = SUN8I_CSC_COEFF(base, i);
-			regmap_write(map, base_reg, table[i]);
-		}
+		table = yuv2rgb[range][encoding];
+		if (fmt_type == FORMAT_TYPE_YVU)
+			table = sun8i_csc_yvu_remap(table, yvu_table);
 		break;
 	default:
-		val = 0;
 		DRM_WARN("Wrong CSC mode specified.\n");
 		return;
 	}
 
-	regmap_write(map, SUN8I_CSC_CTRL(base), val);
+	regmap_write(map, SUN8I_CSC_CTRL(base),
+		     table ? SUN8I_CSC_CTRL_EN : 0);
+	if (table)
+		regmap_bulk_write(map, base_reg, table, 12);
 }
 
-static const u32 *sun8i_csc_get_de3_yuv_table(enum drm_color_encoding in_enc,
-					      enum drm_color_range in_range,
-					      u32 out_format,
-					      enum drm_color_encoding out_enc)
+static bool is_rgb(u32 format)
 {
-	if (out_format == MEDIA_BUS_FMT_RGB888_1X24)
-		return yuv2rgb_de3[in_range][in_enc];
-
-	/* check for identity transformation */
-	if (in_range == DRM_COLOR_YCBCR_LIMITED_RANGE && out_enc == in_enc)
-		return NULL;
-
-	return yuv2yuv_de3[in_range][in_enc][out_enc];
+	switch (format) {
+	case MEDIA_BUS_FMT_RGB888_1X24:
+	case MEDIA_BUS_FMT_RGB101010_1X30:
+		return true;
+	default:
+		return false;
+	}
 }
 
-static void sun8i_de3_ccsc_setup(struct sunxi_engine *engine, int layer,
+static void sun8i_de3_ccsc_setup(struct sun8i_mixer *mixer, int layer,
 				 enum format_type fmt_type,
 				 enum drm_color_encoding encoding,
 				 enum drm_color_range range)
 {
-	u32 addr, val = 0, mask;
-	struct regmap *map;
-	const u32 *table;
-	int i;
+	struct sunxi_engine *engine = &mixer->engine;
+	const u32 *table = NULL, *in_csc;
+	enum drm_color_encoding out_enc;
+	u32 addr, mask, yvu_table[12];
+	bool enable, is_hdr10, is_sdr;
+	struct csc_state *state;
 
+	state = &mixer->csc_states[layer];
+	if (state->fmt_type == fmt_type &&
+	    state->in_enc == encoding &&
+	    state->in_range == range &&
+	    state->out_fmt == engine->format &&
+	    state->out_enc == engine->encoding &&
+	    state->eotf == engine->eotf &&
+	    state->is_eotf_supported == engine->is_eotf_supported)
+		return;
+
+	state->fmt_type = fmt_type;
+	state->in_enc = encoding;
+	state->in_range = range;
+	state->out_fmt = engine->format;
+	state->out_enc = engine->encoding;
+	state->eotf = engine->eotf;
+	state->is_eotf_supported = engine->is_eotf_supported;
+
+	addr = SUN50I_MIXER_BLEND_CSC_COEFF(DE3_BLD_BASE, layer, 0);
 	mask = SUN50I_MIXER_BLEND_CSC_CTL_EN(layer);
-	table = yuv2rgb_de3[range][encoding];
-	map = engine->regs;
+	is_hdr10 = engine->eotf == HDMI_EOTF_SMPTE_ST2084;
+	is_sdr = engine->eotf == HDMI_EOTF_TRADITIONAL_GAMMA_SDR;
+	out_enc = engine->encoding;
 
 	switch (fmt_type) {
 	case FORMAT_TYPE_RGB:
-		if (engine->format == MEDIA_BUS_FMT_RGB888_1X24)
-			break;
-		val = mask;
-		addr = SUN50I_MIXER_BLEND_CSC_COEFF(DE3_BLD_BASE, layer, 0);
-		regmap_bulk_write(map, addr, rgb2yuv_de3[engine->encoding], 12);
+		if (!is_rgb(engine->format))
+			table = rgb2yuv_de3[out_enc];
+		if (!is_sdr && engine->is_eotf_supported) {
+			sun50i_cdc_setup(mixer, layer,
+					 identity_de3,
+					 table ?: identity_de3,
+					 is_hdr10 ? SDR_TO_HDR_RGB :
+						    SDR_TO_WCG_RGB);
+			table = NULL;
+		} else {
+			sun50i_cdc_disable(mixer, layer);
+		}
 		break;
 	case FORMAT_TYPE_YUV:
-		table = sun8i_csc_get_de3_yuv_table(encoding, range,
-						    engine->format,
-						    engine->encoding);
-		if (!table)
-			break;
-		val = mask;
-		addr = SUN50I_MIXER_BLEND_CSC_COEFF(DE3_BLD_BASE, layer, 0);
-		regmap_bulk_write(map, addr, table, 12);
-		break;
 	case FORMAT_TYPE_YVU:
-		table = sun8i_csc_get_de3_yuv_table(encoding, range,
-						    engine->format,
-						    engine->encoding);
-		if (!table)
-			table = yuv2yuv_de3[range][encoding][encoding];
-		val = mask;
-		for (i = 0; i < 12; i++) {
-			if ((i & 3) == 1)
-				addr = SUN50I_MIXER_BLEND_CSC_COEFF(DE3_BLD_BASE,
-								    layer,
-								    i + 1);
-			else if ((i & 3) == 2)
-				addr = SUN50I_MIXER_BLEND_CSC_COEFF(DE3_BLD_BASE,
-								    layer,
-								    i - 1);
-			else
-				addr = SUN50I_MIXER_BLEND_CSC_COEFF(DE3_BLD_BASE,
-								    layer, i);
-			regmap_write(map, addr, table[i]);
+		if (!is_sdr && !engine->is_eotf_supported) {
+			in_csc = range == DRM_COLOR_YCBCR_FULL_RANGE ?
+				 yuv_full_to_lim_de3 : identity_de3;
+			if (fmt_type == FORMAT_TYPE_YVU)
+				in_csc = sun8i_csc_yvu_remap(in_csc, yvu_table);
+			range = DRM_COLOR_YCBCR_LIMITED_RANGE;
+			fmt_type = FORMAT_TYPE_YUV;
+			out_enc = DRM_COLOR_YCBCR_BT709;
+		} else {
+			sun50i_cdc_disable(mixer, layer);
+		}
+		table = is_rgb(engine->format) ?
+			yuv2rgb_de3[range][encoding] :
+			yuv2yuv_de3[range][encoding][out_enc];
+		if (fmt_type == FORMAT_TYPE_YVU)
+			table = sun8i_csc_yvu_remap(table, yvu_table);
+		if (!is_sdr && !engine->is_eotf_supported) {
+			sun50i_cdc_setup(mixer, layer,
+					 in_csc, table,
+					 is_hdr10 ? HDR_TO_SDR_YUV :
+						    WCG_TO_SDR_YUV);
+			table = NULL;
 		}
 		break;
 	default:
-		val = 0;
 		DRM_WARN("Wrong CSC mode specified.\n");
 		return;
 	}
 
-	regmap_update_bits(map, SUN50I_MIXER_BLEND_CSC_CTL(DE3_BLD_BASE),
-			   mask, val);
+	enable = table != NULL && table != identity_de3;
+	regmap_update_bits(engine->regs,
+			   SUN50I_MIXER_BLEND_CSC_CTL(DE3_BLD_BASE),
+			   mask, enable ? mask : 0);
+	if (enable)
+		regmap_bulk_write(engine->regs, addr, table, 12);
 }
 
 void sun8i_csc_set_ccsc(struct sun8i_mixer *mixer, int layer,
@@ -366,8 +406,7 @@ void sun8i_csc_set_ccsc(struct sun8i_mixer *mixer, int layer,
 	u32 base;
 
 	if (mixer->cfg->is_de3) {
-		sun8i_de3_ccsc_setup(&mixer->engine, layer,
-				     fmt_type, encoding, range);
+		sun8i_de3_ccsc_setup(mixer, layer, fmt_type, encoding, range);
 		return;
 	}
 

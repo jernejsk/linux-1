@@ -62,6 +62,21 @@ static void sun8i_hdmi_enc_hpd_notify(struct drm_bridge *bridge,
 	}
 }
 
+static enum hdmi_eotf sun8i_hdmi_get_eotf(struct drm_connector_state *state)
+{
+	struct drm_property_blob *blob = state->hdr_output_metadata;
+	struct hdr_output_metadata *hdr_metadata;
+
+	if (!blob)
+		return HDMI_EOTF_TRADITIONAL_GAMMA_SDR;
+
+	hdr_metadata = blob->data;
+	if (!hdr_metadata)
+		return HDMI_EOTF_TRADITIONAL_GAMMA_SDR;
+
+	return hdr_metadata->hdmi_metadata_type1.eotf;
+}
+
 static int sun8i_hdmi_enc_atomic_check(struct drm_bridge *bridge,
 				       struct drm_bridge_state *bridge_state,
 				       struct drm_crtc_state *crtc_state,
@@ -75,6 +90,7 @@ static int sun8i_hdmi_enc_atomic_check(struct drm_bridge *bridge,
 	old_conn_state =
 		drm_atomic_get_old_connector_state(conn_state->state,
 						   conn_state->connector);
+	struct drm_connector *connector = conn_state->connector;
 
 	switch (conn_state->colorspace) {
 	case DRM_MODE_COLORIMETRY_SMPTE_170M_YCC:
@@ -111,8 +127,15 @@ static int sun8i_hdmi_enc_atomic_check(struct drm_bridge *bridge,
 
 	printk("HDMI output_bus_fmt %x\n", bridge_state->output_bus_cfg.format);
 
-	if (!drm_connector_atomic_hdr_metadata_equal(old_conn_state, conn_state))
-		crtc_state->mode_changed = true;
+	if (!drm_connector_atomic_hdr_metadata_equal(old_conn_state, conn_state)) {
+		unsigned int eotf_bitmap = connector->hdr_sink_metadata.hdmi_type1.eotf;
+		crtc->engine->eotf = sun8i_hdmi_get_eotf(conn_state);
+		crtc->engine->is_eotf_supported = !!(eotf_bitmap & BIT(crtc->engine->eotf));
+		if (crtc->engine->is_eotf_supported)
+			crtc_state->mode_changed = true;
+		else
+			crtc->engine->encoding = DRM_COLOR_YCBCR_BT709;
+	}
 
 	return 0;
 }

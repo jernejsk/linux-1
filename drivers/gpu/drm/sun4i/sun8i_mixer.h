@@ -176,6 +176,16 @@ struct sun8i_mixer_cfg {
 	unsigned int	scanline_yuv;
 };
 
+struct csc_state {
+	unsigned int fmt_type;
+	unsigned int in_enc;
+	unsigned int in_range;
+	unsigned int out_fmt;
+	unsigned int out_enc;
+	unsigned int eotf;
+	unsigned int is_eotf_supported : 1;
+};
+
 struct sun8i_mixer {
 	struct sunxi_engine		engine;
 
@@ -185,6 +195,8 @@ struct sun8i_mixer {
 
 	struct clk			*bus_clk;
 	struct clk			*mod_clk;
+
+	struct csc_state		csc_states[4];
 };
 
 static inline struct sun8i_mixer *
