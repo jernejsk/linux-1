@@ -87,6 +87,13 @@ static struct cedrus_format *cedrus_find_format(struct cedrus_ctx *ctx,
 		    !(fmt->directions & directions))
 			continue;
 
+		if (fmt->depth && fmt->depth != ctx->bit_depth)
+			continue;
+
+		if (fmt->src_format &&
+		    fmt->src_format != ctx->src_fmt.pixelformat)
+			continue;
+
 		if (fmt->pixelformat == pixelformat)
 			break;
 

@@ -20,6 +20,8 @@ struct cedrus_format {
 	u32		pixelformat;
 	u32		directions;
 	unsigned int	capabilities;
+	unsigned int	depth;
+	u32		src_format;
 };
 
 extern const struct v4l2_ioctl_ops cedrus_ioctl_ops;
