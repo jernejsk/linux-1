@@ -20,6 +20,8 @@ struct cedrus_format {
 	u32		pixelformat;
 	u32		directions;
 	unsigned int	capabilities;
+	unsigned int	depth;
+	u32		src_format;
 };
 
 #define CEDRUS_MIN_WIDTH	16U
