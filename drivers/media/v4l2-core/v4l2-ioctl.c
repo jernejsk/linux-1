@@ -1558,6 +1558,8 @@ static void v4l_fill_fmtdesc(struct v4l2_fmtdesc *fmt)
 		case V4L2_PIX_FMT_PISP_COMP2_GBRG: descr = "PiSP 8b GBGB/RGRG mode2 compr"; break;
 		case V4L2_PIX_FMT_PISP_COMP2_BGGR: descr = "PiSP 8b BGBG/GRGR mode2 compr"; break;
 		case V4L2_PIX_FMT_PISP_COMP2_MONO: descr = "PiSP 8b monochrome mode2 compr"; break;
+		case V4L2_PIX_FMT_YUV420_8_AFBC_16X16_SPLIT:	descr = "YUV 4:2:0 (AFBC 16x16)"; break;
+		case V4L2_PIX_FMT_YUV420_10_AFBC_16X16_SPLIT:	descr = "10-bit YUV 4:2:0 (AFBC 16x16)"; break;
 		default:
 			if (fmt->description[0])
 				return;
