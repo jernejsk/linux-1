@@ -118,6 +118,13 @@ static struct cedrus_format *cedrus_find_format(struct cedrus_ctx *ctx,
 		    !(fmt->directions & directions))
 			continue;
 
+		if (fmt->depth && fmt->depth != ctx->bit_depth)
+			continue;
+
+		if (fmt->src_format &&
+		    fmt->src_format != ctx->src_fmt.pixelformat)
+			continue;
+
 		/*
 		 * The 10-bit P010 format is only usable when the current
 		 * stream is actually 10-bit; skip it otherwise so the
