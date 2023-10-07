@@ -283,6 +283,23 @@ please make a proposal on the linux-media mailing list.
       - Compressed format used by Nuvoton NPCM video driver. This format is
         defined in Remote Framebuffer Protocol (RFC 6143, chapter 7.7.4 Hextile
         Encoding).
+    * .. _V4L2-PIX-FMT-YUV420-8-AFBC-16X16-SPLIT:
+
+      - ``V4L2_PIX_FMT_YUV420_8_AFBC_16X16_SPLIT``
+      - 'AS12'
+      - 8-bit YUV 4:2:0 compressed with Arm Frame Buffer Compression (AFBC),
+        using 16x16 superblocks in the split and sparse layout, in a single
+        plane. It is the same as the DRM format ``DRM_FORMAT_YUV420_8BIT``
+        with the modifier ``DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16
+        | AFBC_FORMAT_MOD_SPARSE | AFBC_FORMAT_MOD_SPLIT)``. It is produced by
+        the Allwinner video engine (Cedrus) and read by the Allwinner display
+        engine.
+    * .. _V4L2-PIX-FMT-YUV420-10-AFBC-16X16-SPLIT:
+
+      - ``V4L2_PIX_FMT_YUV420_10_AFBC_16X16_SPLIT``
+      - 'AS01'
+      - 10-bit variant of ``V4L2_PIX_FMT_YUV420_8_AFBC_16X16_SPLIT``, the same
+        as the DRM format ``DRM_FORMAT_YUV420_10BIT`` with the same modifier.
 .. raw:: latex
 
     \normalsize
