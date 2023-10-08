@@ -26,6 +26,7 @@
 #include <uapi/linux/media-bus-format.h>
 
 #include "sun4i_drv.h"
+#include "sun50i_afbc.h"
 #include "sun50i_fmt.h"
 #include "sun8i_mixer.h"
 #include "sun8i_ui_layer.h"
@@ -266,6 +267,8 @@ static void sun8i_layer_enable(struct sun8i_layer *layer, bool enable)
 		val = enable ? SUN8I_MIXER_CHAN_VI_LAYER_ATTR_EN : 0;
 		mask = SUN8I_MIXER_CHAN_VI_LAYER_ATTR_EN;
 		reg = SUN8I_MIXER_CHAN_VI_LAYER_ATTR(ch_base, layer->overlay);
+		if (!enable && layer->mixer->cfg->is_de3)
+			sun50i_afbc_disable(layer->mixer, layer->channel);
 	}
 
 	regmap_update_bits(layer->mixer->engine.regs, reg, mask, val);
