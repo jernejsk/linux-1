@@ -268,6 +268,17 @@ cedrus_is_capable(struct cedrus_ctx *ctx, unsigned int capabilities)
 	return (ctx->dev->capabilities & capabilities) == capabilities;
 }
 
+static inline bool is_afbc_format(u32 format)
+{
+	switch (format) {
+	case V4L2_PIX_FMT_YUV420_8_AFBC_16X16_SPLIT:
+	case V4L2_PIX_FMT_YUV420_10_AFBC_16X16_SPLIT:
+		return true;
+	default:
+		return false;
+	}
+}
+
 void *cedrus_find_control_data(struct cedrus_ctx *ctx, u32 id);
 u32 cedrus_get_num_of_controls(struct cedrus_ctx *ctx, u32 id);
 

@@ -120,7 +120,8 @@ static void cedrus_h265_frame_info_write_single(struct cedrus_ctx *ctx,
 {
 	struct cedrus_dev *dev = ctx->dev;
 	dma_addr_t dst_luma_addr = cedrus_dst_buf_addr(ctx, buf, 0);
-	dma_addr_t dst_chroma_addr = cedrus_dst_buf_addr(ctx, buf, 1);
+	dma_addr_t dst_chroma_addr = is_afbc_format(ctx->dst_fmt.pixelformat) ?
+				     0 : cedrus_dst_buf_addr(ctx, buf, 1);
 	dma_addr_t mv_col_buf_addr[2] = {
 		cedrus_h265_frame_info_mv_col_buf_addr(buf, 0),
 		cedrus_h265_frame_info_mv_col_buf_addr(buf, field_pic ? 1 : 0)
