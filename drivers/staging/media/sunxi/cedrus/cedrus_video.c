@@ -56,6 +56,22 @@ static struct cedrus_format cedrus_formats[] = {
 		.capabilities	= CEDRUS_CAPABILITY_VP8_DEC,
 	},
 	{
+		.pixelformat	= V4L2_PIX_FMT_YUV420_10_AFBC_16X16_SPLIT,
+		.directions	= CEDRUS_DECODE_DST,
+		.capabilities	= CEDRUS_CAPABILITY_UNTILED |
+				  CEDRUS_CAPABILITY_H265_10_DEC,
+		.depth		= 10,
+		.src_format	= V4L2_PIX_FMT_HEVC_SLICE,
+	},
+	{
+		.pixelformat	= V4L2_PIX_FMT_YUV420_8_AFBC_16X16_SPLIT,
+		.directions	= CEDRUS_DECODE_DST,
+		.capabilities	= CEDRUS_CAPABILITY_UNTILED |
+				  CEDRUS_CAPABILITY_H265_10_DEC,
+		.depth		= 8,
+		.src_format	= V4L2_PIX_FMT_HEVC_SLICE,
+	},
+	{
 		.pixelformat	= V4L2_PIX_FMT_NV12,
 		.directions	= CEDRUS_DECODE_DST,
 		.capabilities	= CEDRUS_CAPABILITY_UNTILED,
@@ -158,6 +174,26 @@ void cedrus_prepare_format(struct v4l2_pix_format *pix_fmt)
 
 		/* Chroma plane size. */
 		sizeimage += bytesperline * height / 2;
+
+		break;
+
+	case V4L2_PIX_FMT_YUV420_10_AFBC_16X16_SPLIT:
+		/* Zero bytes per line for compressed destination. */
+		bytesperline = 0;
+
+		sizeimage = DIV_ROUND_UP(width, 16) *
+			    DIV_ROUND_UP(height + 4, 16) * (512 + 16) +
+			    32 + SZ_1K;
+
+		break;
+
+	case V4L2_PIX_FMT_YUV420_8_AFBC_16X16_SPLIT:
+		/* Zero bytes per line for compressed destination. */
+		bytesperline = 0;
+
+		sizeimage = DIV_ROUND_UP(width, 16) *
+			    DIV_ROUND_UP(height + 4, 16) * (384 + 16) +
+			    32 + SZ_1K;
 
 		break;
 	}
