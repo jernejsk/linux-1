@@ -646,7 +646,7 @@ static const struct cedrus_variant sun50i_h6_cedrus_variant = {
 			  CEDRUS_CAPABILITY_H265_DEC |
 			  CEDRUS_CAPABILITY_H265_10_DEC |
 			  CEDRUS_CAPABILITY_VP8_DEC,
-	.mod_rate	= 600000000,
+	.mod_rate	= 648000000,
 };
 
 static const struct of_device_id cedrus_dt_match[] = {
