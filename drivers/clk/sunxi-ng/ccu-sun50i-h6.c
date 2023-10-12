@@ -653,7 +653,7 @@ static SUNXI_CCU_M_WITH_GATE(pcie_aux_clk, "pcie-aux", "osc24M", 0xab8,
 static SUNXI_CCU_GATE(bus_pcie_clk, "bus-pcie", "psi-ahb1-ahb2",
 		      0xabc, BIT(0), 0);
 
-static const char * const hdmi_parents[] = { "pll-video0", "pll-video1",
+static const char * const hdmi_parents[] = { "osc24M", "pll-video1",
 					      "pll-video1-4x" };
 static SUNXI_CCU_M_WITH_MUX_GATE(hdmi_clk, "hdmi", hdmi_parents, 0xb00,
 				 0, 4,		/* M */
@@ -707,8 +707,8 @@ static SUNXI_CCU_MUX_WITH_GATE(tcon_lcd0_clk, "tcon-lcd0",
 static SUNXI_CCU_GATE(bus_tcon_lcd0_clk, "bus-tcon-lcd0", "ahb3",
 		      0xb7c, BIT(0), 0);
 
-static const char * const tcon_tv0_parents[] = { "pll-video0",
-						 "pll-video0-4x",
+static const char * const tcon_tv0_parents[] = { "osc24M",
+						 "osc24M",
 						 "pll-video1",
 						 "pll-video1-4x" };
 static SUNXI_CCU_MP_WITH_MUX_GATE(tcon_tv0_clk, "tcon-tv0",
