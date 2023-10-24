@@ -163,6 +163,7 @@ struct dw_hdmi_plat_data {
 			     unsigned long mtmdsclock);
 
 	unsigned int disable_cec : 1;
+	unsigned int alt_yuv_map : 1;
 };
 
 struct dw_hdmi *dw_hdmi_probe(struct platform_device *pdev,

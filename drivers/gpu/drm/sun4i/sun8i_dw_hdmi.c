@@ -360,6 +360,7 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
 	plat_data->ycbcr_420_allowed = hdmi->quirks->use_drm_infoframe;
 	plat_data->input_bus_encoding = V4L2_YCBCR_ENC_709;
 	plat_data->output_port = 1;
+	plat_data->alt_yuv_map = 1;
 	sun8i_hdmi_phy_set_ops(phy, plat_data);
 
 	platform_set_drvdata(pdev, hdmi);

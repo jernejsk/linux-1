@@ -1043,16 +1043,16 @@ static void hdmi_video_sample(struct dw_hdmi *hdmi)
 		break;
 
 	case MEDIA_BUS_FMT_YUV8_1X24:
-		color_format = 0x17;
+		color_format = hdmi->plat_data->alt_yuv_map ? 0x17 : 0x09;
 		break;
 	case MEDIA_BUS_FMT_YUV10_1X30:
-		color_format = 0x18;
+		color_format = hdmi->plat_data->alt_yuv_map ? 0x18 : 0x0B;
 		break;
 	case MEDIA_BUS_FMT_YUV12_1X36:
-		color_format = 0x19;
+		color_format = hdmi->plat_data->alt_yuv_map ? 0x19 : 0x0D;
 		break;
 	case MEDIA_BUS_FMT_YUV16_1X48:
-		color_format = 0x1A;
+		color_format = hdmi->plat_data->alt_yuv_map ? 0x1A : 0x0F;
 		break;
 
 	default:
