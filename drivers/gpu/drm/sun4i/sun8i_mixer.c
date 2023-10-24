@@ -255,13 +255,14 @@ int sun8i_mixer_drm_format_to_hw(u32 format, u32 *hw_format)
 static void sun8i_mixer_commit(struct sunxi_engine *engine)
 {
 	struct sun8i_mixer *mixer = engine_to_sun8i_mixer(engine);
+	int i;
+
+	for (i = 0; i < 4; i++)
+		sun8i_vi_scaler_apply(mixer, i);
 
 	DRM_DEBUG_DRIVER("Committing changes\n");
 
-	if (mixer->cfg->de_type == sun8i_mixer_de33)
-		regmap_write(mixer->top_regs, SUN50I_MIXER_GLOBAL_DBUFF,
-			     SUN8I_MIXER_GLOBAL_DBUFF_ENABLE);
-	else
+	if (mixer->cfg->de_type != sun8i_mixer_de33)
 		regmap_write(engine->regs, SUN8I_MIXER_GLOBAL_DBUFF,
 			     SUN8I_MIXER_GLOBAL_DBUFF_ENABLE);
 }
@@ -383,7 +384,7 @@ static u32 *sun8i_mixer_get_supported_fmts(struct sunxi_engine *engine, u32 *num
 }
 
 static const struct sunxi_engine_ops sun8i_engine_ops = {
-	.commit			= sun8i_mixer_commit,
+	.vblank_quirk		= sun8i_mixer_commit,
 	.layers_init		= sun8i_layers_init,
 	.mode_set		= sun8i_mixer_mode_set,
 	.get_supported_fmts	= sun8i_mixer_get_supported_fmts,
