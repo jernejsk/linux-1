@@ -599,7 +599,7 @@ int cedrus_queue_init(void *priv, struct vb2_queue *src_vq,
 	src_vq->lock = &ctx->dev->dev_mutex;
 	src_vq->dev = ctx->dev->dev;
 	src_vq->supports_requests = true;
-	src_vq->requires_requests = true;
+	src_vq->requires_requests = false;
 
 	ret = vb2_queue_init(src_vq);
 	if (ret)
