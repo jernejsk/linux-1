@@ -34,6 +34,7 @@
 #define CEDRUS_CAPABILITY_MPEG2_DEC	BIT(3)
 #define CEDRUS_CAPABILITY_VP8_DEC	BIT(4)
 #define CEDRUS_CAPABILITY_H265_10_DEC	BIT(5)
+#define CEDRUS_CAPABILITY_JPEG_DEC	BIT(6)
 
 enum cedrus_irq_status {
 	CEDRUS_IRQ_NONE,
@@ -152,6 +153,9 @@ struct cedrus_ctx {
 			u8		*entropy_probs_buf;
 			dma_addr_t	entropy_probs_buf_dma;
 		} vp8;
+		struct {
+			unsigned int	subsampling;
+		} jpeg;
 	} codec;
 };
 
@@ -201,6 +205,7 @@ extern struct cedrus_dec_ops cedrus_dec_ops_mpeg2;
 extern struct cedrus_dec_ops cedrus_dec_ops_h264;
 extern struct cedrus_dec_ops cedrus_dec_ops_h265;
 extern struct cedrus_dec_ops cedrus_dec_ops_vp8;
+extern struct cedrus_dec_ops cedrus_dec_ops_jpeg;
 
 static inline void cedrus_write(struct cedrus_dev *dev, u32 reg, u32 val)
 {

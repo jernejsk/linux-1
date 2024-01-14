@@ -43,7 +43,9 @@ int cedrus_engine_enable(struct cedrus_ctx *ctx)
 	reg |= VE_MODE_DDR_MODE_BW_128;
 
 	switch (ctx->src_fmt.pixelformat) {
+	/* MPEG2 and JPEG both use the same decoding mode bit. */
 	case V4L2_PIX_FMT_MPEG2_SLICE:
+	case V4L2_PIX_FMT_JPEG:
 		reg |= VE_MODE_DEC_MPEG;
 		break;
 
