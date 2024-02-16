@@ -19,6 +19,11 @@
 	phy-supply = <&reg_dcdce>;
 };
 
+&gpu {
+	mali-supply = <&reg_dcdcc>;
+	status = "okay";
+};
+
 &mmc0 {
 	vmmc-supply = <&reg_dcdce>;
 };
