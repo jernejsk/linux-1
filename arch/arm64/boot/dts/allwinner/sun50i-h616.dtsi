@@ -826,9 +826,14 @@
 					#size-cells = <0>;
 					reg = <1>;
 
-					tcon_top_mixer0_out_tcon_tv: endpoint@2 {
+					tcon_top_mixer0_out_tcon_lcd0: endpoint@0 {
+						reg = <0>;
+						remote-endpoint = <&tcon_lcd0_in_tcon_top_mixer0>;
+					};
+
+					tcon_top_mixer0_out_tcon_tv0: endpoint@2 {
 						reg = <2>;
-						remote-endpoint = <&tcon_tv_in_tcon_top_mixer0>;
+						remote-endpoint = <&tcon_tv0_in_tcon_top_mixer0>;
 					};
 				};
 
@@ -837,9 +842,9 @@
 					#size-cells = <0>;
 					reg = <4>;
 
-					tcon_top_hdmi_in_tcon_tv: endpoint@0 {
+					tcon_top_hdmi_in_tcon_tv0: endpoint@0 {
 						reg = <0>;
-						remote-endpoint = <&tcon_tv_out_tcon_top>;
+						remote-endpoint = <&tcon_tv0_out_tcon_top>;
 					};
 				};
 
@@ -853,7 +858,38 @@
 			};
 		};
 
-		tcon_tv: lcd-controller@6515000 {
+		tcon_lcd0: lcd-controller@6511000 {
+			compatible = "allwinner,sun50i-h6-tcon-lcd",
+				     "allwinner,sun8i-r40-tcon-lcd";
+			reg = <0x06511000 0x1000>;
+			interrupts = <GIC_SPI 64 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ccu CLK_BUS_TCON_LCD0>, <&ccu CLK_TCON_LCD0>;
+			clock-names = "ahb", "tcon-ch0";
+			clock-output-names = "tcon-data-clock";
+			#clock-cells = <0>;
+			resets = <&ccu RST_BUS_TCON_LCD0>, <&ccu RST_BUS_LVDS>;
+			reset-names = "lcd", "lvds";
+			status = "disabled";
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				tcon_lcd0_in: port@0 {
+					reg = <0>;
+
+					tcon_lcd0_in_tcon_top_mixer0: endpoint {
+						remote-endpoint = <&tcon_top_mixer0_out_tcon_lcd0>;
+					};
+				};
+
+				tcon_lcd0_out: port@1 {
+					reg = <1>;
+				};
+			};
+		};
+
+		tcon_tv0: lcd-controller@6515000 {
 			compatible = "allwinner,sun50i-h6-tcon-tv",
 				     "allwinner,sun8i-r40-tcon-tv";
 			reg = <0x06515000 0x1000>;
@@ -869,22 +905,22 @@
 				#address-cells = <1>;
 				#size-cells = <0>;
 
-				tcon_tv_in: port@0 {
+				tcon_tv0_in: port@0 {
 					reg = <0>;
 
-					tcon_tv_in_tcon_top_mixer0: endpoint {
-						remote-endpoint = <&tcon_top_mixer0_out_tcon_tv>;
+					tcon_tv0_in_tcon_top_mixer0: endpoint {
+						remote-endpoint = <&tcon_top_mixer0_out_tcon_tv0>;
 					};
 				};
 
-				tcon_tv_out: port@1 {
+				tcon_tv0_out: port@1 {
 					#address-cells = <1>;
 					#size-cells = <0>;
 					reg = <1>;
 
-					tcon_tv_out_tcon_top: endpoint@1 {
+					tcon_tv0_out_tcon_top: endpoint@1 {
 						reg = <1>;
-						remote-endpoint = <&tcon_top_hdmi_in_tcon_tv>;
+						remote-endpoint = <&tcon_top_hdmi_in_tcon_tv0>;
 					};
 				};
 			};
