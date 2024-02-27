@@ -629,19 +629,38 @@ static SUNXI_CCU_GATE(bus_hdmi_clk, "bus-hdmi", "ahb3", 0xb1c, BIT(0), 0);
 static SUNXI_CCU_GATE(bus_tcon_top_clk, "bus-tcon-top", "ahb3",
 		      0xb5c, BIT(0), 0);
 
-static const char * const tcon_tv_parents[] = { "pll-video0",
-						"pll-video0-4x",
-						"pll-video1",
-						"pll-video1-4x" };
+
+static const char * const tcon_parents[] = { "pll-video0",
+					     "pll-video0-4x",
+					     "pll-video1",
+					     "pll-video1-4x" };
+
+static SUNXI_CCU_MUX_WITH_GATE(tcon_lcd0_clk, "tcon-lcd0",
+			       tcon_parents, 0xb60,
+			       24, 3,	/* mux */
+			       BIT(31),	/* gate */
+			       CLK_SET_RATE_PARENT);
+
+static SUNXI_CCU_MUX_WITH_GATE(tcon_lcd1_clk, "tcon-lcd1",
+			       tcon_parents, 0xb60,
+			       24, 3,	/* mux */
+			       BIT(31),	/* gate */
+			       CLK_SET_RATE_PARENT);
+
+static SUNXI_CCU_GATE(bus_tcon_lcd0_clk, "bus-tcon-lcd0", "ahb3",
+		      0xb7c, BIT(0), 0);
+static SUNXI_CCU_GATE(bus_tcon_lcd1_clk, "bus-tcon-lcd1", "ahb3",
+		      0xb7c, BIT(1), 0);
+
 static SUNXI_CCU_MP_WITH_MUX_GATE(tcon_tv0_clk, "tcon-tv0",
-				  tcon_tv_parents, 0xb80,
+				  tcon_parents, 0xb80,
 				  0, 4,		/* M */
 				  8, 2,		/* P */
 				  24, 3,	/* mux */
 				  BIT(31),	/* gate */
 				  CLK_SET_RATE_PARENT);
 static SUNXI_CCU_MP_WITH_MUX_GATE(tcon_tv1_clk, "tcon-tv1",
-				  tcon_tv_parents, 0xb84,
+				  tcon_parents, 0xb84,
 				  0, 4,		/* M */
 				  8, 2,		/* P */
 				  24, 3,	/* mux */
@@ -654,7 +673,7 @@ static SUNXI_CCU_GATE(bus_tcon_tv1_clk, "bus-tcon-tv1", "ahb3",
 		      0xb9c, BIT(1), 0);
 
 static SUNXI_CCU_MP_WITH_MUX_GATE(tve0_clk, "tve0",
-				  tcon_tv_parents, 0xbb0,
+				  tcon_parents, 0xbb0,
 				  0, 4,		/* M */
 				  8, 2,		/* P */
 				  24, 3,	/* mux */
@@ -849,6 +868,10 @@ static struct ccu_common *sun50i_h616_ccu_clks[] = {
 	&bus_tve0_clk.common,
 	&hdcp_clk.common,
 	&bus_hdcp_clk.common,
+	&tcon_lcd0_clk.common,
+	&tcon_lcd1_clk.common,
+	&bus_tcon_lcd0_clk.common,
+	&bus_tcon_lcd1_clk.common,
 };
 
 static struct clk_hw_onecell_data sun50i_h616_hw_clks = {
@@ -982,6 +1005,10 @@ static struct clk_hw_onecell_data sun50i_h616_hw_clks = {
 		[CLK_BUS_TVE0]		= &bus_tve0_clk.common.hw,
 		[CLK_HDCP]		= &hdcp_clk.common.hw,
 		[CLK_BUS_HDCP]		= &bus_hdcp_clk.common.hw,
+		[CLK_TCON_LCD0]		= &tcon_lcd0_clk.common.hw,
+		[CLK_TCON_LCD1]		= &tcon_lcd1_clk.common.hw,
+		[CLK_BUS_TCON_LCD0]	= &bus_tcon_lcd0_clk.common.hw,
+		[CLK_BUS_TCON_LCD1]	= &bus_tcon_lcd1_clk.common.hw,
 	},
 	.num = CLK_NUMBER,
 };
@@ -1045,8 +1072,11 @@ static struct ccu_reset_map sun50i_h616_ccu_resets[] = {
 	[RST_BUS_HDMI]		= { 0xb1c, BIT(16) },
 	[RST_BUS_HDMI_SUB]	= { 0xb1c, BIT(17) },
 	[RST_BUS_TCON_TOP]	= { 0xb5c, BIT(16) },
+	[RST_BUS_TCON_LCD0]	= { 0xb7c, BIT(16) },
+	[RST_BUS_TCON_LCD1]	= { 0xb7c, BIT(17) },
 	[RST_BUS_TCON_TV0]	= { 0xb9c, BIT(16) },
 	[RST_BUS_TCON_TV1]	= { 0xb9c, BIT(17) },
+	[RST_BUS_LVDS]		= { 0xbac, BIT(16) },
 	[RST_BUS_TVE_TOP]	= { 0xbbc, BIT(16) },
 	[RST_BUS_TVE0]		= { 0xbbc, BIT(17) },
 	[RST_BUS_HDCP]		= { 0xc4c, BIT(16) },
