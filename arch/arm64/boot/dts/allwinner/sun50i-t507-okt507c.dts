@@ -26,6 +26,15 @@
 		stdout-path = "serial0:115200n8";
 	};
 
+	backlight: backlight {
+		compatible = "pwm-backlight";
+		//pwms = <&pwm 0 20000 PWM_POLARITY_INVERTED>;
+		enable-gpios = <&pio 4 22 GPIO_ACTIVE_HIGH>; /* PE22 */
+		power-supply = <&reg_sw>;
+		brightness-levels = <0 1 2 4 8 16 32 64 128 255>;
+		default-brightness-level = <9>;
+	};
+
 	leds {
 		compatible = "gpio-leds";
 
@@ -34,6 +43,35 @@
 			color = <LED_COLOR_ID_RED>;
 			gpios = <&pio 2 7 GPIO_ACTIVE_HIGH>; /* PC7 */
 			default-state = "on";
+		};
+	};
+
+	panel {
+		compatible = "panel-lvds";
+		backlight = <&backlight>;
+		power-supply = <&reg_sw>;
+
+		width-mm = <217>;
+		height-mm = <136>;
+		data-mapping = "vesa-24";
+
+		panel-timing {
+			/* 1280x800 @60Hz */
+			clock-frequency = <71000000>;
+			hactive = <1280>;
+			vactive = <800>;
+			hsync-len = <40>;
+			hfront-porch = <60>;
+			hback-porch = <60>;
+			vfront-porch = <11>;
+			vback-porch = <11>;
+			vsync-len = <1>;
+		};
+
+		port {
+			panel_input: endpoint {
+				remote-endpoint = <&tcon_lcd0_out_lcd>;
+			};
 		};
 	};
 
@@ -76,6 +114,10 @@
 
 &cpu0 {
 	cpu-supply = <&reg_dcdc2>;
+};
+
+&de {
+	status = "okay";
 };
 
 &ehci0 {
@@ -326,6 +368,18 @@
 				regulator-name = "vcc-lcd";
 			};
 		};
+	};
+};
+
+&tcon_lcd0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&lvds0_pins>;
+	status = "okay";
+};
+
+&tcon_lcd0_out {
+	tcon_lcd0_out_lcd: endpoint {
+		remote-endpoint = <&panel_input>;
 	};
 };
 
