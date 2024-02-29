@@ -11,6 +11,7 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/leds/common.h>
+#include <dt-bindings/pwm/pwm.h>
 
 / {
 	model = "OKT507-C";
@@ -28,7 +29,7 @@
 
 	backlight: backlight {
 		compatible = "pwm-backlight";
-		//pwms = <&pwm 0 20000 PWM_POLARITY_INVERTED>;
+		pwms = <&pwm 0 20000 PWM_POLARITY_INVERTED>;
 		enable-gpios = <&pio 4 22 GPIO_ACTIVE_HIGH>; /* PE22 */
 		power-supply = <&reg_sw>;
 		brightness-levels = <0 1 2 4 8 16 32 64 128 255>;
@@ -209,6 +210,12 @@
 };
 
 &ohci3 {
+	status = "okay";
+};
+
+&pwm {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pwm0_pin>;
 	status = "okay";
 };
 
