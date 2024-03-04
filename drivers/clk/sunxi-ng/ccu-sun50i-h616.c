@@ -642,7 +642,7 @@ static SUNXI_CCU_MUX_WITH_GATE(tcon_lcd0_clk, "tcon-lcd0",
 			       CLK_SET_RATE_PARENT);
 
 static SUNXI_CCU_MUX_WITH_GATE(tcon_lcd1_clk, "tcon-lcd1",
-			       tcon_parents, 0xb60,
+			       tcon_parents, 0xb64,
 			       24, 3,	/* mux */
 			       BIT(31),	/* gate */
 			       CLK_SET_RATE_PARENT);
