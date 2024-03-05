@@ -17,6 +17,7 @@
 #define PHY_ID_YT8521		0x0000011a
 #define PHY_ID_YT8531		0x4f51e91b
 #define PHY_ID_YT8531S		0x4f51e91a
+#define PHY_ID_YT8512B		0x00000128
 
 /* YT8521/YT8531S Register Overview
  *	UTP Register space	|	FIBER Register space
@@ -276,6 +277,46 @@
 #define YTPHY_DTS_OUTPUT_CLK_DIS		0
 #define YTPHY_DTS_OUTPUT_CLK_25M		25000000
 #define YTPHY_DTS_OUTPUT_CLK_125M		125000000
+
+#define REG_PHY_SPEC_STATUS             0x11
+#define REG_DEBUG_ADDR_OFFSET           0x1e
+#define REG_DEBUG_DATA                  0x1f
+
+#define YT8512_EXTREG_AFE_PLL           0x50
+#define YT8512_EXTREG_EXTEND_COMBO      0x4000
+#define YT8512_EXTREG_LED0              0x40c0
+#define YT8512_EXTREG_LED1              0x40c3
+
+#define YT8512_EXTREG_SLEEP_CONTROL1    0x2027
+
+#define YT_SOFTWARE_RESET		0x8000
+
+#define YT8512_CONFIG_PLL_REFCLK_SEL_EN	0x0040
+#define YT8512_CONTROL1_RMII_EN		0x0001
+#define YT8512_LED0_ACT_BLK_IND		0x1000
+#define YT8512_LED0_DIS_LED_AN_TRY	0x0001
+#define YT8512_LED0_BT_BLK_EN		0x0002
+#define YT8512_LED0_HT_BLK_EN		0x0004
+#define YT8512_LED0_COL_BLK_EN		0x0008
+#define YT8512_LED0_BT_ON_EN		0x0010
+#define YT8512_LED1_BT_ON_EN		0x0010
+#define YT8512_LED1_TXACT_BLK_EN	0x0100
+#define YT8512_LED1_RXACT_BLK_EN	0x0200
+#define YT8512_SPEED_MODE		0xc000
+#define YT8512_DUPLEX			0x2000
+
+#define YT8512_SPEED_MODE_BIT		14
+#define YT8512_DUPLEX_BIT		13
+#define YT8512_EN_SLEEP_SW_BIT		15
+
+#define YT8521_EXTREG_SLEEP_CONTROL1	0x27
+#define YT8521_EN_SLEEP_SW_BIT		15
+
+#define YT8521_SPEED_MODE		0xc000
+#define YT8521_DUPLEX			0x2000
+#define YT8521_SPEED_MODE_BIT		14
+#define YT8521_DUPLEX_BIT		13
+#define YT8521_LINK_STATUS_BIT		10
 
 struct yt8521_priv {
 	/* combo_advertising is used for case of YT8521 in combo mode,
@@ -599,8 +640,12 @@ static int yt8511_config_init(struct phy_device *phydev)
 	struct device *dev = &phydev->mdio.dev;
 	int oldpage, ret = 0;
 	unsigned int ge, fe;
+	struct clk *clk;
 
-	devm_clk_get_optional_enabled(dev, NULL);
+	clk = devm_clk_get_optional_enabled(dev, NULL);
+	if (IS_ERR(clk))
+		return dev_err_probe(dev, PTR_ERR(clk),
+				     "failed to get phy clock\n");
 
 	oldpage = phy_select_page(phydev, YT8511_EXT_CLK_GATE);
 	if (oldpage < 0)
@@ -2256,6 +2301,61 @@ static int yt8521_get_features(struct phy_device *phydev)
 	return ret;
 }
 
+static int yt8512_config_init(struct phy_device *phydev)
+{
+	int ret;
+	int val;
+
+	/* disable auto sleep */
+	val = ytphy_read_ext(phydev, YT8512_EXTREG_SLEEP_CONTROL1);
+	if (val < 0)
+		return val;
+
+	val &= (~BIT(YT8512_EN_SLEEP_SW_BIT));
+
+	ret = ytphy_write_ext(phydev, YT8512_EXTREG_SLEEP_CONTROL1, val);
+	if (ret < 0)
+		return ret;
+
+	return ret;
+}
+
+static int yt8512_read_status(struct phy_device *phydev)
+{
+	int ret;
+	int val;
+	int speed, speed_mode, duplex;
+
+	ret = genphy_update_link(phydev);
+	if (ret)
+		return ret;
+
+	val = phy_read(phydev, REG_PHY_SPEC_STATUS);
+	if (val < 0)
+		return val;
+
+	duplex = (val & YT8512_DUPLEX) >> YT8512_DUPLEX_BIT;
+	speed_mode = (val & YT8512_SPEED_MODE) >> YT8512_SPEED_MODE_BIT;
+	switch (speed_mode) {
+	case 0:
+		speed = SPEED_10;
+		break;
+	case 1:
+		speed = SPEED_100;
+		break;
+	case 2:
+	case 3:
+	default:
+		speed = SPEED_UNKNOWN;
+		break;
+	}
+
+	phydev->speed = speed;
+	phydev->duplex = duplex;
+
+	return 0;
+}
+
 static struct phy_driver motorcomm_phy_drvs[] = {
 	{
 		PHY_ID_MATCH_EXACT(PHY_ID_YT8511),
@@ -2311,6 +2411,17 @@ static struct phy_driver motorcomm_phy_drvs[] = {
 		.suspend	= yt8521_suspend,
 		.resume		= yt8521_resume,
 	},
+	{
+		PHY_ID_MATCH_EXACT(PHY_ID_YT8512B),
+		.name		= "YT8512B Ethernet",
+		.features	= PHY_BASIC_FEATURES,
+		.flags		= PHY_POLL,
+		.config_aneg	= genphy_config_aneg,
+		.config_init	= yt8512_config_init,
+		.read_status	= yt8512_read_status,
+		.suspend	= genphy_suspend,
+		.resume		= genphy_resume,
+	},
 };
 
 module_phy_driver(motorcomm_phy_drvs);
@@ -2325,6 +2436,7 @@ static const struct mdio_device_id __maybe_unused motorcomm_tbl[] = {
 	{ PHY_ID_MATCH_EXACT(PHY_ID_YT8521) },
 	{ PHY_ID_MATCH_EXACT(PHY_ID_YT8531) },
 	{ PHY_ID_MATCH_EXACT(PHY_ID_YT8531S) },
+	{ PHY_ID_MATCH_EXACT(PHY_ID_YT8512B) },
 	{ /* sentinel */ }
 };
 
