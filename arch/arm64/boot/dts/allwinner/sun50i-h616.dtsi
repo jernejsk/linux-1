@@ -156,6 +156,10 @@
 			ths_calibration: thermal-sensor-calibration@14 {
 				reg = <0x14 0x8>;
 			};
+
+			ephy_calib: ephy_calib@2c {
+				reg = <0x2c 0x2>;
+			};
 		};
 
 		watchdog: watchdog@30090a0 {
