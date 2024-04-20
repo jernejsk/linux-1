@@ -46,7 +46,7 @@
 
 &mmc0 {
 	vmmc-supply = <&reg_dcdce>;
-	cd-gpios = <&pio 5 6 GPIO_ACTIVE_LOW>;	/* PF6 */
+	broken-cd;
 	bus-width = <4>;
 	status = "okay";
 };
