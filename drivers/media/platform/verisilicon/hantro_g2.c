@@ -47,7 +47,7 @@ irqreturn_t hantro_g2_irq(int irq, void *dev_id)
 
 size_t hantro_g2_chroma_offset(struct hantro_ctx *ctx)
 {
-	return ctx->dst_fmt.width * ctx->dst_fmt.height * ctx->bit_depth / 8;
+	return ctx->dst_fmt.width * ctx->dst_fmt.height * DIV_ROUND_UP(ctx->bit_depth, 8);
 }
 
 size_t hantro_g2_motion_vectors_offset(struct hantro_ctx *ctx)
