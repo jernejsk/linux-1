@@ -154,6 +154,8 @@ struct sun8i_hdmi_phy_variant {
 	const struct dw_hdmi_mpll_config *mpll_cfg;
 	const struct dw_hdmi_phy_config *phy_cfg;
 	const struct dw_hdmi_phy_ops *phy_ops;
+	int (*configure_phy)(struct dw_hdmi *hdmi, void *data,
+			     unsigned long mpixelclock);
 	void (*phy_init)(struct sun8i_hdmi_phy *phy);
 };
 
