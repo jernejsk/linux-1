@@ -403,11 +403,7 @@ static const u32 sun8i_vi_layer_de3_formats[] = {
 	DRM_FORMAT_YVU422,
 };
 
-/*
- * TODO: DE33 VI planes naturally support YUV formats but
- * driver needs improvements in order to support them.
- */
-static const u32 sun8i_vi_layer_de33_formats[] = {
+static const u32 sun8i_vi_layer_de3_no_yuv_formats[] = {
 	DRM_FORMAT_ABGR1555,
 	DRM_FORMAT_ABGR2101010,
 	DRM_FORMAT_ABGR4444,
@@ -463,12 +459,18 @@ struct sun8i_layer *sun8i_vi_layer_init_one(struct drm_device *drm,
 	layer->regs = regs;
 	layer->cfg = cfg;
 
-	if (layer->cfg->de_type == SUN8I_MIXER_DE33) {
-		formats = sun8i_vi_layer_de33_formats;
-		format_count = ARRAY_SIZE(sun8i_vi_layer_de33_formats);
-	} else if (layer->cfg->de_type == SUN8I_MIXER_DE3) {
-		formats = sun8i_vi_layer_de3_formats;
-		format_count = ARRAY_SIZE(sun8i_vi_layer_de3_formats);
+	if (layer->cfg->de_type >= SUN8I_MIXER_DE3) {
+		/*
+		 * TODO: DE33 drivers doesn't support scaling yet, which is a
+		 * requirement for YUV support.
+		 */
+		if (layer->cfg->scaler_mask & BIT(phy_index)) {
+			formats = sun8i_vi_layer_de3_formats;
+			format_count = ARRAY_SIZE(sun8i_vi_layer_de3_formats);
+		} else {
+			formats = sun8i_vi_layer_de3_no_yuv_formats;
+			format_count = ARRAY_SIZE(sun8i_vi_layer_de3_no_yuv_formats);
+		}
 	} else {
 		formats = sun8i_vi_layer_formats;
 		format_count = ARRAY_SIZE(sun8i_vi_layer_formats);
