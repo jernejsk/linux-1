@@ -9,7 +9,7 @@ title: Allwinner H616 Display Engine 3.3 planes
 maintainers:
   - Jernej Skrabec <jernej.skrabec@gmail.com>
 
-description: |
+description:
   Display Engine 3.3 planes are independent of mixers, contrary to
   previous generations of Display Engine. Planes can be assigned to
   mixers independently and even dynamically during runtime.
@@ -24,7 +24,9 @@ properties:
 
   allwinner,plane-mapping:
     $ref: /schemas/types.yaml#/definitions/phandle
-    description: Phandle of Display Engine clock node
+    description:
+      Phandle of the device responsible for assigning (mapping) planes
+      between mixers.
 
 required:
   - compatible
