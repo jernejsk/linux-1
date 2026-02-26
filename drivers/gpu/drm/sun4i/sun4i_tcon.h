@@ -166,6 +166,10 @@
 #define SUN4I_TCON_ECC_FIFO_REG			0xf8
 #define SUN4I_TCON_ECC_FIFO_EN				BIT(3)
 
+#define SUN4I_TCON_DEBUG_REG			0xfc
+#define SUN4I_TCON_DEBUG_CH1_CUR_LINE			GENMASK(11, 0)
+#define SUN4I_TCON_DEBUG_CH0_CUR_LINE			GENMASK(27, 16)
+
 #define SUN4I_TCON_CEU_CTL_REG			0x100
 #define SUN4I_TCON_CEU_MUL_RR_REG		0x110
 #define SUN4I_TCON_CEU_MUL_RG_REG		0x114
@@ -299,6 +303,10 @@ void sun4i_tcon_mode_set(struct sun4i_tcon *tcon,
 			 const struct drm_display_mode *mode);
 void sun4i_tcon_set_status(struct sun4i_tcon *crtc,
 			   const struct drm_encoder *encoder, bool enable);
+void sun4i_tcon_wait_vblank(struct sun4i_tcon *tcon,
+			    const struct drm_encoder *encoder);
+void sun4i_tcon_check_vblank(struct sun4i_tcon *tcon,
+			     const struct drm_encoder *encoder);
 
 extern const struct of_device_id sun4i_tcon_of_table[];
 

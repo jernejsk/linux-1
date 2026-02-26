@@ -870,12 +870,12 @@ static int sun8i_vi_scaler_coef_index(unsigned int step)
 	}
 }
 
-static void sun8i_vi_scaler_set_coeff(struct regmap *map, u32 base,
+static void sun8i_vi_scaler_set_coeff(struct sun8i_layer *layer, u32 base,
 				      u32 hstep, u32 vstep,
 				      const struct drm_format_info *format)
 {
 	const u32 *ch_left, *ch_right, *cy;
-	int offset, i;
+	int offset;
 
 	if (format->hsub == 1 && format->vsub == 1) {
 		ch_left = lan3coefftab32_left;
@@ -887,27 +887,35 @@ static void sun8i_vi_scaler_set_coeff(struct regmap *map, u32 base,
 		cy = bicubic4coefftab32;
 	}
 
-	offset = sun8i_vi_scaler_coef_index(hstep) *
-			SUN8I_VI_SCALER_COEFF_COUNT;
-	for (i = 0; i < SUN8I_VI_SCALER_COEFF_COUNT; i++) {
-		regmap_write(map, SUN8I_SCALER_VSU_YHCOEFF0(base, i),
-			     lan3coefftab32_left[offset + i]);
-		regmap_write(map, SUN8I_SCALER_VSU_YHCOEFF1(base, i),
-			     lan3coefftab32_right[offset + i]);
-		regmap_write(map, SUN8I_SCALER_VSU_CHCOEFF0(base, i),
-			     ch_left[offset + i]);
-		regmap_write(map, SUN8I_SCALER_VSU_CHCOEFF1(base, i),
-			     ch_right[offset + i]);
-	}
+	offset = sun8i_vi_scaler_coef_index(hstep) * SUN8I_VI_SCALER_COEFF_COUNT;
+	regmap_bulk_write(layer->regs, SUN8I_SCALER_VSU_YHCOEFF0(base, 0), &lan3coefftab32_left[offset], SUN8I_VI_SCALER_COEFF_COUNT);
+	regmap_bulk_write(layer->regs, SUN8I_SCALER_VSU_YHCOEFF1(base, 0), &lan3coefftab32_right[offset], SUN8I_VI_SCALER_COEFF_COUNT);
+	regmap_bulk_write(layer->regs, SUN8I_SCALER_VSU_CHCOEFF0(base, 0), &ch_left[offset], SUN8I_VI_SCALER_COEFF_COUNT);
+	regmap_bulk_write(layer->regs, SUN8I_SCALER_VSU_CHCOEFF1(base, 0), &ch_right[offset], SUN8I_VI_SCALER_COEFF_COUNT);
 
-	offset = sun8i_vi_scaler_coef_index(hstep) *
-			SUN8I_VI_SCALER_COEFF_COUNT;
-	for (i = 0; i < SUN8I_VI_SCALER_COEFF_COUNT; i++) {
-		regmap_write(map, SUN8I_SCALER_VSU_YVCOEFF(base, i),
-			     lan2coefftab32[offset + i]);
-		regmap_write(map, SUN8I_SCALER_VSU_CVCOEFF(base, i),
-			     cy[offset + i]);
-	}
+	offset = sun8i_vi_scaler_coef_index(vstep) * SUN8I_VI_SCALER_COEFF_COUNT;
+	regmap_bulk_write(layer->regs, SUN8I_SCALER_VSU_YVCOEFF(base, 0), &lan2coefftab32[offset], SUN8I_VI_SCALER_COEFF_COUNT);
+	regmap_bulk_write(layer->regs, SUN8I_SCALER_VSU_CVCOEFF(base, 0), &cy[offset], SUN8I_VI_SCALER_COEFF_COUNT);
+}
+
+static void sun8i_vi_scaler_set_coeff_vs8(struct sun8i_layer *layer, u32 base,
+					  u32 hstep, u32 vstep,
+					  const struct drm_format_info *format)
+{
+	const u32 *cy;
+	int offset;
+
+	if (format->hsub == 1 && format->vsub == 1)
+		cy = lan2coefftab32;
+	else
+		cy = bicubic4coefftab32;
+
+	offset = sun8i_vi_scaler_coef_index(hstep) * SUN8I_VI_SCALER_COEFF_COUNT;
+	regmap_bulk_write(layer->regs, SUN8I_SCALER_VSU_YHCOEFF0(base, 0), &lan2coefftab32[offset], SUN8I_VI_SCALER_COEFF_COUNT);
+	regmap_bulk_write(layer->regs, SUN8I_SCALER_VSU_CHCOEFF0(base, 0), &cy[offset], SUN8I_VI_SCALER_COEFF_COUNT);
+
+	offset = sun8i_vi_scaler_coef_index(vstep) * SUN8I_VI_SCALER_COEFF_COUNT;
+	regmap_bulk_write(layer->regs, SUN8I_SCALER_VSU_YVCOEFF(base, 0), &cy[offset], SUN8I_VI_SCALER_COEFF_COUNT);
 }
 
 void sun8i_vi_scaler_enable(struct sun8i_layer *layer, bool enable)
@@ -926,11 +934,30 @@ void sun8i_vi_scaler_enable(struct sun8i_layer *layer, bool enable)
 		     SUN8I_SCALER_VSU_CTRL(base), val);
 }
 
+#include <drm/drm_crtc.h>
+#include <drm/drm_encoder.h>
+#include "sun4i_crtc.h"
+#include "sun4i_tcon.h"
+
+static struct drm_encoder *sun4i_crtc_get_encoder(struct drm_crtc *crtc)
+{
+	struct drm_encoder *encoder;
+
+	drm_for_each_encoder(encoder, crtc->dev)
+		if (encoder->crtc == crtc)
+			return encoder;
+
+	return NULL;
+}
+
 void sun8i_vi_scaler_setup(struct sun8i_layer *layer,
 			   u32 src_w, u32 src_h, u32 dst_w, u32 dst_h,
 			   u32 hscale, u32 vscale, u32 hphase, u32 vphase,
 			   const struct drm_format_info *format)
 {
+	struct drm_crtc *crtc = layer->plane.state->crtc;
+	struct drm_encoder *encoder;
+	struct sun4i_crtc *scrtc;
 	u32 chphase, cvphase;
 	u32 insize, outsize;
 	u32 base;
@@ -944,6 +971,12 @@ void sun8i_vi_scaler_setup(struct sun8i_layer *layer,
 
 	insize = SUN8I_VI_SCALER_SIZE(src_w, src_h);
 	outsize = SUN8I_VI_SCALER_SIZE(dst_w, dst_h);
+
+	if (crtc) {
+		encoder = sun4i_crtc_get_encoder(crtc);
+		scrtc = drm_crtc_to_sun4i_crtc(crtc);
+		sun4i_tcon_wait_vblank(scrtc->tcon, encoder);
+	}
 
 	/*
 	 * This is chroma V/H phase calculation as it appears in
@@ -969,6 +1002,8 @@ void sun8i_vi_scaler_setup(struct sun8i_layer *layer,
 
 		regmap_write(layer->regs,
 			     SUN50I_SCALER_VSU_SCALE_MODE(base), val);
+		regmap_write(layer->regs,
+			     SUN50I_SCALER_VSU_GLB_ALPHA(base), 0xff);
 	}
 
 	regmap_write(layer->regs,
@@ -997,6 +1032,13 @@ void sun8i_vi_scaler_setup(struct sun8i_layer *layer,
 		     SUN8I_SCALER_VSU_CHPHASE(base), chphase);
 	regmap_write(layer->regs,
 		     SUN8I_SCALER_VSU_CVPHASE(base), cvphase);
-	sun8i_vi_scaler_set_coeff(layer->regs, base,
-				  hscale, vscale, format);
+	if (layer->channel == 0)
+		sun8i_vi_scaler_set_coeff(layer, base,
+					  hscale, vscale, format);
+	else
+		sun8i_vi_scaler_set_coeff_vs8(layer, base,
+					      hscale, vscale, format);
+
+	if (crtc)
+		sun4i_tcon_check_vblank(scrtc->tcon, encoder);
 }

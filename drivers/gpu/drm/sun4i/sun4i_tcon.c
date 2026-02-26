@@ -736,6 +736,82 @@ void sun4i_tcon_mode_set(struct sun4i_tcon *tcon,
 }
 EXPORT_SYMBOL(sun4i_tcon_mode_set);
 
+static unsigned int sun4i_tcon_get_current_line(struct sun4i_tcon *tcon,
+						const struct drm_encoder *encoder)
+{
+	u32 value;
+
+	regmap_read(tcon->regs, SUN4I_TCON_DEBUG_REG, &value);
+
+	switch (encoder->encoder_type) {
+	case DRM_MODE_ENCODER_LVDS:
+	case DRM_MODE_ENCODER_NONE:
+		return FIELD_GET(SUN4I_TCON_DEBUG_CH0_CUR_LINE, value);
+	case DRM_MODE_ENCODER_TVDAC:
+	case DRM_MODE_ENCODER_TMDS:
+		return FIELD_GET(SUN4I_TCON_DEBUG_CH1_CUR_LINE, value);
+	default:
+		DRM_DEBUG_DRIVER("Unsupported encoder type\n");
+		return 0;
+	}
+}
+
+static unsigned int sun4i_tcon_get_start_delay(struct sun4i_tcon *tcon,
+					       const struct drm_encoder *encoder)
+{
+	u32 value;
+
+	switch (encoder->encoder_type) {
+	case DRM_MODE_ENCODER_LVDS:
+	case DRM_MODE_ENCODER_NONE:
+		regmap_read(tcon->regs, SUN4I_TCON0_CTL_REG, &value);
+		return FIELD_GET(SUN4I_TCON0_CTL_CLK_DELAY_MASK, value);
+	case DRM_MODE_ENCODER_TVDAC:
+	case DRM_MODE_ENCODER_TMDS:
+		regmap_read(tcon->regs, SUN4I_TCON1_CTL_REG, &value);
+		return FIELD_GET(SUN4I_TCON1_CTL_CLK_DELAY_MASK, value);
+	default:
+		DRM_DEBUG_DRIVER("Unsupported encoder type\n");
+		return 0;
+	}
+}
+
+void sun4i_tcon_wait_vblank(struct sun4i_tcon *tcon,
+			    const struct drm_encoder *encoder)
+{
+	unsigned int cur_line, start;
+
+	start = sun4i_tcon_get_start_delay(tcon, encoder);
+	while (1) {
+		cur_line = sun4i_tcon_get_current_line(tcon, encoder);
+		if (cur_line <= start)
+			break;
+		udelay(10);
+	}
+}
+EXPORT_SYMBOL(sun4i_tcon_wait_vblank);
+
+void sun4i_tcon_check_vblank(struct sun4i_tcon *tcon,
+			     const struct drm_encoder *encoder)
+{
+	unsigned int cur_line, start;
+
+	start = sun4i_tcon_get_start_delay(tcon, encoder);
+	cur_line = sun4i_tcon_get_current_line(tcon, encoder);
+	if (cur_line > start) {
+		int id = 0;
+		switch (encoder->encoder_type) {
+		case DRM_MODE_ENCODER_TVDAC:
+		case DRM_MODE_ENCODER_TMDS:
+			id = 1;
+			break;
+		}
+		printk("period for %s: %u > %u\n", id ? "HDMI" : "LVDS", cur_line, start);
+	}
+
+}
+EXPORT_SYMBOL(sun4i_tcon_check_vblank);
+
 static void sun4i_tcon_finish_page_flip(struct drm_device *dev,
 					struct sun4i_crtc *scrtc)
 {
