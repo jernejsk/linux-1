@@ -870,9 +870,33 @@ static int sun8i_vi_scaler_coef_offset(unsigned int step)
 	}
 }
 
-static void sun8i_vi_scaler_set_coeff(struct regmap *map, u32 base,
-				      u32 hstep, u32 vstep,
-				      const struct drm_format_info *format)
+static void sun8i_vi_scaler_set_coeff_8(struct regmap *map, u32 base,
+					u32 hstep, u32 vstep,
+					const struct drm_format_info *format)
+{
+	const u32 *cy;
+	int offset;
+
+	if (format->hsub == 1 && format->vsub == 1)
+		cy = lan2coefftab32;
+	else
+		cy = bicubic4coefftab32;
+
+	offset = sun8i_vi_scaler_coef_offset(hstep);
+	regmap_bulk_write(map, SUN8I_SCALER_VSU_YHCOEFF0(base, 0),
+			  &lan2coefftab32[offset], SUN8I_VI_SCALER_COEFF_COUNT);
+	offset = sun8i_vi_scaler_coef_offset(vstep);
+	regmap_bulk_write(map, SUN8I_SCALER_VSU_YVCOEFF(base, 0),
+			  &lan2coefftab32[offset], SUN8I_VI_SCALER_COEFF_COUNT);
+
+	offset = sun8i_vi_scaler_coef_offset(hstep / format->hsub);
+	regmap_bulk_write(map, SUN8I_SCALER_VSU_CHCOEFF0(base, 0),
+			  &cy[offset], SUN8I_VI_SCALER_COEFF_COUNT);
+}
+
+static void sun8i_vi_scaler_set_coeff_10(struct regmap *map, u32 base,
+					 u32 hstep, u32 vstep,
+					 const struct drm_format_info *format)
 {
 	const u32 *ch_left, *ch_right, *cy;
 	int offset;
@@ -1016,6 +1040,11 @@ void sun8i_vi_scaler_setup(struct sun8i_layer *layer,
 		     SUN8I_SCALER_VSU_CHPHASE(base), chphase);
 	regmap_write(layer->regs,
 		     SUN8I_SCALER_VSU_CVPHASE(base), cvphase);
-	sun8i_vi_scaler_set_coeff(layer->regs, base,
-				  hscale, vscale, format);
+
+	if (type == SUN8I_SCALER_VI_8)
+		sun8i_vi_scaler_set_coeff_8(layer->regs, base,
+					    hscale, vscale, format);
+	else
+		sun8i_vi_scaler_set_coeff_10(layer->regs, base,
+					     hscale, vscale, format);
 }
