@@ -929,6 +929,7 @@ static const struct sun8i_mixer_cfg sun50i_h6_mixer0_cfg = {
 		},
 		.scanline_yuv	= {4096},
 		.scanline_rgb	= {2048, 2048, 2048, 2048},
+		.scanline_ed	= {2048},
 	},
 	.de_type	= SUN8I_MIXER_DE3,
 	.mod_rate	= 600000000,
