@@ -165,13 +165,18 @@ enum sun8i_mixer_type {
 	SUN8I_MIXER_DE33,
 };
 
+enum sun8i_scaler_type {
+	SUN8I_SCALER_NONE,
+	SUN8I_SCALER_UI,
+	SUN8I_SCALER_VI_8,
+	SUN8I_SCALER_VI_10,
+	SUN8I_SCALER_VI_ED,
+};
+
 /**
  * struct sun8i_layer_cfg - layer configuration
  * @vi_scaler_num: Number of VI scalers. Used on DE2 and DE3.
- * @scaler_mask: bitmask which tells which channel supports scaling
- *	First, scaler supports for VI channels is defined and after that, scaler
- *	support for UI channels. For example, if mixer has 2 VI channels without
- *	scaler and 2 UI channels with scaler, bitmask would be 0xC.
+ * @scaler_type: Type of supported scaler for each channel.
  * @ccsc: select set of CCSC base addresses from the enumeration above.
  * @de_type: sun8i_mixer_type enum representing the display engine generation.
  * @scaline_yuv: array of sizes of a scanline for VI scaler for YUV formats.
@@ -181,7 +186,7 @@ enum sun8i_mixer_type {
  */
 struct sun8i_layer_cfg {
 	unsigned int	vi_scaler_num;
-	int		scaler_mask;
+	unsigned int	scaler_type[MAX_CHANNELS];
 	int		ccsc;
 	unsigned int	de_type;
 	unsigned int	scanline_yuv[MAX_CHANNELS];
