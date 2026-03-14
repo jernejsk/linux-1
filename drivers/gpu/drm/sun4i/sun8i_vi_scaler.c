@@ -846,7 +846,7 @@ static u32 sun8i_vi_scaler_base(struct sun8i_layer *layer)
 		       DE2_VI_SCALER_UNIT_SIZE * layer->channel;
 }
 
-static int sun8i_vi_scaler_coef_index(unsigned int step)
+static int sun8i_vi_scaler_coef_offset(unsigned int step)
 {
 	unsigned int scale, int_part, float_part;
 
@@ -858,15 +858,15 @@ static int sun8i_vi_scaler_coef_index(unsigned int step)
 	case 0:
 		return 0;
 	case 1:
-		return float_part;
+		return float_part * SUN8I_VI_SCALER_COEFF_COUNT;
 	case 2:
-		return 8 + (float_part >> 1);
+		return (8 + (float_part >> 1)) * SUN8I_VI_SCALER_COEFF_COUNT;
 	case 3:
-		return 12;
+		return 12 * SUN8I_VI_SCALER_COEFF_COUNT;
 	case 4:
-		return 13;
+		return 13 * SUN8I_VI_SCALER_COEFF_COUNT;
 	default:
-		return 14;
+		return 14 * SUN8I_VI_SCALER_COEFF_COUNT;
 	}
 }
 
@@ -887,25 +887,21 @@ static void sun8i_vi_scaler_set_coeff(struct regmap *map, u32 base,
 		cy = bicubic4coefftab32;
 	}
 
-	offset = sun8i_vi_scaler_coef_index(hstep) *
-			SUN8I_VI_SCALER_COEFF_COUNT;
+	offset = sun8i_vi_scaler_coef_offset(hstep);
 	regmap_bulk_write(map, SUN8I_SCALER_VSU_YHCOEFF0(base, 0),
 			  &lan3coefftab32_left[offset], SUN8I_VI_SCALER_COEFF_COUNT);
 	regmap_bulk_write(map, SUN8I_SCALER_VSU_YHCOEFF1(base, 0),
 			  &lan3coefftab32_right[offset], SUN8I_VI_SCALER_COEFF_COUNT);
-	offset = sun8i_vi_scaler_coef_index(vstep) *
-			SUN8I_VI_SCALER_COEFF_COUNT;
+	offset = sun8i_vi_scaler_coef_offset(vstep);
 	regmap_bulk_write(map, SUN8I_SCALER_VSU_YVCOEFF(base, 0),
 			  &lan2coefftab32[offset], SUN8I_VI_SCALER_COEFF_COUNT);
 
-	offset = sun8i_vi_scaler_coef_index(hstep / format->hsub) *
-			SUN8I_VI_SCALER_COEFF_COUNT;
+	offset = sun8i_vi_scaler_coef_offset(hstep / format->hsub);
 	regmap_bulk_write(map, SUN8I_SCALER_VSU_CHCOEFF0(base, 0),
 			  &ch_left[offset], SUN8I_VI_SCALER_COEFF_COUNT);
 	regmap_bulk_write(map, SUN8I_SCALER_VSU_CHCOEFF1(base, 0),
 			  &ch_right[offset], SUN8I_VI_SCALER_COEFF_COUNT);
-	offset = sun8i_vi_scaler_coef_index(vstep / format->vsub) *
-			SUN8I_VI_SCALER_COEFF_COUNT;
+	offset = sun8i_vi_scaler_coef_offset(vstep / format->vsub);
 	regmap_bulk_write(map, SUN8I_SCALER_VSU_CVCOEFF(base, 0),
 			  &cy[offset], SUN8I_VI_SCALER_COEFF_COUNT);
 }
