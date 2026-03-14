@@ -148,6 +148,8 @@
 #define SUN50I_MIXER_CDC0_EN			0xd0000
 #define SUN50I_MIXER_CDC1_EN			0xd8000
 
+#define MAX_CHANNELS	9
+
 enum {
 	/* First mixer or second mixer with VEP support. */
 	CCSC_MIXER0_LAYOUT,
@@ -172,7 +174,7 @@ enum sun8i_mixer_type {
  *	scaler and 2 UI channels with scaler, bitmask would be 0xC.
  * @ccsc: select set of CCSC base addresses from the enumeration above.
  * @de_type: sun8i_mixer_type enum representing the display engine generation.
- * @scaline_yuv: size of a scanline for VI scaler for YUV formats.
+ * @scaline_yuv: array of sizes of a scanline for VI scaler for YUV formats.
  * @de2_fcc_alpha: use FCC for missing DE2 VI alpha capability
  *	Most DE2 cores has FCC. If number of VI planes is one, enable this.
  */
@@ -181,7 +183,7 @@ struct sun8i_layer_cfg {
 	int		scaler_mask;
 	int		ccsc;
 	unsigned int	de_type;
-	unsigned int	scanline_yuv;
+	unsigned int	scanline_yuv[MAX_CHANNELS];
 	unsigned int	de2_fcc_alpha : 1;
 };
 
