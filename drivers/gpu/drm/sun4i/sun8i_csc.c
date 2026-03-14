@@ -116,6 +116,27 @@ static const u32 yuv2rgb_de3[2][3][12] = {
 	},
 };
 
+static const u32 identity_de3[12] = {
+	0x00020000, 0x00000000, 0x00000000, 0x00000000,
+	0x00000000, 0x00020000, 0x00000000, 0x00000000,
+	0x00000000, 0x00000000, 0x00020000, 0x00000000,
+};
+
+static void sun8i_de3_ccsc_set_identity(struct regmap *map, int layer)
+{
+	u32 addr = SUN50I_MIXER_BLEND_CSC_COEFF(DE3_BLD_BASE, layer, 0);
+
+	regmap_bulk_write(map, addr, identity_de3, ARRAY_SIZE(identity_de3));
+}
+
+void sun8i_de3_ccsc_init(struct regmap *map)
+{
+	int i;
+
+	for (i = 0; i < 4; i++)
+		sun8i_de3_ccsc_set_identity(map, i);
+}
+
 static void sun8i_csc_setup(struct regmap *map, u32 base,
 			    enum sun8i_csc_mode mode,
 			    enum drm_color_encoding encoding,
@@ -162,24 +183,21 @@ static void sun8i_de3_ccsc_setup(struct regmap *map, int layer,
 				 enum drm_color_encoding encoding,
 				 enum drm_color_range range)
 {
-	u32 addr, val, mask;
 	const u32 *table;
+	u32 addr;
 	int i;
 
-	mask = SUN50I_MIXER_BLEND_CSC_CTL_EN(layer);
 	table = yuv2rgb_de3[range][encoding];
 
 	switch (mode) {
 	case SUN8I_CSC_MODE_OFF:
-		val = 0;
+		sun8i_de3_ccsc_set_identity(map, layer);
 		break;
 	case SUN8I_CSC_MODE_YUV2RGB:
-		val = mask;
 		addr = SUN50I_MIXER_BLEND_CSC_COEFF(DE3_BLD_BASE, layer, 0);
 		regmap_bulk_write(map, addr, table, 12);
 		break;
 	case SUN8I_CSC_MODE_YVU2RGB:
-		val = mask;
 		for (i = 0; i < 12; i++) {
 			if ((i & 3) == 1)
 				addr = SUN50I_MIXER_BLEND_CSC_COEFF(DE3_BLD_BASE,
@@ -196,13 +214,9 @@ static void sun8i_de3_ccsc_setup(struct regmap *map, int layer,
 		}
 		break;
 	default:
-		val = 0;
 		DRM_WARN("Wrong CSC mode specified.\n");
 		return;
 	}
-
-	regmap_update_bits(map, SUN50I_MIXER_BLEND_CSC_CTL(DE3_BLD_BASE),
-			   mask, val);
 }
 
 /* extract constant from high word and invert sign if necessary */
