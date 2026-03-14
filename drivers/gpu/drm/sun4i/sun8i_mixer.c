@@ -493,6 +493,20 @@ static void sun8i_mixer_init(struct sun8i_mixer *mixer)
 		regmap_write(mixer->engine.regs,
 			     SUN8I_MIXER_BLEND_MODE(base, i),
 			     SUN8I_MIXER_BLEND_MODE_DEF);
+
+	/*
+	 * Enable all CSC units by default, same as in vendor driver. It
+	 * would be tricky to do it without read-modify-write mechanism,
+	 * which is not safe on DE2 and newer. Having it enabled all the
+	 * time doesn't have negative effects.
+	 */
+	if (mixer->cfg->de_type == SUN8I_MIXER_DE3)
+		regmap_write(mixer->engine.regs,
+			     SUN50I_MIXER_BLEND_CSC_CTL(DE3_BLD_BASE),
+			     SUN50I_MIXER_BLEND_CSC_CTL_EN(0) |
+			     SUN50I_MIXER_BLEND_CSC_CTL_EN(1) |
+			     SUN50I_MIXER_BLEND_CSC_CTL_EN(2) |
+			     SUN50I_MIXER_BLEND_CSC_CTL_EN(3));
 }
 
 static int sun8i_mixer_bind(struct device *dev, struct device *master,
