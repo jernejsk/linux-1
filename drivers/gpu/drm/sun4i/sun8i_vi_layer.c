@@ -256,7 +256,7 @@ static int sun8i_vi_layer_atomic_check(struct drm_plane *plane,
 	min_scale = DRM_PLANE_NO_SCALING;
 	max_scale = DRM_PLANE_NO_SCALING;
 
-	if (layer->cfg->scaler_mask & BIT(layer->channel)) {
+	if (layer->cfg->scaler_type[layer->channel] != SUN8I_SCALER_NONE) {
 		min_scale = SUN8I_VI_SCALER_SCALE_MIN;
 		max_scale = SUN8I_VI_SCALER_SCALE_MAX;
 	}
@@ -444,7 +444,8 @@ struct sun8i_layer *sun8i_vi_layer_init_one(struct drm_device *drm,
 		 * TODO: DE33 drivers doesn't support scaling yet, which is a
 		 * requirement for YUV support.
 		 */
-		yuv_support = layer->cfg->scaler_mask & BIT(phy_index);
+		yuv_support = layer->cfg->scaler_type[phy_index] !=
+			      SUN8I_SCALER_NONE;
 		if (yuv_support) {
 			formats = sun8i_vi_layer_de3_formats;
 			format_count = ARRAY_SIZE(sun8i_vi_layer_de3_formats);
