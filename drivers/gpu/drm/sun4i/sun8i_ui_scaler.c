@@ -147,7 +147,7 @@ void sun8i_ui_scaler_setup(struct sun8i_layer *layer,
 			   u32 hscale, u32 vscale, u32 hphase, u32 vphase)
 {
 	u32 insize, outsize;
-	int i, offset;
+	int offset;
 	u32 base;
 
 	base = sun8i_ui_scaler_base(layer);
@@ -174,8 +174,6 @@ void sun8i_ui_scaler_setup(struct sun8i_layer *layer,
 		     SUN8I_SCALER_GSU_VPHASE(base), vphase);
 	offset = sun8i_ui_scaler_coef_index(hscale) *
 			SUN8I_UI_SCALER_COEFF_COUNT;
-	for (i = 0; i < SUN8I_UI_SCALER_COEFF_COUNT; i++)
-		regmap_write(layer->regs,
-			     SUN8I_SCALER_GSU_HCOEFF(base, i),
-			     lan2coefftab16[offset + i]);
+	regmap_bulk_write(layer->regs, SUN8I_SCALER_GSU_HCOEFF(base, 0),
+			  &lan2coefftab16[offset], SUN8I_UI_SCALER_COEFF_COUNT);
 }
