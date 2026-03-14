@@ -153,7 +153,10 @@ static void sun8i_vi_layer_update_coord(struct sun8i_layer *layer,
 		}
 
 		/* it seems that every RGB scaler has buffer for 2048 pixels */
-		scanline = subsampled ? layer->cfg->scanline_yuv : 2048;
+		if (subsampled)
+			scanline = layer->cfg->scanline_yuv[layer->channel];
+		else
+			scanline = 2048;
 
 		if (src_w > scanline) {
 			DRM_DEBUG_DRIVER("Using horizontal coarse scaling\n");
