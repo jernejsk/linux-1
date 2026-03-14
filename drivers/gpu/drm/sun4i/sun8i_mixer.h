@@ -175,6 +175,7 @@ enum sun8i_mixer_type {
  * @ccsc: select set of CCSC base addresses from the enumeration above.
  * @de_type: sun8i_mixer_type enum representing the display engine generation.
  * @scaline_yuv: array of sizes of a scanline for VI scaler for YUV formats.
+ * @scaline_rgb: array of sizes of a scanline for VI scaler for RGB formats.
  * @de2_fcc_alpha: use FCC for missing DE2 VI alpha capability
  *	Most DE2 cores has FCC. If number of VI planes is one, enable this.
  */
@@ -184,6 +185,7 @@ struct sun8i_layer_cfg {
 	int		ccsc;
 	unsigned int	de_type;
 	unsigned int	scanline_yuv[MAX_CHANNELS];
+	unsigned int	scanline_rgb[MAX_CHANNELS];
 	unsigned int	de2_fcc_alpha : 1;
 };
 
