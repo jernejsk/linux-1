@@ -33,7 +33,7 @@ static const struct sun50i_planes_quirks sun50i_h616_planes_quirks = {
 		 * TODO: All planes support scaling, but driver needs
 		 * improvements to properly support it.
 		 */
-		.scaler_mask    = 0,
+		.scaler_type    = {},
 		.scanline_yuv	= {4096, 2048, 2048},
 		.scanline_rgb	= {4096, 2048, 2048, 0, 0, 0, 2048, 2048, 2048},
 	},
