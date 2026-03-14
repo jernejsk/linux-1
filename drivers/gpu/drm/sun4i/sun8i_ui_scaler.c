@@ -103,7 +103,7 @@ static u32 sun8i_ui_scaler_base(struct sun8i_layer *layer)
 		       DE2_UI_SCALER_UNIT_SIZE * (layer->channel - offset);
 }
 
-static int sun8i_ui_scaler_coef_index(unsigned int step)
+static int sun8i_ui_scaler_coef_offset(unsigned int step)
 {
 	unsigned int scale, int_part, float_part;
 
@@ -115,15 +115,15 @@ static int sun8i_ui_scaler_coef_index(unsigned int step)
 	case 0:
 		return 0;
 	case 1:
-		return float_part;
+		return float_part * SUN8I_UI_SCALER_COEFF_COUNT;
 	case 2:
-		return 8 + (float_part >> 1);
+		return (8 + (float_part >> 1)) * SUN8I_UI_SCALER_COEFF_COUNT;
 	case 3:
-		return 12;
+		return 12 * SUN8I_UI_SCALER_COEFF_COUNT;
 	case 4:
-		return 13;
+		return 13 * SUN8I_UI_SCALER_COEFF_COUNT;
 	default:
-		return 14;
+		return 14 * SUN8I_UI_SCALER_COEFF_COUNT;
 	}
 }
 
@@ -172,8 +172,7 @@ void sun8i_ui_scaler_setup(struct sun8i_layer *layer,
 		     SUN8I_SCALER_GSU_HPHASE(base), hphase);
 	regmap_write(layer->regs,
 		     SUN8I_SCALER_GSU_VPHASE(base), vphase);
-	offset = sun8i_ui_scaler_coef_index(hscale) *
-			SUN8I_UI_SCALER_COEFF_COUNT;
+	offset = sun8i_ui_scaler_coef_offset(hscale);
 	regmap_bulk_write(layer->regs, SUN8I_SCALER_GSU_HCOEFF(base, 0),
 			  &lan2coefftab16[offset], SUN8I_UI_SCALER_COEFF_COUNT);
 }
