@@ -12,7 +12,6 @@
 #define SUNXI_DE33_DE_PORT12CHN_MUX_REG	0x2c
 
 #define MAX_DISP	2
-#define MAX_CHANNELS	8
 #define UI_PLANE_OFFSET	6
 
 struct regmap;
