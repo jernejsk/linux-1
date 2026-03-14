@@ -927,6 +927,7 @@ void sun8i_vi_scaler_setup(struct sun8i_layer *layer,
 			   u32 hscale, u32 vscale, u32 hphase, u32 vphase,
 			   const struct drm_format_info *format)
 {
+	unsigned int type = layer->cfg->scaler_type[layer->channel];
 	u32 chphase, cvphase;
 	u32 insize, outsize;
 	u32 base;
@@ -960,6 +961,11 @@ void sun8i_vi_scaler_setup(struct sun8i_layer *layer,
 
 		if (format->hsub == 1 && format->vsub == 1)
 			val = SUN50I_SCALER_VSU_SCALE_MODE_UI;
+		else if (type == SUN8I_SCALER_VI_ED &&
+			 hscale > SUN8I_VI_SCALER_SCALE_UNIT &&
+			 vscale > SUN8I_VI_SCALER_SCALE_UNIT &&
+			 src_w <= layer->cfg->scanline_ed[layer->channel])
+			val = SUN50I_SCALER_VSU_SCALE_MODE_ED_SCALE;
 		else
 			val = SUN50I_SCALER_VSU_SCALE_MODE_NORMAL;
 
@@ -967,6 +973,21 @@ void sun8i_vi_scaler_setup(struct sun8i_layer *layer,
 			     SUN50I_SCALER_VSU_SCALE_MODE(base), val);
 		regmap_write(layer->regs,
 			     SUN50I_SCALER_VSU_GLB_ALPHA(base), 0xff);
+	}
+
+	if (type == SUN8I_SCALER_VI_ED) {
+		regmap_write(layer->regs,
+			     SUN50I_SCALER_VSU_DIR_THR(base),
+			     SUN50I_SCALER_VSU_VERT_DIR_THR(0x01) |
+			     SUN50I_SCALER_VSU_HORZ_DIR_THR(0xff));
+		regmap_write(layer->regs,
+			     SUN50I_SCALER_VSU_EDGE_THR(base),
+			     SUN50I_SCALER_VSU_EDGE_SHIFT(8));
+		regmap_write(layer->regs,
+			     SUN50I_SCALER_VSU_EDSCL_CTRL(base), 0);
+		regmap_write(layer->regs,
+			     SUN50I_SCALER_VSU_ANGLE_THR(base),
+			     SUN50I_SCALER_VSU_ANGLE_SHIFT(2));
 	}
 
 	regmap_write(layer->regs,
