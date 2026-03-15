@@ -360,7 +360,8 @@ static struct drm_plane **sun8i_layers_init(struct drm_device *drm,
 
 		layer = sun8i_ui_layer_init_one(drm, type, mixer->engine.regs,
 						index, index, plane_cnt,
-						&mixer->cfg->lay_cfg);
+						&mixer->cfg->lay_cfg,
+						mixer->rdma, mixer->base);
 		if (IS_ERR(layer)) {
 			dev_err(drm->dev, "Couldn't initialize %s plane\n",
 				i ? "overlay" : "primary");

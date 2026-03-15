@@ -22,16 +22,15 @@
 #include <drm/drm_probe_helper.h>
 
 #include "sun8i_mixer.h"
+#include "sun8i_rdma.h"
 #include "sun8i_ui_layer.h"
 #include "sun8i_ui_scaler.h"
 #include "sun8i_vi_scaler.h"
 
 static void sun8i_ui_layer_disable(struct sun8i_layer *layer)
 {
-	u32 ch_base = sun8i_channel_base(layer);
-
-	regmap_write(layer->regs,
-		     SUN8I_MIXER_CHAN_UI_LAYER_ATTR(ch_base, layer->overlay), 0);
+	sun8i_rdma_write(layer->layer_rdma,
+			 SUN8I_MIXER_CHAN_UI_LAYER_ATTR(layer->overlay), 0);
 }
 
 static void sun8i_ui_layer_update_attributes(struct sun8i_layer *layer,
@@ -39,9 +38,8 @@ static void sun8i_ui_layer_update_attributes(struct sun8i_layer *layer,
 {
 	struct drm_plane_state *state = plane->state;
 	const struct drm_format_info *fmt;
-	u32 val, ch_base, hw_fmt;
+	u32 val, hw_fmt;
 
-	ch_base = sun8i_channel_base(layer);
 	fmt = state->fb->format;
 	sun8i_mixer_drm_format_to_hw(fmt->format, &hw_fmt);
 
@@ -52,8 +50,8 @@ static void sun8i_ui_layer_update_attributes(struct sun8i_layer *layer,
 	val |= hw_fmt << SUN8I_MIXER_CHAN_UI_LAYER_ATTR_FBFMT_OFFSET;
 	val |= SUN8I_MIXER_CHAN_UI_LAYER_ATTR_EN;
 
-	regmap_write(layer->regs,
-		     SUN8I_MIXER_CHAN_UI_LAYER_ATTR(ch_base, layer->overlay), val);
+	sun8i_rdma_write(layer->layer_rdma,
+			 SUN8I_MIXER_CHAN_UI_LAYER_ATTR(layer->overlay), val);
 }
 
 static void sun8i_ui_layer_update_coord(struct sun8i_layer *layer,
@@ -63,12 +61,9 @@ static void sun8i_ui_layer_update_coord(struct sun8i_layer *layer,
 	u32 src_w, src_h, dst_w, dst_h;
 	u32 outsize, insize;
 	u32 hphase, vphase;
-	u32 ch_base;
 
 	DRM_DEBUG_DRIVER("Updating UI channel %d overlay %d\n",
 			 layer->channel, layer->overlay);
-
-	ch_base = sun8i_channel_base(layer);
 
 	src_w = drm_rect_width(&state->src) >> 16;
 	src_h = drm_rect_height(&state->src) >> 16;
@@ -85,12 +80,10 @@ static void sun8i_ui_layer_update_coord(struct sun8i_layer *layer,
 	DRM_DEBUG_DRIVER("Layer source offset X: %d Y: %d\n",
 			 state->src.x1 >> 16, state->src.y1 >> 16);
 	DRM_DEBUG_DRIVER("Layer source size W: %d H: %d\n", src_w, src_h);
-	regmap_write(layer->regs,
-		     SUN8I_MIXER_CHAN_UI_LAYER_SIZE(ch_base, layer->overlay),
-		     insize);
-	regmap_write(layer->regs,
-		     SUN8I_MIXER_CHAN_UI_OVL_SIZE(ch_base),
-		     insize);
+	sun8i_rdma_write(layer->layer_rdma,
+			 SUN8I_MIXER_CHAN_UI_LAYER_SIZE(layer->overlay), insize);
+	sun8i_rdma_write(layer->layer_rdma,
+			 SUN8I_MIXER_CHAN_UI_OVL_SIZE, insize);
 
 	if (insize != outsize || hphase || vphase) {
 		u32 hscale, vscale;
@@ -126,10 +119,7 @@ static void sun8i_ui_layer_update_buffer(struct sun8i_layer *layer,
 	struct drm_framebuffer *fb = state->fb;
 	struct drm_gem_dma_object *gem;
 	dma_addr_t dma_addr;
-	u32 ch_base;
 	int bpp;
-
-	ch_base = sun8i_channel_base(layer);
 
 	/* Get the physical address of the buffer in memory */
 	gem = drm_fb_dma_get_gem_obj(fb, 0);
@@ -146,15 +136,15 @@ static void sun8i_ui_layer_update_buffer(struct sun8i_layer *layer,
 
 	/* Set the line width */
 	DRM_DEBUG_DRIVER("Layer line width: %d bytes\n", fb->pitches[0]);
-	regmap_write(layer->regs,
-		     SUN8I_MIXER_CHAN_UI_LAYER_PITCH(ch_base, layer->overlay),
-		     fb->pitches[0]);
+	sun8i_rdma_write(layer->layer_rdma,
+			 SUN8I_MIXER_CHAN_UI_LAYER_PITCH(layer->overlay),
+			 fb->pitches[0]);
 
 	DRM_DEBUG_DRIVER("Setting buffer address to %pad\n", &dma_addr);
 
-	regmap_write(layer->regs,
-		     SUN8I_MIXER_CHAN_UI_LAYER_TOP_LADDR(ch_base, layer->overlay),
-		     lower_32_bits(dma_addr));
+	sun8i_rdma_write(layer->layer_rdma,
+			 SUN8I_MIXER_CHAN_UI_LAYER_TOP_LADDR(layer->overlay),
+			 lower_32_bits(dma_addr));
 }
 
 static int sun8i_ui_layer_atomic_check(struct drm_plane *plane,
@@ -257,14 +247,23 @@ static const uint64_t sun8i_layer_modifiers[] = {
 	DRM_FORMAT_MOD_INVALID
 };
 
+static const struct reg_region ui_regions[] = {
+	{SUN8I_MIXER_CHAN_UI_LAYER_ATTR(0), 8},
+	{SUN8I_MIXER_CHAN_UI_OVL_SIZE, 1},
+	{ }
+};
+
 struct sun8i_layer *sun8i_ui_layer_init_one(struct drm_device *drm,
 					    enum drm_plane_type type,
 					    struct regmap *regs,
 					    int index, int phy_index,
 					    int plane_cnt,
-					    const struct sun8i_layer_cfg *cfg)
+					    const struct sun8i_layer_cfg *cfg,
+					    struct sun8i_rdma *rdma,
+					    void __iomem *reg_base)
 {
 	struct sun8i_layer *layer;
+	u32 ch_base;
 	int ret;
 
 	layer = devm_kzalloc(drm->dev, sizeof(*layer), GFP_KERNEL);
@@ -277,6 +276,12 @@ struct sun8i_layer *sun8i_ui_layer_init_one(struct drm_device *drm,
 	layer->overlay = 0;
 	layer->regs = regs;
 	layer->cfg = cfg;
+
+	ch_base = sun8i_channel_base(layer);
+	layer->layer_rdma = sun8i_rdma_add_unit(rdma, reg_base + ch_base,
+						0x100, ui_regions);
+	if (!layer->layer_rdma)
+		return ERR_PTR(-ENOMEM);
 
 	/* possible crtcs are set later */
 	ret = drm_universal_plane_init(drm, &layer->plane, 0,
