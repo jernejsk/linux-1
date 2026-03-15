@@ -173,6 +173,8 @@ enum sun8i_scaler_type {
 	SUN8I_SCALER_VI_ED,
 };
 
+struct sun8i_rdma;
+
 /**
  * struct sun8i_layer_cfg - layer configuration
  * @vi_scaler_num: Number of VI scalers. Used on DE2 and DE3.
@@ -228,6 +230,8 @@ struct sun8i_mixer {
 
 	struct regmap			*top_regs;
 	struct device			*planes_dev;
+
+	struct sun8i_rdma		*rdma;
 };
 
 enum {

@@ -28,6 +28,7 @@
 #include "sun4i_drv.h"
 #include "sun50i_planes.h"
 #include "sun8i_mixer.h"
+#include "sun8i_rdma.h"
 #include "sun8i_ui_layer.h"
 #include "sun8i_vi_layer.h"
 #include "sunxi_engine.h"
@@ -307,6 +308,8 @@ static void sun8i_mixer_commit(struct sunxi_engine *engine,
 	regmap_write(engine->regs, SUN8I_MIXER_BLEND_PIPE_CTL(bld_base),
 		     pipe_en | SUN8I_MIXER_BLEND_PIPE_CTL_FC_EN(0));
 
+	sun8i_rdma_apply(mixer->rdma);
+
 	if (mixer->cfg->de_type != SUN8I_MIXER_DE33)
 		regmap_write(engine->regs, SUN8I_MIXER_GLOBAL_DBUFF,
 			     SUN8I_MIXER_GLOBAL_DBUFF_ENABLE);
@@ -537,6 +540,9 @@ static int sun8i_mixer_bind(struct device *dev, struct device *master,
 		return -ENOMEM;
 	dev_set_drvdata(dev, mixer);
 	mixer->engine.node = dev->of_node;
+	mixer->rdma = sun8i_rdma_init();
+	if (!mixer->rdma)
+		return -ENOMEM;
 
 	if (of_property_present(dev->of_node, "iommus")) {
 		/*
@@ -680,6 +686,8 @@ static void sun8i_mixer_unbind(struct device *dev, struct device *master,
 	struct sun8i_mixer *mixer = dev_get_drvdata(dev);
 
 	list_del(&mixer->engine.list);
+
+	sun8i_rdma_deinit(mixer->rdma);
 
 	if (mixer->cfg->de_type == SUN8I_MIXER_DE33)
 		put_device(mixer->planes_dev);
