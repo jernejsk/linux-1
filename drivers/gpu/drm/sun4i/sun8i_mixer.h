@@ -42,6 +42,8 @@
 #define DE33_CH_BASE				0x1000
 #define DE33_CH_SIZE				0x20000
 
+#define SUN8I_MIXER_FCC				0xaa000
+
 #define SUN8I_MIXER_BLEND_PIPE_CTL(base)	((base) + 0)
 #define SUN8I_MIXER_BLEND_ATTR_FCOLOR(base, x)	((base) + 0x4 + 0x10 * (x))
 #define SUN8I_MIXER_BLEND_ATTR_INSIZE(base, x)	((base) + 0x8 + 0x10 * (x))
@@ -134,7 +136,6 @@
 #define SUN8I_MIXER_LTI_EN			0xa4000
 #define SUN8I_MIXER_PEAK_EN			0xa6000
 #define SUN8I_MIXER_ASE_EN			0xa8000
-#define SUN8I_MIXER_FCC_EN			0xaa000
 #define SUN8I_MIXER_DCSC_EN			0xb0000
 
 #define SUN50I_MIXER_FCE_EN			0x70000
@@ -232,6 +233,8 @@ struct sun8i_mixer {
 	struct device			*planes_dev;
 
 	struct sun8i_rdma		*rdma;
+	void __iomem			*base;
+	void __iomem			*top;
 };
 
 enum {
@@ -247,6 +250,8 @@ struct sun8i_layer {
 	int				overlay;
 	struct regmap			*regs;
 	const struct sun8i_layer_cfg	*cfg;
+	struct sun8i_rdma_unit		*layer_rdma;
+	struct sun8i_rdma_unit		*fcc_rdma;
 };
 
 static inline struct sun8i_layer *

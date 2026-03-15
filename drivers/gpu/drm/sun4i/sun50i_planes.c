@@ -13,6 +13,7 @@
 #include <linux/regmap.h>
 
 #include "sun50i_planes.h"
+#include "sun8i_rdma.h"
 #include "sun8i_ui_layer.h"
 #include "sun8i_vi_layer.h"
 
@@ -51,7 +52,7 @@ MODULE_DEVICE_TABLE(of, sun50i_planes_of_table);
 
 struct drm_plane **
 sun50i_planes_setup(struct device *dev, struct drm_device *drm,
-		    unsigned int mixer)
+		    unsigned int mixer, struct sun8i_rdma *rdma)
 {
 	struct sun50i_planes *planes = dev_get_drvdata(dev);
 	const struct sun50i_planes_quirks *quirks;
@@ -95,7 +96,8 @@ sun50i_planes_setup(struct device *dev, struct drm_device *drm,
 		if (phy_ch < UI_PLANE_OFFSET)
 			layer = sun8i_vi_layer_init_one(drm, type, planes->regs,
 							i, phy_ch, map->num_ch,
-							&quirks->cfg);
+							&quirks->cfg, rdma,
+							planes->base);
 		else
 			layer = sun8i_ui_layer_init_one(drm, type, planes->regs,
 							i, phy_ch, map->num_ch,
@@ -158,7 +160,6 @@ static int sun50i_planes_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct sun50i_planes *planes;
-	void __iomem *regs;
 
 	planes = devm_kzalloc(dev, sizeof(*planes), GFP_KERNEL);
 	if (!planes)
@@ -174,11 +175,12 @@ static int sun50i_planes_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(planes->mapping),
 				     "Unable to get mapping\n");
 
-	regs = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(regs))
-		return PTR_ERR(regs);
+	planes->base = devm_platform_ioremap_resource(pdev, 0);
+	if (IS_ERR(planes->base))
+		return PTR_ERR(planes->base);
 
-	planes->regs = devm_regmap_init_mmio(dev, regs, &sun50i_planes_regmap_config);
+	planes->regs = devm_regmap_init_mmio(dev, planes->base,
+					     &sun50i_planes_regmap_config);
 	if (IS_ERR(planes->regs))
 		return PTR_ERR(planes->regs);
 

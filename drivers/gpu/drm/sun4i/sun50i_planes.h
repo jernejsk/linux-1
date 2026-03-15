@@ -16,6 +16,7 @@
 
 struct regmap;
 struct drm_device;
+struct sun8i_rdma;
 
 struct default_map {
 	unsigned int map[MAX_CHANNELS];
@@ -31,10 +32,11 @@ struct sun50i_planes {
 	struct regmap				*regs;
 	struct regmap				*mapping;
 	const struct sun50i_planes_quirks	*quirks;
+	void __iomem				*base;
 };
 
 struct drm_plane **
 sun50i_planes_setup(struct device *dev, struct drm_device *drm,
-		    unsigned int mixer);
+		    unsigned int mixer, struct sun8i_rdma *rdma);
 
 #endif /* _SUN50I_PLANES_H_ */

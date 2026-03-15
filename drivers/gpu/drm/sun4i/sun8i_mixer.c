@@ -338,7 +338,8 @@ static struct drm_plane **sun8i_layers_init(struct drm_device *drm,
 
 		layer = sun8i_vi_layer_init_one(drm, type, mixer->engine.regs,
 						i, i, plane_cnt,
-						&mixer->cfg->lay_cfg);
+						&mixer->cfg->lay_cfg,
+						mixer->rdma, mixer->base);
 		if (IS_ERR(layer)) {
 			dev_err(drm->dev,
 				"Couldn't initialize overlay plane\n");
@@ -377,7 +378,8 @@ static struct drm_plane **sun50i_layers_init(struct drm_device *drm,
 {
 	struct sun8i_mixer *mixer = engine_to_sun8i_mixer(engine);
 
-	return sun50i_planes_setup(mixer->planes_dev, drm, engine->id);
+	return sun50i_planes_setup(mixer->planes_dev, drm,
+				   engine->id, mixer->rdma);
 }
 
 static void sun8i_mixer_mode_set(struct sunxi_engine *engine,
@@ -519,7 +521,6 @@ static int sun8i_mixer_bind(struct device *dev, struct device *master,
 	struct drm_device *drm = data;
 	struct sun4i_drv *drv = drm->dev_private;
 	struct sun8i_mixer *mixer;
-	void __iomem *regs;
 	int ret;
 
 	/*
@@ -576,11 +577,11 @@ static int sun8i_mixer_bind(struct device *dev, struct device *master,
 	else
 		mixer->engine.ops = &sun8i_engine_ops;
 
-	regs = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(regs))
-		return PTR_ERR(regs);
+	mixer->base = devm_platform_ioremap_resource(pdev, 0);
+	if (IS_ERR(mixer->base))
+		return PTR_ERR(mixer->base);
 
-	mixer->engine.regs = devm_regmap_init_mmio(dev, regs,
+	mixer->engine.regs = devm_regmap_init_mmio(dev, mixer->base,
 						   &sun8i_mixer_regmap_config);
 	if (IS_ERR(mixer->engine.regs)) {
 		dev_err(dev, "Couldn't create the mixer regmap\n");
@@ -588,11 +589,11 @@ static int sun8i_mixer_bind(struct device *dev, struct device *master,
 	}
 
 	if (mixer->cfg->de_type == SUN8I_MIXER_DE33) {
-		regs = devm_platform_ioremap_resource_byname(pdev, "top");
-		if (IS_ERR(regs))
-			return PTR_ERR(regs);
+		mixer->top = devm_platform_ioremap_resource_byname(pdev, "top");
+		if (IS_ERR(mixer->top))
+			return PTR_ERR(mixer->top);
 
-		mixer->top_regs = devm_regmap_init_mmio(dev, regs,
+		mixer->top_regs = devm_regmap_init_mmio(dev, mixer->top,
 							&sun8i_top_regmap_config);
 		if (IS_ERR(mixer->top_regs)) {
 			dev_err(dev, "Couldn't create the top regmap\n");
