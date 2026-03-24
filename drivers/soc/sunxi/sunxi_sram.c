@@ -181,7 +181,6 @@ static const struct sunxi_sram_data *sunxi_sram_get_match(struct device_node *np
 	const struct of_device_id *match;
 	const struct sunxi_sram_data *data;
 	const struct sunxi_sram_func *func;
-
 	if (!of_device_is_available(np))
 		return ERR_PTR(-ENODEV);
 
