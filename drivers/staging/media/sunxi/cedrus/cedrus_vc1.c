@@ -351,7 +351,9 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 		reg |= VE_DEC_VC1_EPHS_EPTB_DET_BYPASS;
 	cedrus_write(dev, VE_DEC_VC1_EPHS, reg);
 	
-	if (sequence->profile == VC1_PROFILE_ADVANCED)
+	if (sequence->profile == VC1_PROFILE_ADVANCED &&
+	    (picture->ptype == VC1_PICTURE_TYPE_I ||
+	     picture->ptype == VC1_PICTURE_TYPE_BI))
 		condover = picture->condover;
 	else if (picture->ptype == VC1_PICTURE_TYPE_B || pq < 9 ||
 		 !(entrypoint->flags & V4L2_VC1_ENTRYPOINT_HEADER_FLAG_OVERLAP))
