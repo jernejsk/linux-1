@@ -424,14 +424,13 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	else
 		mvmode = picture->mvmode;
 	reg |= VE_DEC_VC1_PICMV_MVMODE(vc1_mvmode_map[mvmode & 3]);
-	//if ((picture->ptype == VC1_PICTURE_TYPE_B && fwd_buf && fwd_buf->codec.vc1.compen) ||
-	//    (picture->ptype != VC1_PICTURE_TYPE_B && picture->flags & V4L2_VC1_PICTURE_LAYER_FLAG_INTCOMP))
-	//if (picture->flags & V4L2_VC1_PICTURE_LAYER_FLAG_INTCOMP)
-	if (picture->ptype == VC1_PICTURE_TYPE_B) {
-		if (intenen)
+	if (picture->fcm != VC1_FCM_INTERLACED_FIELD) {
+		if (picture->ptype == VC1_PICTURE_TYPE_B) {
+			if (intenen)
+				reg |= VE_DEC_VC1_PICMV_INTENSITY_COMP_EN;
+		} else if (picture->flags & V4L2_VC1_PICTURE_LAYER_FLAG_INTCOMP) {
 			reg |= VE_DEC_VC1_PICMV_INTENSITY_COMP_EN;
-	} else if (picture->flags & V4L2_VC1_PICTURE_LAYER_FLAG_INTCOMP) { // (flag) {
-		reg |= VE_DEC_VC1_PICMV_INTENSITY_COMP_EN;
+		}
 	}
 	if (picture->ptype == VC1_PICTURE_TYPE_P)
 		intenen = !!(reg & VE_DEC_VC1_PICMV_INTENSITY_COMP_EN);
