@@ -483,10 +483,7 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 			reg |= VE_DEC_VC1_PICINTENCOMP_LUMASHIFT1(picture->lumshift);
 			reg |= VE_DEC_VC1_PICINTENCOMP_LUMASCALE2(picture->lumscale2);
 			reg |= VE_DEC_VC1_PICINTENCOMP_LUMASHIFT2(picture->lumshift2);
-			if (!reg && oldval)
-				reg = oldval;
-			else
-				oldval = reg;
+			oldval = reg;
 		} else {
 			reg = oldval;
 		}
