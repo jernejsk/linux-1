@@ -1,0 +1,4 @@
+LABEL MAINLINE
+  LINUX /Image.gz
+  FDT /dts/allwinner/sun55i-a527-cubie-a5e.dtb
+  APPEND console=ttyS0,115200 root=PARTUUID=86a388bb-01 rw rootwait

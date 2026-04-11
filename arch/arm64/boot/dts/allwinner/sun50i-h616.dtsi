@@ -235,6 +235,17 @@
 			};
 		};
 
+		deinterlace: deinterlace@1420000 {
+			compatible = "allwinner,sun50i-h616-deinterlace";
+			reg = <0x1420000 0x40000>;
+			interrupts = <GIC_SPI 89 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ccu CLK_BUS_DEINTERLACE>,
+				 <&ccu CLK_DEINTERLACE>;
+			clock-names = "bus", "mod";
+			resets = <&ccu RST_BUS_DEINTERLACE>;
+			status = "disabled";
+		};
+
 		gpu: gpu@1800000 {
 			compatible = "allwinner,sun50i-h616-mali",
 				     "arm,mali-bifrost";

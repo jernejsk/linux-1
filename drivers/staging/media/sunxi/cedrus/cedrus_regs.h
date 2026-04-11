@@ -714,4 +714,16 @@
 #define VE_AVC_REC_SLUMA		0xbbc
 #define VE_AVC_MB_INFO			0xbc0
 
+/*
+ * get_tile_offset - compute the start MI coordinate of tile @tile_no
+ * out of @tile_count tiles covering @mis MI units.
+ * Matches the VP9 spec and the vendor Vp9TileInit() helper.
+ */
+static inline u32 get_tile_offset(u32 tile_no, u32 mis, u32 log2_tile_count)
+{
+	u32 tile_count = 1u << log2_tile_count;
+
+	return ((tile_no * mis) + tile_count - 1) >> log2_tile_count;
+}
+
 #endif

@@ -29,11 +29,6 @@
 #define CEDRUS_DECODE_SRC	BIT(0)
 #define CEDRUS_DECODE_DST	BIT(1)
 
-#define CEDRUS_MIN_WIDTH	16U
-#define CEDRUS_MIN_HEIGHT	16U
-#define CEDRUS_MAX_WIDTH	4096U
-#define CEDRUS_MAX_HEIGHT	2304U
-
 static struct cedrus_format cedrus_formats[] = {
 	{
 		.pixelformat	= V4L2_PIX_FMT_MPEG2_SLICE,
@@ -54,6 +49,11 @@ static struct cedrus_format cedrus_formats[] = {
 		.pixelformat	= V4L2_PIX_FMT_VP8_FRAME,
 		.directions	= CEDRUS_DECODE_SRC,
 		.capabilities	= CEDRUS_CAPABILITY_VP8_DEC,
+	},
+	{
+		.pixelformat	= V4L2_PIX_FMT_VP9_FRAME,
+		.directions	= CEDRUS_DECODE_SRC,
+		.capabilities	= CEDRUS_CAPABILITY_VP9_DEC,
 	},
 	{
 		.pixelformat	= V4L2_PIX_FMT_NV12,
@@ -362,6 +362,9 @@ static int cedrus_s_fmt_vid_out_p(struct cedrus_ctx *ctx,
 		break;
 	case V4L2_PIX_FMT_VP8_FRAME:
 		ctx->current_codec = &cedrus_dec_ops_vp8;
+		break;
+	case V4L2_PIX_FMT_VP9_FRAME:
+		ctx->current_codec = &cedrus_dec_ops_vp9;
 		break;
 	}
 

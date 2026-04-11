@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/allwinner,sun50i-h616-deinterlace.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Allwinner H616 Deinterlace
+
+maintainers:
+  - Jernej Skrabec <jernej.skrabec@gmail.com>
+
+description:
+  The Allwinner H616 has a DI300 deinterlace engine for converting
+  interlaced video content to progressive with motion-adaptive processing.
+
+properties:
+  compatible:
+    const: allwinner,sun50i-h616-deinterlace
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+
+  clocks:
+    items:
+      - description: Deinterlace interface clock
+      - description: Deinterlace module clock
+
+  clock-names:
+    items:
+      - const: bus
+      - const: mod
+
+  resets:
+    maxItems: 1
+
+required:
+  - compatible
+  - reg
+  - interrupts
+  - clocks
+  - clock-names
+  - resets
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+    #include <dt-bindings/clock/sun50i-h616-ccu.h>
+    #include <dt-bindings/reset/sun50i-h616-ccu.h>
+
+    deinterlace: deinterlace@1420000 {
+        compatible = "allwinner,sun50i-h616-deinterlace";
+        reg = <0x1420000 0x40000>;
+        interrupts = <GIC_SPI 89 IRQ_TYPE_LEVEL_HIGH>;
+        clocks = <&ccu CLK_BUS_DEINTERLACE>,
+                 <&ccu CLK_DEINTERLACE>;
+        clock-names = "bus", "mod";
+        resets = <&ccu RST_BUS_DEINTERLACE>;
+    };
+
+...

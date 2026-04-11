@@ -230,4 +230,38 @@ v4l2_vp9_seg_feat_enabled(const u8 *feature_enabled,
 			  unsigned int feature,
 			  unsigned int segid);
 
+/**
+ * v4l2_vp9_get_qindex() - Resolve the quantizer index for a segment
+ *
+ * @quant: quantization parameters from the frame header
+ * @seg: segmentation parameters from the frame header
+ * @segid: segment id (0..7) to resolve
+ *
+ * Implements the VP9 spec get_qindex() function (6.4.2): returns the
+ * effective quantizer index for the given segment, applying the
+ * SEG_LVL_ALT_Q feature delta (absolute or relative) when enabled.
+ *
+ * Returns the clamped qindex in [0, 255].
+ */
+static inline int
+v4l2_vp9_get_qindex(const struct v4l2_vp9_quantization *quant,
+		    const struct v4l2_vp9_segmentation *seg,
+		    unsigned int segid)
+{
+	bool seg_enabled = !!(seg->flags & V4L2_VP9_SEGMENTATION_FLAG_ENABLED);
+
+	if (seg_enabled &&
+	    v4l2_vp9_seg_feat_enabled(seg->feature_enabled,
+				      V4L2_VP9_SEG_LVL_ALT_Q, segid)) {
+		s16 data = seg->feature_data[segid][V4L2_VP9_SEG_LVL_ALT_Q];
+
+		if (seg->flags & V4L2_VP9_SEGMENTATION_FLAG_ABS_OR_DELTA_UPDATE)
+			return clamp((int)data, 0, 255);
+
+		return clamp((int)quant->base_q_idx + data, 0, 255);
+	}
+
+	return quant->base_q_idx;
+}
+
 #endif /* _MEDIA_V4L2_VP9_H */
