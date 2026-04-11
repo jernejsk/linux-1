@@ -521,7 +521,13 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	reg |= VE_DEC_VC1_PICINTERLACE_BRFD(brfd);
 	if (!(second_field ^ ref_field))
 		reg |= VE_DEC_VC1_PICINTERLACE_REFFIELD;
-	reg |= VE_DEC_VC1_PICINTERLACE_INTENCOMPFLD(picture->intcompfield);
+	if (picture->fcm == VC1_FCM_INTERLACED_FIELD &&
+	    picture->ptype == VC1_PICTURE_TYPE_B)
+		reg |= VE_DEC_VC1_PICINTERLACE_INTENCOMPFLD(
+			(vc1_icb1_regbak >> 30) & 3);
+	else
+		reg |= VE_DEC_VC1_PICINTERLACE_INTENCOMPFLD(
+			picture->intcompfield);
 	if (raw_coding & V4L2_VC1_RAW_CODING_FLAG_FORWARDMB)
 		reg |= VE_DEC_VC1_PICINTERLACE_FORWARD_RAW;
 	if (fwd_buf && bwd_buf) {
