@@ -14,6 +14,8 @@
 #include "cedrus_hw.h"
 #include "cedrus_regs.h"
 
+/* #define CEDRUS_VC1_DEBUG */
+
 #define MV_BUF_SIZE			(64 * SZ_1K)
 #define ACDC_BUF_SIZE			(16 * SZ_1K)
 #define BITPLANES_BUF_SIZE		(16 * SZ_1K)
@@ -108,7 +110,11 @@ static unsigned int cedrus_vc1_get_pq(unsigned int pqindex, unsigned int qmode)
 	else
 		return ff_vc1_pquant_table[1][pqindex];
 }
+
+#ifdef CEDRUS_VC1_DEBUG
 static unsigned int seq;
+#endif
+
 static void cedrus_vc1_bitplanes_setup(struct cedrus_ctx *ctx,
 				       struct cedrus_run *run)
 {
@@ -236,9 +242,7 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	size_t slice_bytes;
 	int brfd, flag;
 
-	unsigned int raw_coding = slice->raw_coding_flags;
-	//printk("%d raw coding: %.2x, flags: %.2x\n", seq + 1, slice->raw_coding_flags, bitplanes->bitplane_flags);
-	raw_coding = ~bitplanes->bitplane_flags;
+	unsigned int raw_coding = ~bitplanes->bitplane_flags;
 
 	sequence = &slice->sequence;
 	entrypoint = &slice->entrypoint_header;
@@ -262,16 +266,12 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	vq = v4l2_m2m_get_vq(ctx->fh.m2m_ctx, V4L2_BUF_TYPE_VIDEO_CAPTURE);
 
 	forward_vb2 = vb2_find_buffer(vq, slice->forward_ref_ts);
-	//forward_vb2 = vb2_find_buffer(vq, slice->backward_ref_ts);
-	//fwd_buf = NULL;
 	if (forward_vb2)
 		fwd_buf = vb2_to_cedrus_buffer(forward_vb2);
 	else
 		fwd_buf = out_buf;
 
 	backward_vb2 = vb2_find_buffer(vq, slice->backward_ref_ts);
-	//backward_vb2 = vb2_find_buffer(vq, slice->forward_ref_ts);
-	//bwd_buf = NULL;
 	if (backward_vb2)
 		bwd_buf = vb2_to_cedrus_buffer(backward_vb2);
 	else
@@ -390,7 +390,6 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	if (raw_coding & V4L2_VC1_RAW_CODING_FLAG_DIRECTMB)
 		reg |= VE_DEC_VC1_PICCTRL_DIRECTMB_RAW;
 	if (bwd_buf && bwd_buf->codec.vc1.ptype != VC1_PICTURE_TYPE_P)
-	//if (picture->ptype != VC1_PICTURE_TYPE_P)
 		reg |= VE_DEC_VC1_PICCTRL_DIRECT_REF_INTRA;
 	if (bitplanes->bitplane_flags)
 		reg |= VE_DEC_VC1_PICCTRL_BITPL_CODING;
@@ -512,7 +511,7 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	reg |= VE_DEC_VC1_PICINTERLACE_MBMODETAB(picture->mbmodetab);
 	reg |= VE_DEC_VC1_PICINTERLACE_IMVTAB(picture->imvtab);
 	reg |= VE_DEC_VC1_PICINTERLACE_ICBPTAB(picture->icbptab);
-	if (flag)//(picture->flags & V4L2_VC1_PICTURE_LAYER_FLAG_INTCOMP)
+	if (flag)
 		reg |= VE_DEC_VC1_PICINTERLACE_INTENCOMP;
 	reg |= VE_DEC_VC1_PICINTERLACE_2MVBPTAB(picture->twomvbptab);
 	reg |= VE_DEC_VC1_PICINTERLACE_4MVBPTAB(picture->fourmvbptab);
@@ -593,7 +592,9 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	      VE_DEC_VC1_CTRL_ERROR_IRQ_EN |
 	      VE_DEC_VC1_CTRL_VLD_DATA_REQ_IRQ_EN;
 	if (picture->ptype == VC1_PICTURE_TYPE_SKIPPED) {
+#ifdef CEDRUS_VC1_DEBUG
 		printk("frame is skipped!\n");
+#endif
 		reg |= VE_DEC_VC1_CTRL_NO_RECONSTRUCT_PIC;
 	}
 	cedrus_write(dev, VE_DEC_VC1_CTRL, reg);
@@ -601,21 +602,27 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	return 0;
 }
 
+#ifdef CEDRUS_VC1_DEBUG
 static struct file *f;
 static loff_t offset;
+#endif
 
 static int cedrus_vc1_start(struct cedrus_ctx *ctx)
 {
 	struct cedrus_dev *dev = ctx->dev;
 	int ret;
-	
+
 	ctx->codec.vc1.ic_oldval = 0;
 	ctx->codec.vc1.ic_intenen = false;
-	ctx->codec.vc1.ic_icb1_regbak = ctx->codec.vc1.ic_icb0_reg68 = ctx->codec.vc1.ic_icf0_reg6c = 0;
+	ctx->codec.vc1.ic_icb1_regbak = 0;
+	ctx->codec.vc1.ic_icb0_reg68 = 0;
+	ctx->codec.vc1.ic_icf0_reg6c = 0;
+
+#ifdef CEDRUS_VC1_DEBUG
 	seq = 0;
-	
 	f = filp_open("/root/out.bin", O_CREAT | O_WRONLY | O_TRUNC, 0666);
 	offset = 0;
+#endif
 
 	ctx->codec.vc1.mv_buf =
 		dma_alloc_coherent(dev->dev, MV_BUF_SIZE,
@@ -657,6 +664,7 @@ err_mv_buf:
 	return ret;
 }
 
+#ifdef CEDRUS_VC1_DEBUG
 #include <linux/kernel.h>
 
 static void write_section(const char *info, volatile char *regs, unsigned int o, unsigned int size)
@@ -670,12 +678,15 @@ static void write_section(const char *info, volatile char *regs, unsigned int o,
 	}
 	kernel_write(f, info, strlen(info), &offset);
 }
+#endif
 
 static void cedrus_vc1_stop(struct cedrus_ctx *ctx)
 {
 	struct cedrus_dev *dev = ctx->dev;
-	
+
+#ifdef CEDRUS_VC1_DEBUG
 	filp_close(f, NULL);
+#endif
 
 	dma_free_coherent(dev->dev, MV_BUF_SIZE,
 			  ctx->codec.vc1.mv_buf,
@@ -691,21 +702,14 @@ static void cedrus_vc1_stop(struct cedrus_ctx *ctx)
 static void cedrus_vc1_trigger(struct cedrus_ctx *ctx)
 {
 	struct cedrus_dev *dev = ctx->dev;
-	/*int i;
 
-	for (i = 0; i <= 0xec; i+=4)
-		printk("%.3x: %.8x\n", i, cedrus_read(dev, i));
-	printk("main section\n");
-	for (i = 0x300; i <= 0x3cc; i+=4)
-		printk("%.3x: %.8x\n", i, cedrus_read(dev, i));
-	printk("--eof--\n");*/
-	
-	//write_section("main section\n", dev->base, 0, 0xec);
-	//write_section("--eof--\n", dev->base, 0x300, 0xcc);
+#ifdef CEDRUS_VC1_DEBUG
+	write_section("main section\n", dev->base, 0, 0xec);
+	write_section("--eof--\n", dev->base, 0x300, 0xcc);
 	if (seq == 59)
 		kernel_write(f, ctx->codec.vc1.bitplanes_buf, BITPLANES_BUF_SIZE, &offset);
-	
 	seq++;
+#endif
 
 	cedrus_write(dev, VE_DEC_VC1_TRIGGER_TYPE,
 		     VE_DEC_VC1_TRIGGER_TYPE_DECODE);
