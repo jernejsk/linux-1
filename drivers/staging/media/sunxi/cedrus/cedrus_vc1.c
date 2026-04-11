@@ -457,7 +457,7 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 			else
 				reg = vc1_icf0_reg6c;
 			cedrus_write(dev, VE_ENGINE_DEC_VC1 + 0x6c, reg);
-		} else if (picture->ptype == VC1_PICTURE_TYPE_B) {
+		} else if (picture->ptype == VC1_PICTURE_TYPE_P) {
 			reg = VE_DEC_VC1_PICINTENCOMP_LUMASCALE1(picture->lumscale);
 			reg |= VE_DEC_VC1_PICINTENCOMP_LUMASHIFT1(picture->lumshift);
 			reg |= VE_DEC_VC1_PICINTENCOMP_LUMASCALE2(picture->lumscale2);
