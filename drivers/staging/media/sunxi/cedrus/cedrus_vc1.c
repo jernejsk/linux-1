@@ -511,8 +511,7 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	reg = 0;
 	if (raw_coding & V4L2_VC1_RAW_CODING_FLAG_FIELDTX)
 		reg |= VE_DEC_VC1_PICINTERLACE_FIELDTX_RAW;
-	//reg |= VE_DEC_VC1_PICINTERLACE_DMVRANGE(vc1_dmvrange_map[picture->dmvrange & 3]);
-	reg |= VE_DEC_VC1_PICINTERLACE_DMVRANGE(picture->dmvrange);
+	reg |= VE_DEC_VC1_PICINTERLACE_DMVRANGE(vc1_dmvrange_map[picture->dmvrange & 3]);
 	//if (picture->flags & V4L2_VC1_PICTURE_LAYER_FLAG_4MVSWITCH)
 	if (mvmode == VC1_MVMODE_1MV)
 	//if (picture->mvmode == VC1_MVMODE_1MV)
