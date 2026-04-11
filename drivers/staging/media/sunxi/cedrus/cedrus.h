@@ -172,6 +172,11 @@ struct cedrus_ctx {
 			dma_addr_t	acdc_buf_addr;
 			u8		*bitplanes_buf;
 			dma_addr_t	bitplanes_buf_addr;
+			u32		ic_oldval;
+			int		ic_intenen;
+			u32		ic_icb1_regbak;
+			u32		ic_icb0_reg68;
+			u32		ic_icf0_reg6c;
 		} vc1;
 	} codec;
 };

@@ -212,9 +212,6 @@ static void cedrus_vc1_irq_disable(struct cedrus_ctx *ctx)
 }
 
 static const unsigned int vc1_dmvrange_map[] = {0, 2, 1, 3};
-static u32 oldval;
-static int intenen;
-static u32 vc1_icb1_regbak, vc1_icb0_reg68, vc1_icf0_reg6c;
 
 static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 {
@@ -428,16 +425,16 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	reg |= VE_DEC_VC1_PICMV_MVMODE(vc1_mvmode_map[mvmode & 3]);
 	if (picture->fcm != VC1_FCM_INTERLACED_FIELD) {
 		if (picture->ptype == VC1_PICTURE_TYPE_B) {
-			if (intenen)
+			if (ctx->codec.vc1.ic_intenen)
 				reg |= VE_DEC_VC1_PICMV_INTENSITY_COMP_EN;
 		} else if (picture->flags & V4L2_VC1_PICTURE_LAYER_FLAG_INTCOMP) {
 			reg |= VE_DEC_VC1_PICMV_INTENSITY_COMP_EN;
 		}
 	}
 	if (picture->ptype == VC1_PICTURE_TYPE_P)
-		intenen = !!(reg & VE_DEC_VC1_PICMV_INTENSITY_COMP_EN);
+		ctx->codec.vc1.ic_intenen = !!(reg & VE_DEC_VC1_PICMV_INTENSITY_COMP_EN);
 	else if (picture->ptype == VC1_PICTURE_TYPE_I)
-		intenen = 0;
+		ctx->codec.vc1.ic_intenen = 0;
 	reg |= VE_DEC_VC1_PICMV_MVTAB(picture->mvtab);
 	if (raw_coding & V4L2_VC1_RAW_CODING_FLAG_MVTYPEMB)
 		reg |= VE_DEC_VC1_PICMV_MVTYPEMB_RAW;
@@ -448,15 +445,15 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 			cedrus_write(dev, VE_DEC_VC1_PICINTENCOMP, 0);
 			cedrus_write(dev, VE_ENGINE_DEC_VC1 + 0x68, 0);
 			cedrus_write(dev, VE_ENGINE_DEC_VC1 + 0x6c, 0);
-			vc1_icb1_regbak = 0;
-			vc1_icb0_reg68 = 0;
+			ctx->codec.vc1.ic_icb1_regbak = 0;
+			ctx->codec.vc1.ic_icb0_reg68 = 0;
 		} else if (picture->ptype == VC1_PICTURE_TYPE_B) {
-			cedrus_write(dev, VE_DEC_VC1_PICINTENCOMP, vc1_icb1_regbak & 0x3f3f3f3f);
-			cedrus_write(dev, VE_ENGINE_DEC_VC1 + 0x68, vc1_icb0_reg68);
+			cedrus_write(dev, VE_DEC_VC1_PICINTENCOMP, ctx->codec.vc1.ic_icb1_regbak & 0x3f3f3f3f);
+			cedrus_write(dev, VE_ENGINE_DEC_VC1 + 0x68, ctx->codec.vc1.ic_icb0_reg68);
 			if (second_field)
 				reg = 0;
 			else
-				reg = vc1_icf0_reg6c;
+				reg = ctx->codec.vc1.ic_icf0_reg6c;
 			cedrus_write(dev, VE_ENGINE_DEC_VC1 + 0x6c, reg);
 		} else if (picture->ptype == VC1_PICTURE_TYPE_P) {
 			reg = VE_DEC_VC1_PICINTENCOMP_LUMASCALE1(picture->lumscale);
@@ -465,15 +462,15 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 			reg |= VE_DEC_VC1_PICINTENCOMP_LUMASHIFT2(picture->lumshift2);
 			cedrus_write(dev, VE_DEC_VC1_PICINTENCOMP, reg);
 			if (!second_field) {
-				vc1_icf0_reg6c = vc1_icb1_regbak & 0xff3f3f3f;
-				cedrus_write(dev, VE_ENGINE_DEC_VC1 + 0x6c, vc1_icf0_reg6c);
+				ctx->codec.vc1.ic_icf0_reg6c = ctx->codec.vc1.ic_icb1_regbak & 0xff3f3f3f;
+				cedrus_write(dev, VE_ENGINE_DEC_VC1 + 0x6c, ctx->codec.vc1.ic_icf0_reg6c);
 				cedrus_write(dev, VE_ENGINE_DEC_VC1 + 0x68, 0);
-				vc1_icb0_reg68 = reg | VE_DEC_VC1_PICINTENCOMP_FIELD(picture->intcompfield);
+				ctx->codec.vc1.ic_icb0_reg68 = reg | VE_DEC_VC1_PICINTENCOMP_FIELD(picture->intcompfield);
 			} else {
 				cedrus_write(dev, VE_ENGINE_DEC_VC1 + 0x6c, 0);
-				cedrus_write(dev, VE_ENGINE_DEC_VC1 + 0x68, vc1_icb0_reg68);
-				vc1_icf0_reg6c = vc1_icb1_regbak & 0xff3f3f3f;
-				vc1_icb1_regbak = reg | VE_DEC_VC1_PICINTENCOMP_FIELD(picture->intcompfield);
+				cedrus_write(dev, VE_ENGINE_DEC_VC1 + 0x68, ctx->codec.vc1.ic_icb0_reg68);
+				ctx->codec.vc1.ic_icf0_reg6c = ctx->codec.vc1.ic_icb1_regbak & 0xff3f3f3f;
+				ctx->codec.vc1.ic_icb1_regbak = reg | VE_DEC_VC1_PICINTENCOMP_FIELD(picture->intcompfield);
 			}
 		}
 	} else {
@@ -484,9 +481,9 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 			reg |= VE_DEC_VC1_PICINTENCOMP_LUMASHIFT1(picture->lumshift);
 			reg |= VE_DEC_VC1_PICINTENCOMP_LUMASCALE2(picture->lumscale2);
 			reg |= VE_DEC_VC1_PICINTENCOMP_LUMASHIFT2(picture->lumshift2);
-			oldval = reg;
+			ctx->codec.vc1.ic_oldval = reg;
 		} else {
-			reg = oldval;
+			reg = ctx->codec.vc1.ic_oldval;
 		}
 		cedrus_write(dev, VE_DEC_VC1_PICINTENCOMP, reg);
 	}
@@ -526,7 +523,7 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	if (picture->fcm == VC1_FCM_INTERLACED_FIELD &&
 	    picture->ptype == VC1_PICTURE_TYPE_B)
 		reg |= VE_DEC_VC1_PICINTERLACE_INTENCOMPFLD(
-			(vc1_icb1_regbak >> 30) & 3);
+			(ctx->codec.vc1.ic_icb1_regbak >> 30) & 3);
 	else
 		reg |= VE_DEC_VC1_PICINTERLACE_INTENCOMPFLD(
 			picture->intcompfield);
@@ -612,9 +609,9 @@ static int cedrus_vc1_start(struct cedrus_ctx *ctx)
 	struct cedrus_dev *dev = ctx->dev;
 	int ret;
 	
-	oldval = 0;
-	intenen = false;
-	vc1_icb1_regbak = vc1_icb0_reg68 = vc1_icf0_reg6c = 0;
+	ctx->codec.vc1.ic_oldval = 0;
+	ctx->codec.vc1.ic_intenen = false;
+	ctx->codec.vc1.ic_icb1_regbak = ctx->codec.vc1.ic_icb0_reg68 = ctx->codec.vc1.ic_icf0_reg6c = 0;
 	seq = 0;
 	
 	f = filp_open("/root/out.bin", O_CREAT | O_WRONLY | O_TRUNC, 0666);
