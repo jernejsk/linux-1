@@ -693,6 +693,8 @@ static const struct sun8i_hdmi_phy_variant sun50i_h616_hdmi_phy = {
 	.phy_init = &sun50i_hdmi_phy_init_h6,
 };
 
+extern const struct sun8i_hdmi_phy_variant sun55i_a523_hdmi_phy;
+
 static const struct of_device_id sun8i_hdmi_phy_of_table[] = {
 	{
 		.compatible = "allwinner,sun8i-a83t-hdmi-phy",
@@ -717,6 +719,10 @@ static const struct of_device_id sun8i_hdmi_phy_of_table[] = {
 	{
 		.compatible = "allwinner,sun50i-h616-hdmi-phy",
 		.data = &sun50i_h616_hdmi_phy,
+	},
+	{
+		.compatible = "allwinner,sun55i-a523-hdmi-phy",
+		.data = &sun55i_a523_hdmi_phy,
 	},
 	{ /* sentinel */ }
 };
@@ -760,6 +766,7 @@ static int sun8i_hdmi_phy_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(regs),
 				     "Couldn't map the HDMI PHY registers\n");
 
+	phy->base = regs;
 	phy->regs = devm_regmap_init_mmio(dev, regs,
 					  &sun8i_hdmi_phy_regmap_config);
 	if (IS_ERR(phy->regs))

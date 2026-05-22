@@ -166,6 +166,7 @@ struct sun8i_hdmi_phy {
 	struct device			*dev;
 	unsigned int			rcal;
 	struct regmap			*regs;
+	void __iomem			*base;
 	struct reset_control		*rst_phy;
 	const struct sun8i_hdmi_phy_variant *variant;
 };
