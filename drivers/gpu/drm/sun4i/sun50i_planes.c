@@ -38,10 +38,36 @@ static const struct sun50i_planes_quirks sun50i_h616_planes_quirks = {
 	},
 };
 
+static const struct sun50i_planes_quirks sun55i_a523_planes_quirks = {
+	.def_map = {
+		{
+			.map = {0, 6, 7, 8},
+			.num_ch = 4,
+		},
+		{
+			.map = {2, 1, 9},
+			.num_ch = 3,
+		},
+	},
+	.cfg = {
+		.de_type	= SUN8I_MIXER_DE33,
+		/*
+		 * TODO: All planes support scaling, but driver needs
+		 * improvements to properly support it.
+		 */
+		.scaler_mask    = 0,
+		.scanline_yuv	= 4096,
+	},
+};
+
 static const struct of_device_id sun50i_planes_of_table[] = {
 	{
 		.compatible = "allwinner,sun50i-h616-de33-planes",
 		.data = &sun50i_h616_planes_quirks
+	},
+	{
+		.compatible = "allwinner,sun55i-a523-de35-planes",
+		.data = &sun55i_a523_planes_quirks
 	},
 	{ }
 };
