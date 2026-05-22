@@ -18,6 +18,9 @@
 struct sun8i_tcon_top_quirks {
 	bool has_tcon_tv1;
 	bool has_dsi;
+	bool no_mux;
+	u32 port_de0_msk;
+	u32 port_de1_msk;
 };
 
 static bool sun8i_tcon_top_node_is_tcon_top(struct device_node *node)
@@ -58,7 +61,7 @@ int sun8i_tcon_top_de_config(struct device *dev, int mixer, int tcon)
 {
 	struct sun8i_tcon_top *tcon_top = dev_get_drvdata(dev);
 	unsigned long flags;
-	u32 reg;
+	u32 reg, msk;
 
 	if (!sun8i_tcon_top_node_is_tcon_top(dev->of_node)) {
 		dev_err(dev, "Device is not TCON TOP!\n");
@@ -75,16 +78,16 @@ int sun8i_tcon_top_de_config(struct device *dev, int mixer, int tcon)
 		return -EINVAL;
 	}
 
+	if (tcon_top->no_mux)
+		return 0;
+
+	msk = mixer == 0 ? tcon_top->port_de0_msk : tcon_top->port_de1_msk;
+
 	spin_lock_irqsave(&tcon_top->reg_lock, flags);
 
 	reg = readl(tcon_top->regs + TCON_TOP_PORT_SEL_REG);
-	if (mixer == 0) {
-		reg &= ~TCON_TOP_PORT_DE0_MSK;
-		reg |= FIELD_PREP(TCON_TOP_PORT_DE0_MSK, tcon);
-	} else {
-		reg &= ~TCON_TOP_PORT_DE1_MSK;
-		reg |= FIELD_PREP(TCON_TOP_PORT_DE1_MSK, tcon);
-	}
+	reg &= ~msk;
+	reg |= (tcon << __ffs(msk)) & msk;
 	writel(reg, tcon_top->regs + TCON_TOP_PORT_SEL_REG);
 
 	spin_unlock_irqrestore(&tcon_top->reg_lock, flags);
@@ -158,6 +161,9 @@ static int sun8i_tcon_top_bind(struct device *dev, struct device *master,
 		return PTR_ERR(tcon_top->bus);
 	}
 
+	tcon_top->port_de0_msk = quirks->port_de0_msk;
+	tcon_top->port_de1_msk = quirks->port_de1_msk;
+
 	regs = devm_platform_ioremap_resource(pdev, 0);
 	tcon_top->regs = regs;
 	if (IS_ERR(regs))
@@ -174,6 +180,10 @@ static int sun8i_tcon_top_bind(struct device *dev, struct device *master,
 		dev_err(dev, "Could not enable bus clock\n");
 		goto err_assert_reset;
 	}
+
+	tcon_top->no_mux = quirks->no_mux;
+	if (tcon_top->no_mux)
+		goto skip_mux;
 
 	/*
 	 * At least on H6, some registers have some bits set by default
@@ -208,16 +218,20 @@ static int sun8i_tcon_top_bind(struct device *dev, struct device *master,
 						     &tcon_top->reg_lock,
 						     TCON_TOP_TCON_DSI_GATE, i++);
 
+skip_mux:
+
 	for (i = 0; i < CLK_NUM; i++)
 		if (IS_ERR(clk_data->hws[i])) {
 			ret = PTR_ERR(clk_data->hws[i]);
 			goto err_unregister_gates;
 		}
 
-	ret = of_clk_add_hw_provider(dev->of_node, of_clk_hw_onecell_get,
-				     clk_data);
-	if (ret)
-		goto err_unregister_gates;
+	if (!tcon_top->no_mux) {
+		ret = of_clk_add_hw_provider(dev->of_node,
+					     of_clk_hw_onecell_get, clk_data);
+		if (ret)
+			goto err_unregister_gates;
+	}
 
 	dev_set_drvdata(dev, tcon_top);
 
@@ -241,10 +255,12 @@ static void sun8i_tcon_top_unbind(struct device *dev, struct device *master,
 	struct clk_hw_onecell_data *clk_data = tcon_top->clk_data;
 	int i;
 
-	of_clk_del_provider(dev->of_node);
-	for (i = 0; i < CLK_NUM; i++)
-		if (clk_data->hws[i])
-			clk_hw_unregister_gate(clk_data->hws[i]);
+	if (!tcon_top->no_mux) {
+		of_clk_del_provider(dev->of_node);
+		for (i = 0; i < CLK_NUM; i++)
+			if (clk_data->hws[i])
+				clk_hw_unregister_gate(clk_data->hws[i]);
+	}
 
 	clk_disable_unprepare(tcon_top->bus);
 	reset_control_assert(tcon_top->rst);
@@ -268,18 +284,36 @@ static void sun8i_tcon_top_remove(struct platform_device *pdev)
 static const struct sun8i_tcon_top_quirks sun8i_r40_tcon_top_quirks = {
 	.has_tcon_tv1	= true,
 	.has_dsi	= true,
+	.port_de0_msk	= TCON_TOP_PORT_DE0_MSK,
+	.port_de1_msk	= TCON_TOP_PORT_DE1_MSK,
 };
 
 static const struct sun8i_tcon_top_quirks sun20i_d1_tcon_top_quirks = {
 	.has_dsi	= true,
+	.port_de0_msk	= TCON_TOP_PORT_DE0_MSK,
+	.port_de1_msk	= TCON_TOP_PORT_DE1_MSK,
 };
 
 static const struct sun8i_tcon_top_quirks sun50i_h6_tcon_top_quirks = {
-	/* Nothing special */
+	.port_de0_msk	= TCON_TOP_PORT_DE0_MSK,
+	.port_de1_msk	= TCON_TOP_PORT_DE1_MSK,
 };
 
 static const struct sun8i_tcon_top_quirks sun50i_h616_tcon_top_quirks = {
 	.has_tcon_tv1	= true,
+	.port_de0_msk	= TCON_TOP_PORT_DE0_MSK,
+	.port_de1_msk	= TCON_TOP_PORT_DE1_MSK,
+};
+
+static const struct sun8i_tcon_top_quirks sun55i_a523_tcon_top_quirks = {
+	.has_tcon_tv1	= true,
+	.has_dsi	= true,
+	.port_de0_msk	= A523_TCON_TOP_PORT_DE0_MSK,
+	.port_de1_msk	= A523_TCON_TOP_PORT_DE1_MSK,
+};
+
+static const struct sun8i_tcon_top_quirks sun55i_a523_tcon_top1_quirks = {
+	.no_mux		= true,
 };
 
 /* sun4i_drv uses this list to check if a device node is a TCON TOP */
@@ -299,6 +333,14 @@ const struct of_device_id sun8i_tcon_top_of_table[] = {
 	{
 		.compatible = "allwinner,sun50i-h616-tcon-top",
 		.data = &sun50i_h616_tcon_top_quirks
+	},
+	{
+		.compatible = "allwinner,sun55i-a523-tcon-top",
+		.data = &sun55i_a523_tcon_top_quirks
+	},
+	{
+		.compatible = "allwinner,sun55i-a523-tcon-top1",
+		.data = &sun55i_a523_tcon_top1_quirks
 	},
 	{ /* sentinel */ }
 };
