@@ -914,6 +914,11 @@ static const struct sun8i_mixer_cfg sun50i_h616_mixer0_cfg = {
 	.mod_rate	= 600000000,
 };
 
+static const struct sun8i_mixer_cfg sun55i_a523_mixer0_cfg = {
+	.de_type	= SUN8I_MIXER_DE33,
+	.mod_rate	= 600000000,
+};
+
 static const struct of_device_id sun8i_mixer_of_table[] = {
 	{
 		.compatible = "allwinner,sun8i-a83t-de2-mixer-0",
@@ -962,6 +967,10 @@ static const struct of_device_id sun8i_mixer_of_table[] = {
 	{
 		.compatible = "allwinner,sun50i-h616-de33-mixer-0",
 		.data = &sun50i_h616_mixer0_cfg,
+	},
+	{
+		.compatible = "allwinner,sun55i-a523-de35-mixer-0",
+		.data = &sun55i_a523_mixer0_cfg,
 	},
 	{ }
 };
