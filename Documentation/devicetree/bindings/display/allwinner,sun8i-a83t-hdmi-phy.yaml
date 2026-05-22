@@ -22,6 +22,7 @@ properties:
       - allwinner,sun50i-a64-hdmi-phy
       - allwinner,sun50i-h6-hdmi-phy
       - allwinner,sun50i-h616-hdmi-phy
+      - allwinner,sun55i-a523-hdmi-phy
 
   reg:
     maxItems: 1

@@ -40,6 +40,11 @@ properties:
 
       - items:
           - enum:
+              - allwinner,sun55i-a523-tcon-tv
+          - const: allwinner,sun50i-h616-tcon-tv
+
+      - items:
+          - enum:
               - allwinner,sun7i-a20-tcon0
               - allwinner,sun7i-a20-tcon1
           - const: allwinner,sun7i-a20-tcon
@@ -63,6 +68,7 @@ properties:
       - items:
           - enum:
               - allwinner,sun50i-h616-tcon-lcd
+              - allwinner,sun55i-a523-tcon-lcd
           - const: allwinner,sun8i-r40-tcon-lcd
 
   reg:
@@ -121,6 +127,9 @@ properties:
           - const: lcd
           - const: edp
           - const: lvds
+
+  power-domains:
+    maxItems: 1
 
   ports:
     $ref: /schemas/graph.yaml#/properties/ports

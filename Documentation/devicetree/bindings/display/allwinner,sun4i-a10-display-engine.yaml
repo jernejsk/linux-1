@@ -66,6 +66,7 @@ properties:
       - allwinner,sun50i-a64-display-engine
       - allwinner,sun50i-h6-display-engine
       - allwinner,sun50i-h616-display-engine
+      - allwinner,sun55i-a523-display-engine
 
   allwinner,pipelines:
     $ref: /schemas/types.yaml#/definitions/phandle-array
@@ -75,7 +76,7 @@ properties:
       maxItems: 1
     description: |
       Available display engine frontends (DE 1.0) or mixers (DE
-      2.0/3.0/3.3) available.
+      2.0/3.0/3.3/3.5) available.
 
 required:
   - compatible
@@ -98,6 +99,7 @@ if:
           - allwinner,sun20i-d1-display-engine
           - allwinner,sun50i-a64-display-engine
           - allwinner,sun50i-h616-display-engine
+          - allwinner,sun55i-a523-display-engine
 
 then:
   properties:

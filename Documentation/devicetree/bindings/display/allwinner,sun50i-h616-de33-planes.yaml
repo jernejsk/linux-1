@@ -4,20 +4,22 @@
 $id: http://devicetree.org/schemas/display/allwinner,sun50i-h616-de33-planes.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Allwinner H616 Display Engine 3.3 planes
+title: Allwinner H616 Display Engine 3.3 / A523 Display Engine 3.5 planes
 
 maintainers:
   - Jernej Skrabec <jernej.skrabec@gmail.com>
 
 description:
-  Display Engine 3.3 planes are independent of mixers, contrary to
-  previous generations of Display Engine. Planes can be assigned to
-  mixers independently and even dynamically during runtime.
+  Display Engine 3.3 (and Display Engine 3.5) planes are independent of
+  mixers, contrary to previous generations of Display Engine. Planes can
+  be assigned to mixers independently and even dynamically during
+  runtime.
 
 properties:
   compatible:
     enum:
       - allwinner,sun50i-h616-de33-planes
+      - allwinner,sun55i-a523-de35-planes
 
   reg:
     maxItems: 1
