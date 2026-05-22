@@ -249,6 +249,11 @@ static const struct sun8i_dw_hdmi_quirks sun50i_h6_quirks = {
 	.use_drm_infoframe = true,
 };
 
+static const struct sun8i_dw_hdmi_quirks sun55i_a523_quirks = {
+	.mode_valid = sun8i_dw_hdmi_mode_valid_h6,
+	.use_drm_infoframe = true,
+};
+
 static const struct of_device_id sun8i_dw_hdmi_dt_ids[] = {
 	{
 		.compatible = "allwinner,sun8i-a83t-dw-hdmi",
@@ -257,6 +262,10 @@ static const struct of_device_id sun8i_dw_hdmi_dt_ids[] = {
 	{
 		.compatible = "allwinner,sun50i-h6-dw-hdmi",
 		.data = &sun50i_h6_quirks,
+	},
+	{
+		.compatible = "allwinner,sun55i-a523-dw-hdmi",
+		.data = &sun55i_a523_quirks,
 	},
 	{ /* sentinel */ },
 };
