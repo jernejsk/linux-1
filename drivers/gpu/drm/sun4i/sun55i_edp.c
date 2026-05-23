@@ -102,6 +102,7 @@
 
 #define SUN55I_EDP_VIDEO_STREAM_EN	0x0200
 #define  SUN55I_EDP_VIDEO_STREAM_EN_BIT	BIT(5)
+#define  SUN55I_EDP_ASSR_EN		BIT(24)
 #define SUN55I_EDP_SYNC_POLARITY	0x020c
 #define  SUN55I_EDP_VSYNC_POL		BIT(0)
 #define  SUN55I_EDP_HSYNC_POL		BIT(1)
@@ -344,6 +345,7 @@ static void sun55i_edp_aux_clock_setup(struct sun55i_edp *edp, u32 bit_mhz);
 static void sun55i_edp_corepll_set(struct sun55i_edp *edp,
 				   const struct sun55i_edp_pll_cfg *cfg);
 static void sun55i_edp_ssc_set(struct sun55i_edp *edp, bool enable);
+static void sun55i_edp_assr_set(struct sun55i_edp *edp, bool enable);
 static int sun55i_edp_pixpll_set(struct sun55i_edp *edp, u32 pixel_khz);
 
 /*
@@ -661,6 +663,18 @@ static int sun55i_edp_link_train_at(struct sun55i_edp *edp, u8 link_rate,
 				 ssc ? DP_SPREAD_AMP_0_5 : 0);
 	if (ret < 0)
 		return ret;
+
+	if (edp->variant->connector_type == DRM_MODE_CONNECTOR_eDP &&
+	    (edp->dpcd[DP_EDP_CONFIGURATION_CAP] &
+	     DP_ALTERNATE_SCRAMBLER_RESET_CAP)) {
+		sun55i_edp_assr_set(edp, true);
+		ret = drm_dp_dpcd_writeb(&edp->aux, DP_EDP_CONFIGURATION_SET,
+					 DP_ALTERNATE_SCRAMBLER_RESET_ENABLE);
+		if (ret < 0)
+			return ret;
+	} else {
+		sun55i_edp_assr_set(edp, false);
+	}
 
 	ret = sun55i_edp_link_train_cr(edp, lanes);
 	if (ret < 0)
@@ -1155,6 +1169,17 @@ static void sun55i_edp_ssc_set(struct sun55i_edp *edp, bool enable)
 		val |= SUN55I_EDP_ANA_PLL_SSC_BYPASS;
 	}
 	writel(val, edp->regs + SUN55I_EDP_ANA_PLL_FBDIV);
+}
+
+static void sun55i_edp_assr_set(struct sun55i_edp *edp, bool enable)
+{
+	u32 val = readl(edp->regs + SUN55I_EDP_VIDEO_STREAM_EN);
+
+	if (enable)
+		val |= SUN55I_EDP_ASSR_EN;
+	else
+		val &= ~SUN55I_EDP_ASSR_EN;
+	writel(val, edp->regs + SUN55I_EDP_VIDEO_STREAM_EN);
 }
 
 struct sun55i_edp_pixpll {
