@@ -60,6 +60,7 @@
 #define  SUN55I_EDP_ANA_PLL_FRAC_PD	GENMASK(5, 4)
 #define  SUN55I_EDP_ANA_PLL_PREDIV	GENMASK(13, 8)
 #define  SUN55I_EDP_ANA_PLL_FBDIV_H4	GENMASK(19, 16)
+#define  SUN55I_EDP_ANA_PLL_SSC_BYPASS	BIT(21)
 #define  SUN55I_EDP_ANA_PLL_FBDIV_L8	GENMASK(31, 24)
 #define SUN55I_EDP_ANA_PLL_FRAC		0x0184
 #define  SUN55I_EDP_ANA_PLL_FRAC_H8	GENMASK(7, 0)
@@ -200,6 +201,7 @@ struct sun55i_edp {
 
 	/* Training swing/pre-emphasis variant (0 = low, 1 = high, 2 = wide). */
 	u8			train_param;
+	bool			ssc_disabled;
 
 	struct work_struct	hpd_work;
 
@@ -341,6 +343,7 @@ static const struct sun55i_edp_pll_cfg sun55i_edp_pll_hbr;
 static void sun55i_edp_aux_clock_setup(struct sun55i_edp *edp, u32 bit_mhz);
 static void sun55i_edp_corepll_set(struct sun55i_edp *edp,
 				   const struct sun55i_edp_pll_cfg *cfg);
+static void sun55i_edp_ssc_set(struct sun55i_edp *edp, bool enable);
 static int sun55i_edp_pixpll_set(struct sun55i_edp *edp, u32 pixel_khz);
 
 /*
@@ -625,6 +628,7 @@ static int sun55i_edp_link_train_at(struct sun55i_edp *edp, u8 link_rate,
 				    u8 lanes)
 {
 	const struct sun55i_edp_pll_cfg *pll_cfg;
+	bool ssc;
 	u8 value;
 	int ret;
 
@@ -633,6 +637,11 @@ static int sun55i_edp_link_train_at(struct sun55i_edp *edp, u8 link_rate,
 	sun55i_edp_aux_clock_setup(edp,
 				   link_rate == DP_LINK_BW_2_7 ? 1350 : 810);
 	sun55i_edp_corepll_set(edp, pll_cfg);
+
+	ssc = !edp->ssc_disabled &&
+	      (edp->dpcd[DP_MAX_DOWNSPREAD] & DP_MAX_DOWNSPREAD_0_5);
+	sun55i_edp_ssc_set(edp, ssc);
+
 	usleep_range(500, 1000);
 
 	sun55i_edp_train_set_rate(edp, link_rate);
@@ -645,6 +654,11 @@ static int sun55i_edp_link_train_at(struct sun55i_edp *edp, u8 link_rate,
 	if (drm_dp_enhanced_frame_cap(edp->dpcd))
 		value |= DP_LANE_COUNT_ENHANCED_FRAME_EN;
 	ret = drm_dp_dpcd_writeb(&edp->aux, DP_LANE_COUNT_SET, value);
+	if (ret < 0)
+		return ret;
+
+	ret = drm_dp_dpcd_writeb(&edp->aux, DP_DOWNSPREAD_CTRL,
+				 ssc ? DP_SPREAD_AMP_0_5 : 0);
 	if (ret < 0)
 		return ret;
 
@@ -1109,6 +1123,8 @@ static void sun55i_edp_corepll_set(struct sun55i_edp *edp,
 	val |= FIELD_PREP(SUN55I_EDP_ANA_PLL_FBDIV_H4, cfg->fbdiv_h4);
 	val |= FIELD_PREP(SUN55I_EDP_ANA_PLL_FBDIV_L8, cfg->fbdiv_l8);
 	val |= FIELD_PREP(SUN55I_EDP_ANA_PLL_FRAC_PD, cfg->frac_pd);
+	/* Default to SSC bypassed; sun55i_edp_ssc_set() flips it later. */
+	val |= SUN55I_EDP_ANA_PLL_SSC_BYPASS;
 	writel(val, edp->regs + SUN55I_EDP_ANA_PLL_FBDIV);
 
 	val = readl(edp->regs + SUN55I_EDP_ANA_PLL_POSDIV);
@@ -1124,6 +1140,20 @@ static void sun55i_edp_corepll_set(struct sun55i_edp *edp,
 	/* power up */
 	val = readl(edp->regs + SUN55I_EDP_ANA_PLL_FBDIV);
 	val &= ~SUN55I_EDP_ANA_PLL_PD;
+	writel(val, edp->regs + SUN55I_EDP_ANA_PLL_FBDIV);
+}
+
+static void sun55i_edp_ssc_set(struct sun55i_edp *edp, bool enable)
+{
+	u32 val = readl(edp->regs + SUN55I_EDP_ANA_PLL_FBDIV);
+
+	val &= ~SUN55I_EDP_ANA_PLL_FRAC_PD;
+	if (enable) {
+		val &= ~SUN55I_EDP_ANA_PLL_SSC_BYPASS;
+	} else {
+		val |= FIELD_PREP(SUN55I_EDP_ANA_PLL_FRAC_PD, 0x3);
+		val |= SUN55I_EDP_ANA_PLL_SSC_BYPASS;
+	}
 	writel(val, edp->regs + SUN55I_EDP_ANA_PLL_FBDIV);
 }
 
@@ -1569,6 +1599,9 @@ static int sun55i_edp_probe(struct platform_device *pdev)
 			 edp->train_param);
 		edp->train_param = 0;
 	}
+
+	edp->ssc_disabled = of_property_read_bool(dev->of_node,
+						  "allwinner,ssc-disable");
 
 	edp->vdd_supply = devm_regulator_get_optional(dev, "vdd");
 	if (IS_ERR(edp->vdd_supply)) {

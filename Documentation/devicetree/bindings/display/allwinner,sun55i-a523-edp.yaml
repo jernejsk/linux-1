@@ -67,6 +67,14 @@ properties:
             attenuation.
         2 - wide swing (200-500 mV), covers both.
 
+  allwinner,ssc-disable:
+    type: boolean
+    description: |
+      Force spread-spectrum clocking off even if the sink
+      advertises support for it. Useful on boards where downspread
+      causes interoperability problems with the attached panel or
+      cable.
+
   ports:
     $ref: /schemas/graph.yaml#/properties/ports
 
