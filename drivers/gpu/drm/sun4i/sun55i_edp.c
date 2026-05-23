@@ -28,6 +28,7 @@
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_bridge.h>
 #include <drm/drm_drv.h>
+#include <drm/drm_edid.h>
 #include <drm/drm_of.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_simple_kms_helper.h>
@@ -234,8 +235,19 @@ static const struct drm_bridge_funcs sun55i_edp_bridge_funcs = {
 
 static int sun55i_edp_connector_get_modes(struct drm_connector *connector)
 {
-	/* TODO: read EDID via AUX once AUX transfer is implemented. */
-	return 0;
+	struct sun55i_edp *edp = connector_to_sun55i_edp(connector);
+	const struct drm_edid *drm_edid;
+	int count;
+
+	if (!edp->plugged)
+		return 0;
+
+	drm_edid = drm_edid_read_ddc(connector, &edp->aux.ddc);
+	drm_edid_connector_update(connector, drm_edid);
+	count = drm_edid_connector_add_modes(connector);
+	drm_edid_free(drm_edid);
+
+	return count;
 }
 
 static const struct drm_connector_helper_funcs sun55i_edp_connector_helper_funcs = {
