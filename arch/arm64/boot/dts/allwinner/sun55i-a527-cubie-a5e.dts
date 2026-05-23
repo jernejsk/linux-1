@@ -33,6 +33,17 @@
 		};
 	};
 
+	dp-connector {
+		compatible = "dp-connector";
+		type = "full-size";
+
+		port {
+			dp_con_in: endpoint {
+				remote-endpoint = <&edp_out_con>;
+			};
+		};
+	};
+
 	leds {
 		compatible = "gpio-leds";
 
@@ -124,6 +135,20 @@
 	hdmi_out_con: endpoint {
 		remote-endpoint = <&hdmi_con_in>;
 	};
+};
+
+&edp {
+	status = "okay";
+};
+
+&edp_out {
+	edp_out_con: endpoint {
+		remote-endpoint = <&dp_con_in>;
+	};
+};
+
+&tcon_tv1 {
+	status = "okay";
 };
 
 &mdio0 {
