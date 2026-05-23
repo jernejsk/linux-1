@@ -25,6 +25,7 @@
 #include <linux/reset.h>
 
 #include <drm/display/drm_dp_helper.h>
+#include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_bridge.h>
 #include <drm/drm_drv.h>
@@ -80,6 +81,29 @@
 #define SUN55I_EDP_RES1000_CFG		0x2014
 #define  SUN55I_EDP_RES1000_CFG_VAL	GENMASK(5, 0)
 #define  SUN55I_EDP_RES1000_CFG_EN	BIT(8)
+
+#define SUN55I_EDP_VIDEO_STREAM_EN	0x0200
+#define  SUN55I_EDP_VIDEO_STREAM_EN_BIT	BIT(5)
+#define SUN55I_EDP_SYNC_POLARITY	0x020c
+#define  SUN55I_EDP_VSYNC_POL		BIT(0)
+#define  SUN55I_EDP_HSYNC_POL		BIT(1)
+#define SUN55I_EDP_HACTIVE_BLANK	0x0210
+#define  SUN55I_EDP_HACTIVE		GENMASK(31, 16)
+#define  SUN55I_EDP_HBLANK		GENMASK(15, 2)
+#define SUN55I_EDP_VACTIVE_BLANK	0x0214
+#define  SUN55I_EDP_VACTIVE		GENMASK(15, 0)
+#define  SUN55I_EDP_VBLANK		GENMASK(31, 16)
+#define SUN55I_EDP_HSW_FRONT_PORCH	0x0218
+#define  SUN55I_EDP_HSW			GENMASK(31, 16)
+#define  SUN55I_EDP_HFP			GENMASK(15, 0)
+#define SUN55I_EDP_VSW_FRONT_PORCH	0x021c
+#define  SUN55I_EDP_VSW			GENMASK(31, 16)
+#define  SUN55I_EDP_VFP			GENMASK(15, 0)
+#define SUN55I_EDP_SYNC_START		0x0224
+#define  SUN55I_EDP_HSTART		GENMASK(15, 0)
+#define  SUN55I_EDP_VSTART		GENMASK(31, 16)
+#define SUN55I_EDP_CAPACITY		0x0100
+#define  SUN55I_EDP_CAPACITY_LINK_RESET	(GENMASK(11, 0) | GENMASK(28, 26))
 
 #define SUN55I_EDP_PHY_AUX		0x0400
 #define SUN55I_EDP_AUX_TIMEOUT		0x0404
@@ -249,16 +273,109 @@ static int sun55i_edp_bridge_attach(struct drm_bridge *bridge,
 	return 0;
 }
 
+static void sun55i_edp_set_video_timings(struct sun55i_edp *edp,
+					 const struct drm_display_mode *mode)
+{
+	u32 val;
+	u16 hactive = mode->hdisplay;
+	u16 hblank = mode->htotal - mode->hdisplay;
+	u16 hfp = mode->hsync_start - mode->hdisplay;
+	u16 hsw = mode->hsync_end - mode->hsync_start;
+	u16 hbp = mode->htotal - mode->hsync_end;
+	u16 vactive = mode->vdisplay;
+	u16 vblank = mode->vtotal - mode->vdisplay;
+	u16 vfp = mode->vsync_start - mode->vdisplay;
+	u16 vsw = mode->vsync_end - mode->vsync_start;
+	u16 vbp = mode->vtotal - mode->vsync_end;
+
+	val = readl(edp->regs + SUN55I_EDP_SYNC_POLARITY);
+	val &= ~(SUN55I_EDP_HSYNC_POL | SUN55I_EDP_VSYNC_POL);
+	if (mode->flags & DRM_MODE_FLAG_PHSYNC)
+		val |= SUN55I_EDP_HSYNC_POL;
+	if (mode->flags & DRM_MODE_FLAG_PVSYNC)
+		val |= SUN55I_EDP_VSYNC_POL;
+	writel(val, edp->regs + SUN55I_EDP_SYNC_POLARITY);
+
+	val = readl(edp->regs + SUN55I_EDP_HACTIVE_BLANK);
+	val &= ~(SUN55I_EDP_HACTIVE | SUN55I_EDP_HBLANK);
+	val |= FIELD_PREP(SUN55I_EDP_HACTIVE, hactive);
+	val |= FIELD_PREP(SUN55I_EDP_HBLANK, hblank);
+	writel(val, edp->regs + SUN55I_EDP_HACTIVE_BLANK);
+
+	val = readl(edp->regs + SUN55I_EDP_VACTIVE_BLANK);
+	val &= ~(SUN55I_EDP_VACTIVE | SUN55I_EDP_VBLANK);
+	val |= FIELD_PREP(SUN55I_EDP_VACTIVE, vactive);
+	val |= FIELD_PREP(SUN55I_EDP_VBLANK, vblank);
+	writel(val, edp->regs + SUN55I_EDP_VACTIVE_BLANK);
+
+	val = readl(edp->regs + SUN55I_EDP_SYNC_START);
+	val &= ~(SUN55I_EDP_HSTART | SUN55I_EDP_VSTART);
+	val |= FIELD_PREP(SUN55I_EDP_HSTART, hsw + hbp);
+	val |= FIELD_PREP(SUN55I_EDP_VSTART, vsw + vbp);
+	writel(val, edp->regs + SUN55I_EDP_SYNC_START);
+
+	val = FIELD_PREP(SUN55I_EDP_HSW, hsw) |
+	      FIELD_PREP(SUN55I_EDP_HFP, hfp);
+	writel(val, edp->regs + SUN55I_EDP_HSW_FRONT_PORCH);
+
+	val = FIELD_PREP(SUN55I_EDP_VSW, vsw) |
+	      FIELD_PREP(SUN55I_EDP_VFP, vfp);
+	writel(val, edp->regs + SUN55I_EDP_VSW_FRONT_PORCH);
+}
+
+static const struct drm_display_mode *
+sun55i_edp_get_adjusted_mode(struct drm_bridge *bridge,
+			     struct drm_atomic_state *state)
+{
+	struct drm_connector *connector;
+	struct drm_connector_state *conn_state;
+	struct drm_crtc_state *crtc_state;
+
+	connector = drm_atomic_get_new_connector_for_encoder(state,
+							     bridge->encoder);
+	if (!connector)
+		return NULL;
+	conn_state = drm_atomic_get_new_connector_state(state, connector);
+	if (!conn_state || !conn_state->crtc)
+		return NULL;
+	crtc_state = drm_atomic_get_new_crtc_state(state, conn_state->crtc);
+	if (!crtc_state)
+		return NULL;
+
+	return &crtc_state->adjusted_mode;
+}
+
 static void sun55i_edp_bridge_atomic_enable(struct drm_bridge *bridge,
 					    struct drm_atomic_state *state)
 {
-	/* TODO: link training + video stream enable. */
+	struct sun55i_edp *edp = bridge_to_sun55i_edp(bridge);
+	const struct drm_display_mode *mode;
+	u32 val;
+
+	mode = sun55i_edp_get_adjusted_mode(bridge, state);
+	if (mode)
+		sun55i_edp_set_video_timings(edp, mode);
+
+	/* TODO: link training + transfer-unit programming. */
+
+	val = readl(edp->regs + SUN55I_EDP_VIDEO_STREAM_EN);
+	val |= SUN55I_EDP_VIDEO_STREAM_EN_BIT;
+	writel(val, edp->regs + SUN55I_EDP_VIDEO_STREAM_EN);
 }
 
 static void sun55i_edp_bridge_atomic_disable(struct drm_bridge *bridge,
 					     struct drm_atomic_state *state)
 {
-	/* TODO: video stream disable + link teardown. */
+	struct sun55i_edp *edp = bridge_to_sun55i_edp(bridge);
+	u32 val;
+
+	val = readl(edp->regs + SUN55I_EDP_VIDEO_STREAM_EN);
+	val &= ~SUN55I_EDP_VIDEO_STREAM_EN_BIT;
+	writel(val, edp->regs + SUN55I_EDP_VIDEO_STREAM_EN);
+
+	val = readl(edp->regs + SUN55I_EDP_CAPACITY);
+	val &= ~SUN55I_EDP_CAPACITY_LINK_RESET;
+	writel(val, edp->regs + SUN55I_EDP_CAPACITY);
 }
 
 static const struct drm_bridge_funcs sun55i_edp_bridge_funcs = {
