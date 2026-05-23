@@ -87,6 +87,11 @@ struct sun55i_edp {
 	struct drm_connector	connector;
 
 	bool			plugged;
+
+	/* Cached sink capabilities. Populated on plug-in. */
+	u8			dpcd[DP_RECEIVER_CAP_SIZE];
+	u8			max_lane_count;
+	u8			max_link_rate;
 };
 
 static inline struct sun55i_edp *bridge_to_sun55i_edp(struct drm_bridge *b)
@@ -333,6 +338,26 @@ static void sun55i_edp_hpd_disable(struct sun55i_edp *edp)
 	writel(0, edp->regs + SUN55I_EDP_HPD_EN);
 }
 
+static void sun55i_edp_read_sink_caps(struct sun55i_edp *edp)
+{
+	int ret;
+
+	ret = drm_dp_read_dpcd_caps(&edp->aux, edp->dpcd);
+	if (ret < 0) {
+		dev_dbg(edp->dev, "Failed to read DPCD: %d\n", ret);
+		memset(edp->dpcd, 0, sizeof(edp->dpcd));
+		edp->max_lane_count = 0;
+		edp->max_link_rate = 0;
+		return;
+	}
+
+	edp->max_lane_count = drm_dp_max_lane_count(edp->dpcd);
+	edp->max_link_rate = drm_dp_max_link_rate(edp->dpcd) / 1000;
+	dev_dbg(edp->dev, "Sink: DPCD rev 0x%02x, %u lanes, max %u kHz\n",
+		edp->dpcd[DP_DPCD_REV], edp->max_lane_count,
+		drm_dp_max_link_rate(edp->dpcd));
+}
+
 static irqreturn_t sun55i_edp_irq(int irq, void *data)
 {
 	struct sun55i_edp *edp = data;
@@ -345,6 +370,7 @@ static irqreturn_t sun55i_edp_irq(int irq, void *data)
 		writel(SUN55I_EDP_HPD_PLUG_IN,
 		       edp->regs + SUN55I_EDP_HPD_PLUG);
 		edp->plugged = true;
+		sun55i_edp_read_sink_caps(edp);
 		changed = true;
 	}
 
@@ -352,6 +378,9 @@ static irqreturn_t sun55i_edp_irq(int irq, void *data)
 		writel(SUN55I_EDP_HPD_PLUG_OUT,
 		       edp->regs + SUN55I_EDP_HPD_PLUG);
 		edp->plugged = false;
+		memset(edp->dpcd, 0, sizeof(edp->dpcd));
+		edp->max_lane_count = 0;
+		edp->max_link_rate = 0;
 		changed = true;
 	}
 
@@ -390,6 +419,9 @@ static int sun55i_edp_bind(struct device *dev, struct device *master,
 	ret = drm_dp_aux_register(&edp->aux);
 	if (ret)
 		goto err_disable_hpd;
+
+	if (edp->plugged)
+		sun55i_edp_read_sink_caps(edp);
 
 	drm_simple_encoder_init(drm, &edp->encoder, DRM_MODE_ENCODER_TMDS);
 	edp->encoder.possible_crtcs =
