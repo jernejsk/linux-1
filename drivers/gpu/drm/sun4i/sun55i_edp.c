@@ -35,12 +35,24 @@
 /* Subset of Innosilicon eDP 1.3 registers needed for boot-time setup. */
 #define SUN55I_EDP_RESET		0x001c
 #define SUN55I_EDP_HPD_EVENT		0x0080
+#define  SUN55I_EDP_HPD_EVENT_AUX_REPLY	BIT(1)
 #define SUN55I_EDP_HPD_INT		0x0084
 #define SUN55I_EDP_HPD_PLUG		0x0088
+#define  SUN55I_EDP_HPD_PLUG_IN		BIT(1)
+#define  SUN55I_EDP_HPD_PLUG_OUT	BIT(2)
 #define SUN55I_EDP_HPD_EN		0x008c
 
-#define SUN55I_EDP_HPD_PLUG_IN		BIT(1)
-#define SUN55I_EDP_HPD_PLUG_OUT		BIT(2)
+#define SUN55I_EDP_PHY_AUX		0x0400
+#define SUN55I_EDP_AUX_TIMEOUT		0x0404
+#define  SUN55I_EDP_AUX_TIMEOUT_STATUS	GENMASK(17, 16)
+#define  SUN55I_EDP_AUX_REPLY_TYPE	GENMASK(27, 24)
+#define  SUN55I_EDP_AUX_REPLY_CODE	GENMASK(7, 4)
+#define  SUN55I_EDP_AUX_REPLY_NO_STOP	0xe
+#define SUN55I_EDP_AUX_DATA0		0x0408
+#define SUN55I_EDP_AUX_START		0x0418
+
+#define SUN55I_EDP_AUX_BLOCK_MAX	16
+#define SUN55I_EDP_AUX_TIMEOUT_US	50000
 
 struct sun55i_edp_variant {
 	int connector_type;
@@ -78,11 +90,103 @@ static inline struct sun55i_edp *connector_to_sun55i_edp(struct drm_connector *c
 	return container_of(c, struct sun55i_edp, connector);
 }
 
+static void sun55i_edp_aux_clear_reply(struct sun55i_edp *edp)
+{
+	u32 val = readl(edp->regs + SUN55I_EDP_HPD_EVENT);
+
+	writel(val | SUN55I_EDP_HPD_EVENT_AUX_REPLY,
+	       edp->regs + SUN55I_EDP_HPD_EVENT);
+}
+
 static ssize_t sun55i_edp_aux_transfer(struct drm_dp_aux *aux,
 				       struct drm_dp_aux_msg *msg)
 {
-	/* AUX channel transfer is implemented in a follow-up patch. */
-	return -EOPNOTSUPP;
+	struct sun55i_edp *edp = container_of(aux, struct sun55i_edp, aux);
+	bool is_write;
+	u32 request, val;
+	int ret, i;
+
+	if (msg->size > SUN55I_EDP_AUX_BLOCK_MAX)
+		return -E2BIG;
+	if (msg->size && !msg->buffer)
+		return -EINVAL;
+
+	is_write = (msg->request & ~DP_AUX_I2C_MOT) == DP_AUX_NATIVE_WRITE ||
+		   (msg->request & ~DP_AUX_I2C_MOT) == DP_AUX_I2C_WRITE;
+
+	/* Pre-clear request, data and any pending AUX reply event. */
+	writel(0, edp->regs + SUN55I_EDP_PHY_AUX);
+	for (i = 0; i < 4; i++)
+		writel(0, edp->regs + SUN55I_EDP_AUX_DATA0 + i * 4);
+	sun55i_edp_aux_clear_reply(edp);
+
+	if (is_write) {
+		u32 buf[4] = { 0 };
+		const u8 *src = msg->buffer;
+
+		for (i = 0; i < msg->size; i++)
+			buf[i / 4] |= src[i] << ((i % 4) * 8);
+		for (i = 0; i < DIV_ROUND_UP(msg->size, 4); i++) {
+			writel(buf[i],
+			       edp->regs + SUN55I_EDP_AUX_DATA0 + i * 4);
+			usleep_range(10, 20);
+		}
+	}
+
+	request = (msg->size ? (msg->size - 1) : 0) & 0x1f;
+	request |= FIELD_PREP(GENMASK(27, 8), msg->address);
+	request |= FIELD_PREP(GENMASK(31, 28), msg->request);
+	writel(request, edp->regs + SUN55I_EDP_PHY_AUX);
+	udelay(1);
+	writel(1, edp->regs + SUN55I_EDP_AUX_START);
+
+	ret = readl_poll_timeout(edp->regs + SUN55I_EDP_HPD_EVENT, val,
+				 val & SUN55I_EDP_HPD_EVENT_AUX_REPLY,
+				 5, SUN55I_EDP_AUX_TIMEOUT_US);
+	if (ret) {
+		dev_dbg(edp->dev, "AUX request 0x%08x timed out\n", request);
+		ret = -ETIMEDOUT;
+		goto out;
+	}
+
+	ret = readl_poll_timeout(edp->regs + SUN55I_EDP_AUX_TIMEOUT, val,
+				 FIELD_GET(SUN55I_EDP_AUX_TIMEOUT_STATUS, val) == 0,
+				 5, SUN55I_EDP_AUX_TIMEOUT_US);
+	if (ret) {
+		dev_dbg(edp->dev, "AUX reply for 0x%08x timed out\n", request);
+		ret = -ETIMEDOUT;
+		goto out;
+	}
+
+	val = readl(edp->regs + SUN55I_EDP_AUX_TIMEOUT);
+	if (FIELD_GET(SUN55I_EDP_AUX_REPLY_TYPE, val) ==
+	    SUN55I_EDP_AUX_REPLY_NO_STOP) {
+		dev_dbg(edp->dev, "AUX reply for 0x%08x lacked STOP\n",
+			request);
+		ret = -EIO;
+		goto out;
+	}
+
+	msg->reply = FIELD_GET(SUN55I_EDP_AUX_REPLY_CODE, val);
+
+	if (!is_write && msg->reply == DP_AUX_NATIVE_REPLY_ACK) {
+		u32 buf[4];
+		u8 *dst = msg->buffer;
+
+		for (i = 0; i < 4; i++) {
+			buf[i] = readl(edp->regs +
+				       SUN55I_EDP_AUX_DATA0 + i * 4);
+			usleep_range(10, 20);
+		}
+		for (i = 0; i < msg->size; i++)
+			dst[i] = (buf[i / 4] >> ((i % 4) * 8)) & 0xff;
+	}
+
+	ret = msg->size;
+
+out:
+	sun55i_edp_aux_clear_reply(edp);
+	return ret;
 }
 
 static int sun55i_edp_bridge_attach(struct drm_bridge *bridge,
