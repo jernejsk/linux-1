@@ -551,17 +551,12 @@ static int sun55i_edp_link_train_eq(struct sun55i_edp *edp, u8 lanes)
 	return -EIO;
 }
 
-static int sun55i_edp_link_train(struct sun55i_edp *edp)
+static int sun55i_edp_link_train_at(struct sun55i_edp *edp, u8 link_rate,
+				    u8 lanes)
 {
 	const struct sun55i_edp_pll_cfg *pll_cfg;
-	u8 link_rate, lanes, value;
+	u8 value;
 	int ret;
-
-	if (!edp->plugged || !edp->max_link_rate || !edp->max_lane_count)
-		return -ENODEV;
-
-	link_rate = min_t(u8, edp->max_link_rate, DP_LINK_BW_2_7);
-	lanes = min_t(u8, edp->max_lane_count, 4);
 
 	pll_cfg = (link_rate == DP_LINK_BW_2_7) ? &sun55i_edp_pll_hbr
 						: &sun55i_edp_pll_rbr;
@@ -584,19 +579,48 @@ static int sun55i_edp_link_train(struct sun55i_edp *edp)
 		return ret;
 
 	ret = sun55i_edp_link_train_cr(edp, lanes);
-	if (ret < 0) {
-		dev_warn(edp->dev,
-			 "Clock recovery failed (%d), continuing.\n", ret);
-	} else {
-		ret = sun55i_edp_link_train_eq(edp, lanes);
-		if (ret < 0)
-			dev_warn(edp->dev,
-				 "Channel EQ failed (%d), continuing.\n", ret);
-	}
+	if (ret < 0)
+		goto out;
 
+	ret = sun55i_edp_link_train_eq(edp, lanes);
+
+out:
 	sun55i_edp_train_set_pattern(edp, 0);
 	drm_dp_dpcd_writeb(&edp->aux, DP_TRAINING_PATTERN_SET,
 			   DP_TRAINING_PATTERN_DISABLE);
+	return ret;
+}
+
+static int sun55i_edp_link_train(struct sun55i_edp *edp)
+{
+	static const u8 link_rates[] = { DP_LINK_BW_2_7, DP_LINK_BW_1_62 };
+	u8 lanes, start_rate;
+	unsigned int i;
+	int ret = -EIO;
+
+	if (!edp->plugged || !edp->max_link_rate || !edp->max_lane_count)
+		return -ENODEV;
+
+	lanes = min_t(u8, edp->max_lane_count, 4);
+	start_rate = min_t(u8, edp->max_link_rate, DP_LINK_BW_2_7);
+
+	for (i = 0; i < ARRAY_SIZE(link_rates); i++) {
+		if (link_rates[i] > start_rate)
+			continue;
+
+		ret = sun55i_edp_link_train_at(edp, link_rates[i], lanes);
+		if (!ret) {
+			dev_dbg(edp->dev,
+				"Link trained at rate 0x%02x, %u lanes\n",
+				link_rates[i], lanes);
+			return 0;
+		}
+		dev_dbg(edp->dev,
+			"Training at rate 0x%02x failed (%d), trying slower.\n",
+			link_rates[i], ret);
+	}
+
+	dev_warn(edp->dev, "All link rates failed; last err %d\n", ret);
 	return ret;
 }
 
@@ -837,7 +861,7 @@ struct sun55i_edp_pll_cfg {
 	u8	frac_l8;
 };
 
-static const struct sun55i_edp_pll_cfg __maybe_unused sun55i_edp_pll_rbr = {
+static const struct sun55i_edp_pll_cfg sun55i_edp_pll_rbr = {
 	.prediv = 0x2, .fbdiv_l8 = 0x87, .postdiv = 0x1, .frac_pd = 0x3,
 };
 
