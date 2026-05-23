@@ -66,6 +66,20 @@
 #define  SUN55I_EDP_ANA_PLL_POSDIV_V	GENMASK(3, 2)
 #define SUN55I_EDP_ANA_AUX_CLOCK	0x018c
 #define  SUN55I_EDP_ANA_AUX_CLOCK_16M_DIV	GENMASK(4, 0)
+#define SUN55I_EDP_ANA_PIXPLL_FBDIV	0x0190
+#define  SUN55I_EDP_ANA_PIXPLL_PD		BIT(0)
+#define  SUN55I_EDP_ANA_PIXPLL_FRAC_PD		GENMASK(5, 4)
+#define  SUN55I_EDP_ANA_PIXPLL_PREDIV		GENMASK(13, 8)
+#define  SUN55I_EDP_ANA_PIXPLL_FBDIV_H4		GENMASK(19, 16)
+#define  SUN55I_EDP_ANA_PIXPLL_FBDIV_L8		GENMASK(31, 24)
+#define SUN55I_EDP_ANA_PIXPLL_DIV	0x0194
+#define  SUN55I_EDP_ANA_PIXPLL_DIVA		GENMASK(4, 0)
+#define  SUN55I_EDP_ANA_PIXPLL_DIVB		GENMASK(9, 8)
+#define  SUN55I_EDP_ANA_PIXPLL_DIVC		GENMASK(20, 16)
+#define SUN55I_EDP_ANA_PIXPLL_FRAC	0x019c
+#define  SUN55I_EDP_ANA_PIXPLL_FRAC_H8		GENMASK(7, 0)
+#define  SUN55I_EDP_ANA_PIXPLL_FRAC_M8		GENMASK(15, 8)
+#define  SUN55I_EDP_ANA_PIXPLL_FRAC_L8		GENMASK(23, 16)
 #define SUN55I_EDP_AUX_ISEL_MAINSET	0x01a0
 #define  SUN55I_EDP_AUX_ISEL_MASK	GENMASK(7, 4)
 #define  SUN55I_EDP_AUX_MAINSET_MASK	GENMASK(11, 8)
@@ -294,6 +308,7 @@ static const struct sun55i_edp_pll_cfg sun55i_edp_pll_hbr;
 static void sun55i_edp_aux_clock_setup(struct sun55i_edp *edp, u32 bit_mhz);
 static void sun55i_edp_corepll_set(struct sun55i_edp *edp,
 				   const struct sun55i_edp_pll_cfg *cfg);
+static int sun55i_edp_pixpll_set(struct sun55i_edp *edp, u32 pixel_khz);
 
 /* Voltage-swing / pre-emphasis table for low-voltage eDP panels (param 0). */
 struct sun55i_edp_train_lvl {
@@ -704,8 +719,10 @@ static void sun55i_edp_bridge_atomic_enable(struct drm_bridge *bridge,
 	u32 val;
 
 	mode = sun55i_edp_get_adjusted_mode(bridge, state);
-	if (mode)
+	if (mode) {
 		sun55i_edp_set_video_timings(edp, mode);
+		sun55i_edp_pixpll_set(edp, mode->clock);
+	}
 
 	if (sun55i_edp_link_train(edp))
 		dev_warn(edp->dev,
@@ -903,6 +920,128 @@ static void sun55i_edp_corepll_set(struct sun55i_edp *edp,
 	val = readl(edp->regs + SUN55I_EDP_ANA_PLL_FBDIV);
 	val &= ~SUN55I_EDP_ANA_PLL_PD;
 	writel(val, edp->regs + SUN55I_EDP_ANA_PLL_FBDIV);
+}
+
+struct sun55i_edp_pixpll {
+	u8 prediv;
+	u8 fbdiv_h4;
+	u8 fbdiv_l8;
+	u8 plldiv_a;
+	u8 plldiv_b;
+	u8 plldiv_c;
+	u8 frac_pd;
+	u8 frac_h8;
+	u8 frac_m8;
+	u8 frac_l8;
+};
+
+static int sun55i_edp_pixpll_calc(u32 pixel_khz, struct sun55i_edp_pixpll *out)
+{
+	const u32 ref_khz = 24000;
+	const u64 vco_min = 1000000ULL;
+	const u64 vco_max = 3000000ULL;
+	u8 plldiv_a = 2, plldiv_c, prediv = 1;
+	u32 fbdiv, frac, frac_div = 0;
+	bool integer_match = false;
+	u32 pclk_div = 0, tries;
+	u64 vco;
+	unsigned int i;
+
+	if (!pixel_khz)
+		return -EINVAL;
+
+	for (tries = 0; tries < 31; tries++) {
+		pclk_div += plldiv_a;
+		vco = (u64)pixel_khz * 2 * pclk_div;
+		if (vco < vco_min || vco > vco_max)
+			continue;
+
+		fbdiv = div_u64((u64)pixel_khz * 2 * pclk_div * prediv, ref_khz);
+		frac = (u64)pixel_khz * 2 * pclk_div * prediv -
+			(u64)fbdiv * ref_khz;
+		if (!frac) {
+			integer_match = true;
+			break;
+		}
+	}
+
+	if (!integer_match) {
+		pclk_div = 0;
+		for (i = 1; i < 31; i++) {
+			pclk_div = plldiv_a * i;
+			vco = (u64)pixel_khz * 2 * pclk_div;
+			if (vco > vco_min && vco < vco_max)
+				break;
+		}
+		if (i >= 30)
+			return -ERANGE;
+
+		fbdiv = div_u64((u64)pixel_khz * 2 * pclk_div * prediv, ref_khz);
+		frac = (u64)pixel_khz * 2 * pclk_div * prediv -
+			(u64)fbdiv * ref_khz;
+		frac_div = div_u64((u64)frac * 1024 * 1024 * 16 / 240, 100);
+	}
+
+	plldiv_c = pclk_div / plldiv_a;
+
+	out->prediv = prediv;
+	out->fbdiv_h4 = (fbdiv >> 8) & 0xf;
+	out->fbdiv_l8 = fbdiv & 0xff;
+	out->plldiv_a = plldiv_a;
+	out->plldiv_b = 0;
+	out->plldiv_c = plldiv_c;
+	out->frac_pd = integer_match ? 0x3 : 0x0;
+	out->frac_h8 = (frac_div >> 16) & 0xff;
+	out->frac_m8 = (frac_div >> 8) & 0xff;
+	out->frac_l8 = frac_div & 0xff;
+	return 0;
+}
+
+static int sun55i_edp_pixpll_set(struct sun55i_edp *edp, u32 pixel_khz)
+{
+	struct sun55i_edp_pixpll cfg;
+	u32 val;
+	int ret;
+
+	ret = sun55i_edp_pixpll_calc(pixel_khz, &cfg);
+	if (ret) {
+		dev_err(edp->dev, "No pixel PLL for %u kHz: %d\n",
+			pixel_khz, ret);
+		return ret;
+	}
+
+	val = readl(edp->regs + SUN55I_EDP_ANA_PIXPLL_FBDIV);
+	val |= SUN55I_EDP_ANA_PIXPLL_PD;
+	writel(val, edp->regs + SUN55I_EDP_ANA_PIXPLL_FBDIV);
+
+	val &= ~(SUN55I_EDP_ANA_PIXPLL_PREDIV |
+		 SUN55I_EDP_ANA_PIXPLL_FBDIV_H4 |
+		 SUN55I_EDP_ANA_PIXPLL_FBDIV_L8 |
+		 SUN55I_EDP_ANA_PIXPLL_FRAC_PD);
+	val |= FIELD_PREP(SUN55I_EDP_ANA_PIXPLL_PREDIV, cfg.prediv);
+	val |= FIELD_PREP(SUN55I_EDP_ANA_PIXPLL_FBDIV_H4, cfg.fbdiv_h4);
+	val |= FIELD_PREP(SUN55I_EDP_ANA_PIXPLL_FBDIV_L8, cfg.fbdiv_l8);
+	val |= FIELD_PREP(SUN55I_EDP_ANA_PIXPLL_FRAC_PD, cfg.frac_pd);
+	writel(val, edp->regs + SUN55I_EDP_ANA_PIXPLL_FBDIV);
+
+	val = readl(edp->regs + SUN55I_EDP_ANA_PIXPLL_DIV);
+	val &= ~(SUN55I_EDP_ANA_PIXPLL_DIVA |
+		 SUN55I_EDP_ANA_PIXPLL_DIVB |
+		 SUN55I_EDP_ANA_PIXPLL_DIVC);
+	val |= FIELD_PREP(SUN55I_EDP_ANA_PIXPLL_DIVA, cfg.plldiv_a);
+	val |= FIELD_PREP(SUN55I_EDP_ANA_PIXPLL_DIVB, cfg.plldiv_b);
+	val |= FIELD_PREP(SUN55I_EDP_ANA_PIXPLL_DIVC, cfg.plldiv_c);
+	writel(val, edp->regs + SUN55I_EDP_ANA_PIXPLL_DIV);
+
+	val = FIELD_PREP(SUN55I_EDP_ANA_PIXPLL_FRAC_H8, cfg.frac_h8) |
+	      FIELD_PREP(SUN55I_EDP_ANA_PIXPLL_FRAC_M8, cfg.frac_m8) |
+	      FIELD_PREP(SUN55I_EDP_ANA_PIXPLL_FRAC_L8, cfg.frac_l8);
+	writel(val, edp->regs + SUN55I_EDP_ANA_PIXPLL_FRAC);
+
+	val = readl(edp->regs + SUN55I_EDP_ANA_PIXPLL_FBDIV);
+	val &= ~SUN55I_EDP_ANA_PIXPLL_PD;
+	writel(val, edp->regs + SUN55I_EDP_ANA_PIXPLL_FBDIV);
+	return 0;
 }
 
 static void sun55i_edp_aux_clock_setup(struct sun55i_edp *edp, u32 bit_mhz)
