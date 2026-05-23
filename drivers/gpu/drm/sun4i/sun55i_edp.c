@@ -33,14 +33,20 @@
 #include <drm/drm_simple_kms_helper.h>
 
 /* Subset of Innosilicon eDP 1.3 registers needed for boot-time setup. */
+#define SUN55I_EDP_HPD_SCALE		0x0018
+#define  SUN55I_EDP_HPD_SCALE_EN	BIT(3)
 #define SUN55I_EDP_RESET		0x001c
 #define SUN55I_EDP_HPD_EVENT		0x0080
+#define  SUN55I_EDP_HPD_EVENT_PLUG	BIT(0)
 #define  SUN55I_EDP_HPD_EVENT_AUX_REPLY	BIT(1)
 #define SUN55I_EDP_HPD_INT		0x0084
+#define  SUN55I_EDP_HPD_INT_EN		BIT(0)
 #define SUN55I_EDP_HPD_PLUG		0x0088
 #define  SUN55I_EDP_HPD_PLUG_IN		BIT(1)
 #define  SUN55I_EDP_HPD_PLUG_OUT	BIT(2)
 #define SUN55I_EDP_HPD_EN		0x008c
+#define  SUN55I_EDP_HPD_EN_PLUG_IN	BIT(1)
+#define  SUN55I_EDP_HPD_EN_PLUG_OUT	BIT(2)
 
 #define SUN55I_EDP_PHY_AUX		0x0400
 #define SUN55I_EDP_AUX_TIMEOUT		0x0404
@@ -78,6 +84,8 @@ struct sun55i_edp {
 	struct drm_bridge	bridge;
 	struct drm_encoder	encoder;
 	struct drm_connector	connector;
+
+	bool			plugged;
 };
 
 static inline struct sun55i_edp *bridge_to_sun55i_edp(struct drm_bridge *b)
@@ -238,12 +246,9 @@ static enum drm_connector_status
 sun55i_edp_connector_detect(struct drm_connector *connector, bool force)
 {
 	struct sun55i_edp *edp = connector_to_sun55i_edp(connector);
-	u32 val;
 
-	val = readl(edp->regs + SUN55I_EDP_HPD_PLUG);
-	return (val & SUN55I_EDP_HPD_PLUG_IN) ?
-			connector_status_connected :
-			connector_status_disconnected;
+	return edp->plugged ? connector_status_connected
+			    : connector_status_disconnected;
 }
 
 static const struct drm_connector_funcs sun55i_edp_connector_funcs = {
@@ -297,6 +302,53 @@ static void sun55i_edp_hw_disable(struct sun55i_edp *edp)
 	reset_control_assert(edp->rst_bus);
 }
 
+static void sun55i_edp_hpd_enable(struct sun55i_edp *edp)
+{
+	u32 val;
+
+	val = readl(edp->regs + SUN55I_EDP_HPD_SCALE);
+	writel(val | SUN55I_EDP_HPD_SCALE_EN,
+	       edp->regs + SUN55I_EDP_HPD_SCALE);
+
+	writel(SUN55I_EDP_HPD_INT_EN, edp->regs + SUN55I_EDP_HPD_INT);
+	writel(SUN55I_EDP_HPD_EN_PLUG_IN | SUN55I_EDP_HPD_EN_PLUG_OUT,
+	       edp->regs + SUN55I_EDP_HPD_EN);
+}
+
+static void sun55i_edp_hpd_disable(struct sun55i_edp *edp)
+{
+	writel(0, edp->regs + SUN55I_EDP_HPD_INT);
+	writel(0, edp->regs + SUN55I_EDP_HPD_EN);
+}
+
+static irqreturn_t sun55i_edp_irq(int irq, void *data)
+{
+	struct sun55i_edp *edp = data;
+	bool changed = false;
+	u32 plug;
+
+	plug = readl(edp->regs + SUN55I_EDP_HPD_PLUG);
+
+	if (plug & SUN55I_EDP_HPD_PLUG_IN) {
+		writel(SUN55I_EDP_HPD_PLUG_IN,
+		       edp->regs + SUN55I_EDP_HPD_PLUG);
+		edp->plugged = true;
+		changed = true;
+	}
+
+	if (plug & SUN55I_EDP_HPD_PLUG_OUT) {
+		writel(SUN55I_EDP_HPD_PLUG_OUT,
+		       edp->regs + SUN55I_EDP_HPD_PLUG);
+		edp->plugged = false;
+		changed = true;
+	}
+
+	if (changed && edp->connector.dev)
+		drm_helper_hpd_irq_event(edp->connector.dev);
+
+	return changed ? IRQ_HANDLED : IRQ_NONE;
+}
+
 static int sun55i_edp_bind(struct device *dev, struct device *master,
 			   void *data)
 {
@@ -308,12 +360,24 @@ static int sun55i_edp_bind(struct device *dev, struct device *master,
 	if (ret)
 		return ret;
 
+	sun55i_edp_hpd_enable(edp);
+
+	ret = devm_request_irq(dev, edp->irq, sun55i_edp_irq, 0,
+			       dev_name(dev), edp);
+	if (ret) {
+		dev_err(dev, "Couldn't request IRQ\n");
+		goto err_disable_hpd;
+	}
+
+	edp->plugged = !!(readl(edp->regs + SUN55I_EDP_HPD_PLUG) &
+			  SUN55I_EDP_HPD_PLUG_IN);
+
 	edp->aux.dev = dev;
 	edp->aux.name = "sun55i-edp-aux";
 	edp->aux.transfer = sun55i_edp_aux_transfer;
 	ret = drm_dp_aux_register(&edp->aux);
 	if (ret)
-		goto err_disable_hw;
+		goto err_disable_hpd;
 
 	drm_simple_encoder_init(drm, &edp->encoder, DRM_MODE_ENCODER_TMDS);
 	edp->encoder.possible_crtcs =
@@ -326,7 +390,7 @@ static int sun55i_edp_bind(struct device *dev, struct device *master,
 	edp->bridge.funcs = &sun55i_edp_bridge_funcs;
 	edp->bridge.of_node = dev->of_node;
 	edp->bridge.type = edp->variant->connector_type;
-	edp->bridge.ops = DRM_BRIDGE_OP_DETECT;
+	edp->bridge.ops = DRM_BRIDGE_OP_DETECT | DRM_BRIDGE_OP_HPD;
 
 	ret = drm_bridge_attach(&edp->encoder, &edp->bridge, NULL, 0);
 	if (ret)
@@ -348,7 +412,8 @@ err_cleanup_encoder:
 	drm_encoder_cleanup(&edp->encoder);
 err_unregister_aux:
 	drm_dp_aux_unregister(&edp->aux);
-err_disable_hw:
+err_disable_hpd:
+	sun55i_edp_hpd_disable(edp);
 	sun55i_edp_hw_disable(edp);
 	return ret;
 }
@@ -361,6 +426,7 @@ static void sun55i_edp_unbind(struct device *dev, struct device *master,
 	drm_connector_cleanup(&edp->connector);
 	drm_encoder_cleanup(&edp->encoder);
 	drm_dp_aux_unregister(&edp->aux);
+	sun55i_edp_hpd_disable(edp);
 	sun55i_edp_hw_disable(edp);
 }
 
