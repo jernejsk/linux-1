@@ -21,6 +21,8 @@
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
+#include <linux/workqueue.h>
 #include <linux/regulator/consumer.h>
 #include <linux/reset.h>
 
@@ -197,6 +199,8 @@ struct sun55i_edp {
 
 	/* Training swing/pre-emphasis variant (0 = low, 1 = high, 2 = wide). */
 	u8			train_param;
+
+	struct work_struct	hpd_work;
 };
 
 static inline struct sun55i_edp *bridge_to_sun55i_edp(struct drm_bridge *b)
@@ -229,6 +233,10 @@ static ssize_t sun55i_edp_aux_transfer(struct drm_dp_aux *aux,
 		return -E2BIG;
 	if (msg->size && !msg->buffer)
 		return -EINVAL;
+
+	ret = pm_runtime_resume_and_get(edp->dev);
+	if (ret < 0)
+		return ret;
 
 	is_write = (msg->request & ~DP_AUX_I2C_MOT) == DP_AUX_NATIVE_WRITE ||
 		   (msg->request & ~DP_AUX_I2C_MOT) == DP_AUX_I2C_WRITE;
@@ -305,6 +313,8 @@ static ssize_t sun55i_edp_aux_transfer(struct drm_dp_aux *aux,
 
 out:
 	sun55i_edp_aux_clear_reply(edp);
+	pm_runtime_mark_last_busy(edp->dev);
+	pm_runtime_put_autosuspend(edp->dev);
 	return ret;
 }
 
@@ -835,6 +845,11 @@ static void sun55i_edp_bridge_atomic_enable(struct drm_bridge *bridge,
 	const struct drm_display_mode *mode;
 	u32 val;
 
+	if (pm_runtime_resume_and_get(edp->dev) < 0) {
+		dev_err(edp->dev, "Failed to runtime-resume on enable\n");
+		return;
+	}
+
 	mode = sun55i_edp_get_adjusted_mode(bridge, state);
 	if (mode) {
 		sun55i_edp_set_video_timings(edp, mode);
@@ -871,6 +886,9 @@ static void sun55i_edp_bridge_atomic_disable(struct drm_bridge *bridge,
 	val = readl(edp->regs + SUN55I_EDP_CAPACITY);
 	val &= ~SUN55I_EDP_CAPACITY_LINK_RESET;
 	writel(val, edp->regs + SUN55I_EDP_CAPACITY);
+
+	pm_runtime_mark_last_busy(edp->dev);
+	pm_runtime_put_autosuspend(edp->dev);
 }
 
 static const struct drm_bridge_funcs sun55i_edp_bridge_funcs = {
@@ -921,6 +939,11 @@ static const struct drm_connector_funcs sun55i_edp_connector_funcs = {
 	.atomic_destroy_state	= drm_atomic_helper_connector_destroy_state,
 };
 
+/*
+ * Always-on path: supplies, bus clock and the controller reset.
+ * Needed so the AUX/HPD logic stays responsive whether or not a
+ * video stream is currently active.
+ */
 static int sun55i_edp_hw_enable(struct sun55i_edp *edp)
 {
 	int ret;
@@ -945,22 +968,8 @@ static int sun55i_edp_hw_enable(struct sun55i_edp *edp)
 	if (ret)
 		goto err_assert_reset;
 
-	ret = clk_prepare_enable(edp->clk_mod);
-	if (ret)
-		goto err_disable_bus;
-
-	if (edp->clk_24m) {
-		ret = clk_prepare_enable(edp->clk_24m);
-		if (ret)
-			goto err_disable_mod;
-	}
-
 	return 0;
 
-err_disable_mod:
-	clk_disable_unprepare(edp->clk_mod);
-err_disable_bus:
-	clk_disable_unprepare(edp->clk_bus);
 err_assert_reset:
 	reset_control_assert(edp->rst_bus);
 err_disable_vcc:
@@ -974,9 +983,6 @@ err_disable_vdd:
 
 static void sun55i_edp_hw_disable(struct sun55i_edp *edp)
 {
-	if (edp->clk_24m)
-		clk_disable_unprepare(edp->clk_24m);
-	clk_disable_unprepare(edp->clk_mod);
 	clk_disable_unprepare(edp->clk_bus);
 	reset_control_assert(edp->rst_bus);
 	if (edp->vcc_supply)
@@ -984,6 +990,47 @@ static void sun55i_edp_hw_disable(struct sun55i_edp *edp)
 	if (edp->vdd_supply)
 		regulator_disable(edp->vdd_supply);
 }
+
+/*
+ * Runtime-PM path: module + reference clocks. Gated when no mode is
+ * active. AUX transfers bump the runtime-PM count so the controller
+ * is woken up on demand.
+ */
+static int sun55i_edp_runtime_resume(struct device *dev)
+{
+	struct sun55i_edp *edp = dev_get_drvdata(dev);
+	int ret;
+
+	ret = clk_prepare_enable(edp->clk_mod);
+	if (ret)
+		return ret;
+
+	if (edp->clk_24m) {
+		ret = clk_prepare_enable(edp->clk_24m);
+		if (ret) {
+			clk_disable_unprepare(edp->clk_mod);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
+static int sun55i_edp_runtime_suspend(struct device *dev)
+{
+	struct sun55i_edp *edp = dev_get_drvdata(dev);
+
+	if (edp->clk_24m)
+		clk_disable_unprepare(edp->clk_24m);
+	clk_disable_unprepare(edp->clk_mod);
+
+	return 0;
+}
+
+static const struct dev_pm_ops sun55i_edp_pm_ops = {
+	SET_RUNTIME_PM_OPS(sun55i_edp_runtime_suspend,
+			   sun55i_edp_runtime_resume, NULL)
+};
 
 /*
  * Innosilicon eDP 1.3 PLL programming table for the AUX/main link clock.
@@ -1281,6 +1328,18 @@ static void sun55i_edp_read_sink_caps(struct sun55i_edp *edp)
 		drm_dp_max_link_rate(edp->dpcd));
 }
 
+static void sun55i_edp_hpd_work(struct work_struct *work)
+{
+	struct sun55i_edp *edp = container_of(work, struct sun55i_edp,
+					      hpd_work);
+
+	if (edp->plugged)
+		sun55i_edp_read_sink_caps(edp);
+
+	if (edp->connector.dev)
+		drm_helper_hpd_irq_event(edp->connector.dev);
+}
+
 static irqreturn_t sun55i_edp_irq(int irq, void *data)
 {
 	struct sun55i_edp *edp = data;
@@ -1293,7 +1352,6 @@ static irqreturn_t sun55i_edp_irq(int irq, void *data)
 		writel(SUN55I_EDP_HPD_PLUG_IN,
 		       edp->regs + SUN55I_EDP_HPD_PLUG);
 		edp->plugged = true;
-		sun55i_edp_read_sink_caps(edp);
 		changed = true;
 	}
 
@@ -1307,8 +1365,8 @@ static irqreturn_t sun55i_edp_irq(int irq, void *data)
 		changed = true;
 	}
 
-	if (changed && edp->connector.dev)
-		drm_helper_hpd_irq_event(edp->connector.dev);
+	if (changed)
+		schedule_work(&edp->hpd_work);
 
 	return changed ? IRQ_HANDLED : IRQ_NONE;
 }
@@ -1323,6 +1381,12 @@ static int sun55i_edp_bind(struct device *dev, struct device *master,
 	ret = sun55i_edp_hw_enable(edp);
 	if (ret)
 		return ret;
+
+	ret = pm_runtime_resume_and_get(dev);
+	if (ret < 0)
+		goto err_disable_hw;
+
+	INIT_WORK(&edp->hpd_work, sun55i_edp_hpd_work);
 
 	sun55i_edp_controller_init(edp);
 	sun55i_edp_hpd_enable(edp);
@@ -1374,6 +1438,8 @@ static int sun55i_edp_bind(struct device *dev, struct device *master,
 
 	drm_connector_attach_encoder(&edp->connector, &edp->encoder);
 
+	pm_runtime_mark_last_busy(dev);
+	pm_runtime_put_autosuspend(dev);
 	return 0;
 
 err_cleanup_encoder:
@@ -1382,6 +1448,8 @@ err_unregister_aux:
 	drm_dp_aux_unregister(&edp->aux);
 err_disable_hpd:
 	sun55i_edp_hpd_disable(edp);
+	pm_runtime_put_sync(dev);
+err_disable_hw:
 	sun55i_edp_hw_disable(edp);
 	return ret;
 }
@@ -1394,7 +1462,10 @@ static void sun55i_edp_unbind(struct device *dev, struct device *master,
 	drm_connector_cleanup(&edp->connector);
 	drm_encoder_cleanup(&edp->encoder);
 	drm_dp_aux_unregister(&edp->aux);
+	cancel_work_sync(&edp->hpd_work);
+	pm_runtime_get_sync(dev);
 	sun55i_edp_hpd_disable(edp);
+	pm_runtime_put_sync(dev);
 	sun55i_edp_hw_disable(edp);
 }
 
@@ -1470,12 +1541,17 @@ static int sun55i_edp_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, edp);
 
+	pm_runtime_set_autosuspend_delay(dev, 1000);
+	pm_runtime_use_autosuspend(dev);
+	pm_runtime_enable(dev);
+
 	return component_add(dev, &sun55i_edp_ops);
 }
 
 static void sun55i_edp_remove(struct platform_device *pdev)
 {
 	component_del(&pdev->dev, &sun55i_edp_ops);
+	pm_runtime_disable(&pdev->dev);
 }
 
 static const struct sun55i_edp_variant sun55i_a523_edp_variant = {
@@ -1505,6 +1581,7 @@ static struct platform_driver sun55i_edp_driver = {
 	.driver	= {
 		.name		= "sun55i-edp",
 		.of_match_table	= sun55i_edp_of_table,
+		.pm		= &sun55i_edp_pm_ops,
 	},
 };
 module_platform_driver(sun55i_edp_driver);
