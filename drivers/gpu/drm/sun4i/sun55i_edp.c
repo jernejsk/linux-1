@@ -124,6 +124,13 @@
 #define  SUN55I_EDP_CAP_RATE_HI		GENMASK(28, 26)
 #define  SUN55I_EDP_CAPACITY_LINK_RESET	(GENMASK(11, 0) | GENMASK(28, 26))
 
+#define SUN55I_EDP_FRAME_UNIT		0x0220
+#define  SUN55I_EDP_FRAME_UNIT_SYMBOL	GENMASK(6, 0)
+#define  SUN55I_EDP_FRAME_UNIT_TU	GENMASK(13, 7)
+#define  SUN55I_EDP_FRAME_UNIT_FRAC	GENMASK(19, 16)
+#define SUN55I_EDP_HBLANK_LINK_CYC	0x0230
+#define  SUN55I_EDP_HBLANK_LINK_CYC_MASK	GENMASK(15, 0)
+
 #define SUN55I_EDP_TX32_ISEL_DRV	0x01a4
 #define  SUN55I_EDP_TX32_LANE2_SW	GENMASK(27, 24)
 #define  SUN55I_EDP_TX32_LANE3_SW	GENMASK(31, 28)
@@ -177,6 +184,10 @@ struct sun55i_edp {
 	u8			dpcd[DP_RECEIVER_CAP_SIZE];
 	u8			max_lane_count;
 	u8			max_link_rate;
+
+	/* Last successfully negotiated link parameters. */
+	u8			link_rate;
+	u8			lanes;
 };
 
 static inline struct sun55i_edp *bridge_to_sun55i_edp(struct drm_bridge *b)
@@ -606,6 +617,59 @@ out:
 	return ret;
 }
 
+#define SUN55I_EDP_LS_PER_TU	64
+
+static int sun55i_edp_set_transfer_unit(struct sun55i_edp *edp, u32 bpp,
+					u8 lanes, u8 link_rate, u32 pixel_khz)
+{
+	u32 hblank, bandwidth, pack_data_rate, valid_symbol;
+	u32 link_cyc, val;
+	u32 symbol_clk;
+
+	if (!lanes || !pixel_khz)
+		return -EINVAL;
+
+	val = readl(edp->regs + SUN55I_EDP_HACTIVE_BLANK);
+	hblank = FIELD_GET(SUN55I_EDP_HBLANK, val);
+
+	bandwidth = (link_rate == DP_LINK_BW_2_7) ? 270 : 162;
+
+	pack_data_rate = (bpp * pixel_khz / 8) / lanes;
+	valid_symbol = SUN55I_EDP_LS_PER_TU * (pack_data_rate / bandwidth);
+
+	if (valid_symbol > 62000) {
+		dev_err(edp->dev,
+			"TU symbol count %u out of range (need lanes or rate up)\n",
+			valid_symbol / 1000);
+		return -ERANGE;
+	}
+
+	val = readl(edp->regs + SUN55I_EDP_FRAME_UNIT);
+	val &= ~(SUN55I_EDP_FRAME_UNIT_SYMBOL |
+		 SUN55I_EDP_FRAME_UNIT_TU |
+		 SUN55I_EDP_FRAME_UNIT_FRAC);
+	val |= FIELD_PREP(SUN55I_EDP_FRAME_UNIT_SYMBOL, valid_symbol / 1000);
+	val |= FIELD_PREP(SUN55I_EDP_FRAME_UNIT_FRAC,
+			  (valid_symbol % 1000) / 100);
+	if (valid_symbol / 1000 < 6)
+		val |= FIELD_PREP(SUN55I_EDP_FRAME_UNIT_TU, 32);
+	else if (hblank < 80)
+		val |= FIELD_PREP(SUN55I_EDP_FRAME_UNIT_TU, 12);
+	else
+		val |= FIELD_PREP(SUN55I_EDP_FRAME_UNIT_TU, 16);
+	writel(val, edp->regs + SUN55I_EDP_FRAME_UNIT);
+
+	symbol_clk = bandwidth / 10;
+	link_cyc = 1000 * hblank * (symbol_clk / lanes) / (pixel_khz / 1000);
+
+	val = readl(edp->regs + SUN55I_EDP_HBLANK_LINK_CYC);
+	val &= ~SUN55I_EDP_HBLANK_LINK_CYC_MASK;
+	val |= FIELD_PREP(SUN55I_EDP_HBLANK_LINK_CYC_MASK, link_cyc);
+	writel(val, edp->regs + SUN55I_EDP_HBLANK_LINK_CYC);
+
+	return 0;
+}
+
 static int sun55i_edp_link_train(struct sun55i_edp *edp)
 {
 	static const u8 link_rates[] = { DP_LINK_BW_2_7, DP_LINK_BW_1_62 };
@@ -625,6 +689,8 @@ static int sun55i_edp_link_train(struct sun55i_edp *edp)
 
 		ret = sun55i_edp_link_train_at(edp, link_rates[i], lanes);
 		if (!ret) {
+			edp->link_rate = link_rates[i];
+			edp->lanes = lanes;
 			dev_dbg(edp->dev,
 				"Link trained at rate 0x%02x, %u lanes\n",
 				link_rates[i], lanes);
@@ -728,7 +794,11 @@ static void sun55i_edp_bridge_atomic_enable(struct drm_bridge *bridge,
 		dev_warn(edp->dev,
 			 "Link training failed, output may be unstable.\n");
 
-	/* TODO: transfer-unit programming. */
+	if (mode && edp->lanes && edp->link_rate &&
+	    sun55i_edp_set_transfer_unit(edp, 24, edp->lanes,
+					 edp->link_rate, mode->clock))
+		dev_warn(edp->dev,
+			 "Transfer unit programming failed.\n");
 
 	val = readl(edp->regs + SUN55I_EDP_VIDEO_STREAM_EN);
 	val |= SUN55I_EDP_VIDEO_STREAM_EN_BIT;
