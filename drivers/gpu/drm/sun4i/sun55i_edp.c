@@ -33,6 +33,7 @@
 #include <drm/drm_drv.h>
 #include <drm/drm_edid.h>
 #include <drm/drm_of.h>
+#include <drm/drm_panel.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_simple_kms_helper.h>
 
@@ -201,6 +202,8 @@ struct sun55i_edp {
 	u8			train_param;
 
 	struct work_struct	hpd_work;
+
+	struct drm_panel	*panel;
 };
 
 static inline struct sun55i_edp *bridge_to_sun55i_edp(struct drm_bridge *b)
@@ -838,17 +841,26 @@ sun55i_edp_get_adjusted_mode(struct drm_bridge *bridge,
 	return &crtc_state->adjusted_mode;
 }
 
+static void sun55i_edp_bridge_atomic_pre_enable(struct drm_bridge *bridge,
+						struct drm_atomic_state *state)
+{
+	struct sun55i_edp *edp = bridge_to_sun55i_edp(bridge);
+
+	if (pm_runtime_resume_and_get(edp->dev) < 0) {
+		dev_err(edp->dev, "Failed to runtime-resume on pre_enable\n");
+		return;
+	}
+
+	if (edp->panel)
+		drm_panel_prepare(edp->panel);
+}
+
 static void sun55i_edp_bridge_atomic_enable(struct drm_bridge *bridge,
 					    struct drm_atomic_state *state)
 {
 	struct sun55i_edp *edp = bridge_to_sun55i_edp(bridge);
 	const struct drm_display_mode *mode;
 	u32 val;
-
-	if (pm_runtime_resume_and_get(edp->dev) < 0) {
-		dev_err(edp->dev, "Failed to runtime-resume on enable\n");
-		return;
-	}
 
 	mode = sun55i_edp_get_adjusted_mode(bridge, state);
 	if (mode) {
@@ -871,6 +883,9 @@ static void sun55i_edp_bridge_atomic_enable(struct drm_bridge *bridge,
 	val = readl(edp->regs + SUN55I_EDP_VIDEO_STREAM_EN);
 	val |= SUN55I_EDP_VIDEO_STREAM_EN_BIT;
 	writel(val, edp->regs + SUN55I_EDP_VIDEO_STREAM_EN);
+
+	if (edp->panel)
+		drm_panel_enable(edp->panel);
 }
 
 static void sun55i_edp_bridge_atomic_disable(struct drm_bridge *bridge,
@@ -879,6 +894,9 @@ static void sun55i_edp_bridge_atomic_disable(struct drm_bridge *bridge,
 	struct sun55i_edp *edp = bridge_to_sun55i_edp(bridge);
 	u32 val;
 
+	if (edp->panel)
+		drm_panel_disable(edp->panel);
+
 	val = readl(edp->regs + SUN55I_EDP_VIDEO_STREAM_EN);
 	val &= ~SUN55I_EDP_VIDEO_STREAM_EN_BIT;
 	writel(val, edp->regs + SUN55I_EDP_VIDEO_STREAM_EN);
@@ -886,6 +904,15 @@ static void sun55i_edp_bridge_atomic_disable(struct drm_bridge *bridge,
 	val = readl(edp->regs + SUN55I_EDP_CAPACITY);
 	val &= ~SUN55I_EDP_CAPACITY_LINK_RESET;
 	writel(val, edp->regs + SUN55I_EDP_CAPACITY);
+}
+
+static void sun55i_edp_bridge_atomic_post_disable(struct drm_bridge *bridge,
+						  struct drm_atomic_state *state)
+{
+	struct sun55i_edp *edp = bridge_to_sun55i_edp(bridge);
+
+	if (edp->panel)
+		drm_panel_unprepare(edp->panel);
 
 	pm_runtime_mark_last_busy(edp->dev);
 	pm_runtime_put_autosuspend(edp->dev);
@@ -893,8 +920,10 @@ static void sun55i_edp_bridge_atomic_disable(struct drm_bridge *bridge,
 
 static const struct drm_bridge_funcs sun55i_edp_bridge_funcs = {
 	.attach			= sun55i_edp_bridge_attach,
+	.atomic_pre_enable	= sun55i_edp_bridge_atomic_pre_enable,
 	.atomic_enable		= sun55i_edp_bridge_atomic_enable,
 	.atomic_disable		= sun55i_edp_bridge_atomic_disable,
+	.atomic_post_disable	= sun55i_edp_bridge_atomic_post_disable,
 	.atomic_duplicate_state	= drm_atomic_helper_bridge_duplicate_state,
 	.atomic_destroy_state	= drm_atomic_helper_bridge_destroy_state,
 	.atomic_reset		= drm_atomic_helper_bridge_reset,
@@ -904,14 +933,17 @@ static int sun55i_edp_connector_get_modes(struct drm_connector *connector)
 {
 	struct sun55i_edp *edp = connector_to_sun55i_edp(connector);
 	const struct drm_edid *drm_edid;
-	int count;
+	int count = 0;
+
+	if (edp->panel)
+		count = drm_panel_get_modes(edp->panel, connector);
 
 	if (!edp->plugged)
-		return 0;
+		return count;
 
 	drm_edid = drm_edid_read_ddc(connector, &edp->aux.ddc);
 	drm_edid_connector_update(connector, drm_edid);
-	count = drm_edid_connector_add_modes(connector);
+	count += drm_edid_connector_add_modes(connector);
 	drm_edid_free(drm_edid);
 
 	return count;
@@ -925,6 +957,9 @@ static enum drm_connector_status
 sun55i_edp_connector_detect(struct drm_connector *connector, bool force)
 {
 	struct sun55i_edp *edp = connector_to_sun55i_edp(connector);
+
+	if (edp->panel)
+		return connector_status_connected;
 
 	return edp->plugged ? connector_status_connected
 			    : connector_status_disconnected;
@@ -1377,6 +1412,16 @@ static int sun55i_edp_bind(struct device *dev, struct device *master,
 	struct sun55i_edp *edp = dev_get_drvdata(dev);
 	struct drm_device *drm = data;
 	int ret;
+
+	if (edp->variant->connector_type == DRM_MODE_CONNECTOR_eDP) {
+		ret = drm_of_find_panel_or_bridge(dev->of_node, 1, 0,
+						  &edp->panel, NULL);
+		if (ret) {
+			dev_err(dev, "No panel found for eDP output: %d\n",
+				ret);
+			return ret;
+		}
+	}
 
 	ret = sun55i_edp_hw_enable(edp);
 	if (ret)
