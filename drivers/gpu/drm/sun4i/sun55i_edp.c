@@ -36,7 +36,9 @@
 /* Subset of Innosilicon eDP 1.3 registers needed for boot-time setup. */
 #define SUN55I_EDP_HPD_SCALE		0x0018
 #define  SUN55I_EDP_HPD_SCALE_EN	BIT(3)
+#define  SUN55I_EDP_HPD_SCALE_EDP_MODE	BIT(27)
 #define SUN55I_EDP_RESET		0x001c
+#define  SUN55I_EDP_RESET_CONTROLLER	BIT(0)
 #define SUN55I_EDP_HPD_EVENT		0x0080
 #define  SUN55I_EDP_HPD_EVENT_PLUG	BIT(0)
 #define  SUN55I_EDP_HPD_EVENT_AUX_REPLY	BIT(1)
@@ -48,6 +50,36 @@
 #define SUN55I_EDP_HPD_EN		0x008c
 #define  SUN55I_EDP_HPD_EN_PLUG_IN	BIT(1)
 #define  SUN55I_EDP_HPD_EN_PLUG_OUT	BIT(2)
+
+#define SUN55I_EDP_ANA_PLL_FBDIV	0x0180
+#define  SUN55I_EDP_ANA_PLL_PD		BIT(0)
+#define  SUN55I_EDP_ANA_PLL_FRAC_PD	GENMASK(5, 4)
+#define  SUN55I_EDP_ANA_PLL_PREDIV	GENMASK(13, 8)
+#define  SUN55I_EDP_ANA_PLL_FBDIV_H4	GENMASK(19, 16)
+#define  SUN55I_EDP_ANA_PLL_FBDIV_L8	GENMASK(31, 24)
+#define SUN55I_EDP_ANA_PLL_FRAC		0x0184
+#define  SUN55I_EDP_ANA_PLL_FRAC_H8	GENMASK(7, 0)
+#define  SUN55I_EDP_ANA_PLL_FRAC_M8	GENMASK(15, 8)
+#define  SUN55I_EDP_ANA_PLL_FRAC_L8	GENMASK(23, 16)
+#define SUN55I_EDP_ANA_PLL_POSDIV	0x0188
+#define  SUN55I_EDP_ANA_PLL_POSDIV_V	GENMASK(3, 2)
+#define SUN55I_EDP_ANA_AUX_CLOCK	0x018c
+#define  SUN55I_EDP_ANA_AUX_CLOCK_16M_DIV	GENMASK(4, 0)
+#define SUN55I_EDP_AUX_ISEL_MAINSET	0x01a0
+#define  SUN55I_EDP_AUX_ISEL_MASK	GENMASK(7, 4)
+#define  SUN55I_EDP_AUX_MAINSET_MASK	GENMASK(11, 8)
+#define SUN55I_EDP_TX_MAINSEL		0x01a8
+#define  SUN55I_EDP_TX_MAINSEL_LO	GENMASK(20, 16)
+#define  SUN55I_EDP_TX_MAINSEL_HI	GENMASK(28, 24)
+#define SUN55I_EDP_TX_POSTSEL		0x01ac
+#define  SUN55I_EDP_TX_POSTSEL_LO	GENMASK(4, 0)
+#define  SUN55I_EDP_TX_POSTSEL_HI	GENMASK(12, 8)
+#define SUN55I_EDP_TX_PRESEL		0x01b0
+#define  SUN55I_EDP_TX_PRESEL_LO	GENMASK(14, 0)
+#define  SUN55I_EDP_TX_PRESEL_MODE	GENMASK(27, 24)
+#define SUN55I_EDP_RES1000_CFG		0x2014
+#define  SUN55I_EDP_RES1000_CFG_VAL	GENMASK(5, 0)
+#define  SUN55I_EDP_RES1000_CFG_EN	BIT(8)
 
 #define SUN55I_EDP_PHY_AUX		0x0400
 #define SUN55I_EDP_AUX_TIMEOUT		0x0404
@@ -341,6 +373,141 @@ static void sun55i_edp_hw_disable(struct sun55i_edp *edp)
 		regulator_disable(edp->vdd_supply);
 }
 
+/*
+ * Innosilicon eDP 1.3 PLL programming table for the AUX/main link clock.
+ * Values originate from the A523/A527/T527 vendor BSP. Two link rates are
+ * supported: 1.62 Gbps (RBR) and 2.7 Gbps (HBR).
+ */
+struct sun55i_edp_pll_cfg {
+	u8	prediv;
+	u8	fbdiv_h4;
+	u8	fbdiv_l8;
+	u8	postdiv;
+	u8	frac_pd;
+	u8	frac_h8;
+	u8	frac_m8;
+	u8	frac_l8;
+};
+
+static const struct sun55i_edp_pll_cfg __maybe_unused sun55i_edp_pll_rbr = {
+	.prediv = 0x2, .fbdiv_l8 = 0x87, .postdiv = 0x1, .frac_pd = 0x3,
+};
+
+static const struct sun55i_edp_pll_cfg sun55i_edp_pll_hbr = {
+	.prediv = 0x2, .fbdiv_l8 = 0xe1, .postdiv = 0x1, .frac_pd = 0x3,
+};
+
+static void sun55i_edp_corepll_set(struct sun55i_edp *edp,
+				   const struct sun55i_edp_pll_cfg *cfg)
+{
+	u32 val;
+
+	/* power down */
+	val = readl(edp->regs + SUN55I_EDP_ANA_PLL_FBDIV);
+	val |= SUN55I_EDP_ANA_PLL_PD;
+	writel(val, edp->regs + SUN55I_EDP_ANA_PLL_FBDIV);
+
+	val &= ~(SUN55I_EDP_ANA_PLL_PREDIV |
+		 SUN55I_EDP_ANA_PLL_FBDIV_H4 |
+		 SUN55I_EDP_ANA_PLL_FBDIV_L8 |
+		 SUN55I_EDP_ANA_PLL_FRAC_PD);
+	val |= FIELD_PREP(SUN55I_EDP_ANA_PLL_PREDIV, cfg->prediv);
+	val |= FIELD_PREP(SUN55I_EDP_ANA_PLL_FBDIV_H4, cfg->fbdiv_h4);
+	val |= FIELD_PREP(SUN55I_EDP_ANA_PLL_FBDIV_L8, cfg->fbdiv_l8);
+	val |= FIELD_PREP(SUN55I_EDP_ANA_PLL_FRAC_PD, cfg->frac_pd);
+	writel(val, edp->regs + SUN55I_EDP_ANA_PLL_FBDIV);
+
+	val = readl(edp->regs + SUN55I_EDP_ANA_PLL_POSDIV);
+	val &= ~SUN55I_EDP_ANA_PLL_POSDIV_V;
+	val |= FIELD_PREP(SUN55I_EDP_ANA_PLL_POSDIV_V, cfg->postdiv);
+	writel(val, edp->regs + SUN55I_EDP_ANA_PLL_POSDIV);
+
+	val = FIELD_PREP(SUN55I_EDP_ANA_PLL_FRAC_H8, cfg->frac_h8) |
+	      FIELD_PREP(SUN55I_EDP_ANA_PLL_FRAC_M8, cfg->frac_m8) |
+	      FIELD_PREP(SUN55I_EDP_ANA_PLL_FRAC_L8, cfg->frac_l8);
+	writel(val, edp->regs + SUN55I_EDP_ANA_PLL_FRAC);
+
+	/* power up */
+	val = readl(edp->regs + SUN55I_EDP_ANA_PLL_FBDIV);
+	val &= ~SUN55I_EDP_ANA_PLL_PD;
+	writel(val, edp->regs + SUN55I_EDP_ANA_PLL_FBDIV);
+}
+
+static void sun55i_edp_aux_clock_setup(struct sun55i_edp *edp, u32 bit_mhz)
+{
+	u32 val;
+
+	/* AUX clock = bit_clock / 64. bit_clock = bit_rate / 2. */
+	val = readl(edp->regs + SUN55I_EDP_ANA_AUX_CLOCK);
+	val &= ~SUN55I_EDP_ANA_AUX_CLOCK_16M_DIV;
+	val |= FIELD_PREP(SUN55I_EDP_ANA_AUX_CLOCK_16M_DIV,
+			  (bit_mhz / 8) / 8);
+	writel(val, edp->regs + SUN55I_EDP_ANA_AUX_CLOCK);
+
+	val = readl(edp->regs + SUN55I_EDP_TX_MAINSEL);
+	val &= ~(SUN55I_EDP_TX_MAINSEL_LO | SUN55I_EDP_TX_MAINSEL_HI);
+	val |= FIELD_PREP(SUN55I_EDP_TX_MAINSEL_LO, 0x14);
+	val |= FIELD_PREP(SUN55I_EDP_TX_MAINSEL_HI, 0x14);
+	writel(val, edp->regs + SUN55I_EDP_TX_MAINSEL);
+
+	val = readl(edp->regs + SUN55I_EDP_TX_POSTSEL);
+	val &= ~(SUN55I_EDP_TX_POSTSEL_LO | SUN55I_EDP_TX_POSTSEL_HI);
+	val |= FIELD_PREP(SUN55I_EDP_TX_POSTSEL_LO, 0x14);
+	val |= FIELD_PREP(SUN55I_EDP_TX_POSTSEL_HI, 0x14);
+	writel(val, edp->regs + SUN55I_EDP_TX_POSTSEL);
+
+	val = readl(edp->regs + SUN55I_EDP_TX_PRESEL);
+	val &= ~SUN55I_EDP_TX_PRESEL_LO;
+	writel(val, edp->regs + SUN55I_EDP_TX_PRESEL);
+
+	/* Maximise AUX channel swing for sink compatibility. */
+	val = readl(edp->regs + SUN55I_EDP_AUX_ISEL_MAINSET);
+	val &= ~(SUN55I_EDP_AUX_ISEL_MASK | SUN55I_EDP_AUX_MAINSET_MASK);
+	val |= FIELD_PREP(SUN55I_EDP_AUX_ISEL_MASK, 0xf);
+	val |= FIELD_PREP(SUN55I_EDP_AUX_MAINSET_MASK, 0xf);
+	writel(val, edp->regs + SUN55I_EDP_AUX_ISEL_MAINSET);
+}
+
+static void sun55i_edp_controller_init(struct sun55i_edp *edp)
+{
+	bool is_edp = edp->variant->connector_type == DRM_MODE_CONNECTOR_eDP;
+	u32 val;
+
+	/* Controller soft-reset. */
+	writel(SUN55I_EDP_RESET_CONTROLLER, edp->regs + SUN55I_EDP_RESET);
+	usleep_range(10, 20);
+	writel(0, edp->regs + SUN55I_EDP_RESET);
+
+	/* Pick eDP vs DP behaviour. */
+	val = readl(edp->regs + SUN55I_EDP_HPD_SCALE);
+	if (is_edp)
+		val |= SUN55I_EDP_HPD_SCALE_EDP_MODE;
+	else
+		val &= ~SUN55I_EDP_HPD_SCALE_EDP_MODE;
+	writel(val, edp->regs + SUN55I_EDP_HPD_SCALE);
+
+	/* Current-mode drive: set TX_PRESEL[27:24] = 0xf. */
+	val = readl(edp->regs + SUN55I_EDP_TX_PRESEL);
+	val &= ~SUN55I_EDP_TX_PRESEL_MODE;
+	val |= FIELD_PREP(SUN55I_EDP_TX_PRESEL_MODE, 0xf);
+	writel(val, edp->regs + SUN55I_EDP_TX_PRESEL);
+
+	/* Termination resistor calibration enable. */
+	val = readl(edp->regs + SUN55I_EDP_RES1000_CFG);
+	val &= ~SUN55I_EDP_RES1000_CFG_VAL;
+	val |= SUN55I_EDP_RES1000_CFG_EN;
+	writel(val, edp->regs + SUN55I_EDP_RES1000_CFG);
+
+	/*
+	 * Bring up the AUX/main link clock at HBR (2.7 Gbps / 1350 MHz)
+	 * before talking to the sink. The link rate can be re-negotiated
+	 * during link training later.
+	 */
+	sun55i_edp_aux_clock_setup(edp, 1350);
+	sun55i_edp_corepll_set(edp, &sun55i_edp_pll_hbr);
+	usleep_range(500, 1000);
+}
+
 static void sun55i_edp_hpd_enable(struct sun55i_edp *edp)
 {
 	u32 val;
@@ -423,6 +590,7 @@ static int sun55i_edp_bind(struct device *dev, struct device *master,
 	if (ret)
 		return ret;
 
+	sun55i_edp_controller_init(edp);
 	sun55i_edp_hpd_enable(edp);
 
 	ret = devm_request_irq(dev, edp->irq, sun55i_edp_irq, 0,
