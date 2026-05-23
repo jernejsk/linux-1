@@ -281,9 +281,21 @@ static int sun55i_edp_hw_enable(struct sun55i_edp *edp)
 {
 	int ret;
 
+	if (edp->vdd_supply) {
+		ret = regulator_enable(edp->vdd_supply);
+		if (ret)
+			return ret;
+	}
+
+	if (edp->vcc_supply) {
+		ret = regulator_enable(edp->vcc_supply);
+		if (ret)
+			goto err_disable_vdd;
+	}
+
 	ret = reset_control_deassert(edp->rst_bus);
 	if (ret)
-		return ret;
+		goto err_disable_vcc;
 
 	ret = clk_prepare_enable(edp->clk_bus);
 	if (ret)
@@ -307,6 +319,12 @@ err_disable_bus:
 	clk_disable_unprepare(edp->clk_bus);
 err_assert_reset:
 	reset_control_assert(edp->rst_bus);
+err_disable_vcc:
+	if (edp->vcc_supply)
+		regulator_disable(edp->vcc_supply);
+err_disable_vdd:
+	if (edp->vdd_supply)
+		regulator_disable(edp->vdd_supply);
 	return ret;
 }
 
@@ -317,6 +335,10 @@ static void sun55i_edp_hw_disable(struct sun55i_edp *edp)
 	clk_disable_unprepare(edp->clk_mod);
 	clk_disable_unprepare(edp->clk_bus);
 	reset_control_assert(edp->rst_bus);
+	if (edp->vcc_supply)
+		regulator_disable(edp->vcc_supply);
+	if (edp->vdd_supply)
+		regulator_disable(edp->vdd_supply);
 }
 
 static void sun55i_edp_hpd_enable(struct sun55i_edp *edp)
