@@ -411,12 +411,151 @@ static void sun55i_edp_train_set_lane_drive(struct sun55i_edp *edp,
 	}
 }
 
-static int sun55i_edp_link_train(struct sun55i_edp *edp)
+#define SUN55I_EDP_TRAIN_MAX_TRIES	5
+
+struct sun55i_edp_train_lane {
+	u8 vs;
+	u8 pe;
+};
+
+static int sun55i_edp_train_apply_adjust(struct sun55i_edp *edp, u8 lanes,
+					 const u8 link_status[DP_LINK_STATUS_SIZE],
+					 struct sun55i_edp_train_lane *adj)
+{
+	u8 set[4] = { 0 };
+	bool max_vs_reached = false;
+	int lane;
+
+	for (lane = 0; lane < lanes; lane++) {
+		u8 vs = drm_dp_get_adjust_request_voltage(link_status, lane) >>
+			DP_TRAIN_VOLTAGE_SWING_SHIFT;
+		u8 pe = drm_dp_get_adjust_request_pre_emphasis(link_status, lane) >>
+			DP_TRAIN_PRE_EMPHASIS_SHIFT;
+
+		if (vs >= DP_TRAIN_VOLTAGE_SWING_LEVEL_3) {
+			vs = DP_TRAIN_VOLTAGE_SWING_LEVEL_3;
+			max_vs_reached = true;
+		}
+		if (pe >= DP_TRAIN_PRE_EMPH_LEVEL_3)
+			pe = DP_TRAIN_PRE_EMPH_LEVEL_3;
+		if (vs + pe > DP_TRAIN_VOLTAGE_SWING_LEVEL_3)
+			pe = DP_TRAIN_VOLTAGE_SWING_LEVEL_3 - vs;
+
+		adj[lane].vs = vs;
+		adj[lane].pe = pe;
+		set[lane] = (vs << DP_TRAIN_VOLTAGE_SWING_SHIFT) |
+			    (pe << DP_TRAIN_PRE_EMPHASIS_SHIFT);
+		if (vs == DP_TRAIN_VOLTAGE_SWING_LEVEL_3)
+			set[lane] |= DP_TRAIN_MAX_SWING_REACHED;
+		if (pe == DP_TRAIN_PRE_EMPH_LEVEL_3)
+			set[lane] |= DP_TRAIN_MAX_PRE_EMPHASIS_REACHED;
+
+		sun55i_edp_train_set_lane_drive(edp, lane, vs, pe);
+	}
+
+	if (drm_dp_dpcd_write(&edp->aux, DP_TRAINING_LANE0_SET, set, lanes) < 0)
+		return -EIO;
+
+	return max_vs_reached ? 1 : 0;
+}
+
+static bool sun55i_edp_train_levels_match(const struct sun55i_edp_train_lane *a,
+					  const struct sun55i_edp_train_lane *b,
+					  u8 lanes)
+{
+	u8 i;
+
+	for (i = 0; i < lanes; i++)
+		if (a[i].vs != b[i].vs || a[i].pe != b[i].pe)
+			return false;
+	return true;
+}
+
+static int sun55i_edp_link_train_cr(struct sun55i_edp *edp, u8 lanes)
+{
+	struct sun55i_edp_train_lane prev[4] = { 0 };
+	struct sun55i_edp_train_lane curr[4] = { 0 };
+	u8 link_status[DP_LINK_STATUS_SIZE];
+	u8 same_count = 0;
+	int ret, lane;
+	u8 dpcd;
+
+	for (lane = 0; lane < lanes; lane++)
+		sun55i_edp_train_set_lane_drive(edp, lane, 0, 0);
+
+	sun55i_edp_train_set_pattern(edp, 1);
+	dpcd = DP_TRAINING_PATTERN_1 | DP_LINK_SCRAMBLING_DISABLE;
+	ret = drm_dp_dpcd_writeb(&edp->aux, DP_TRAINING_PATTERN_SET, dpcd);
+	if (ret < 0)
+		return ret;
+
+	for (;;) {
+		drm_dp_link_train_clock_recovery_delay(&edp->aux, edp->dpcd);
+
+		ret = drm_dp_dpcd_read_link_status(&edp->aux, link_status);
+		if (ret < 0)
+			return ret;
+
+		if (drm_dp_clock_recovery_ok(link_status, lanes))
+			return 0;
+
+		ret = sun55i_edp_train_apply_adjust(edp, lanes, link_status, curr);
+		if (ret < 0)
+			return ret;
+
+		if (sun55i_edp_train_levels_match(prev, curr, lanes)) {
+			if (++same_count >= SUN55I_EDP_TRAIN_MAX_TRIES)
+				return -EIO;
+		} else {
+			same_count = 1;
+			memcpy(prev, curr, sizeof(prev));
+		}
+
+		if (ret > 0)
+			return -EIO;
+	}
+}
+
+static int sun55i_edp_link_train_eq(struct sun55i_edp *edp, u8 lanes)
 {
 	u8 link_status[DP_LINK_STATUS_SIZE];
+	struct sun55i_edp_train_lane curr[4];
+	u8 dpcd;
+	int tries, ret;
+
+	sun55i_edp_train_set_pattern(edp, 2);
+	dpcd = DP_TRAINING_PATTERN_2 | DP_LINK_SCRAMBLING_DISABLE;
+	ret = drm_dp_dpcd_writeb(&edp->aux, DP_TRAINING_PATTERN_SET, dpcd);
+	if (ret < 0)
+		return ret;
+
+	for (tries = 0; tries < SUN55I_EDP_TRAIN_MAX_TRIES; tries++) {
+		drm_dp_link_train_channel_eq_delay(&edp->aux, edp->dpcd);
+
+		ret = drm_dp_dpcd_read_link_status(&edp->aux, link_status);
+		if (ret < 0)
+			return ret;
+
+		if (!drm_dp_clock_recovery_ok(link_status, lanes))
+			return -EAGAIN;
+
+		if (drm_dp_channel_eq_ok(link_status, lanes))
+			return 0;
+
+		ret = sun55i_edp_train_apply_adjust(edp, lanes, link_status,
+						    curr);
+		if (ret < 0)
+			return ret;
+	}
+
+	return -EIO;
+}
+
+static int sun55i_edp_link_train(struct sun55i_edp *edp)
+{
 	const struct sun55i_edp_pll_cfg *pll_cfg;
-	u8 link_rate, lanes, dpcd, value;
-	int ret, lane;
+	u8 link_rate, lanes, value;
+	int ret;
 
 	if (!edp->plugged || !edp->max_link_rate || !edp->max_lane_count)
 		return -ENODEV;
@@ -433,8 +572,6 @@ static int sun55i_edp_link_train(struct sun55i_edp *edp)
 
 	sun55i_edp_train_set_rate(edp, link_rate);
 	sun55i_edp_train_set_lanes(edp, lanes);
-	for (lane = 0; lane < lanes; lane++)
-		sun55i_edp_train_set_lane_drive(edp, lane, 0, 0);
 
 	ret = drm_dp_dpcd_writeb(&edp->aux, DP_LINK_BW_SET, link_rate);
 	if (ret < 0)
@@ -446,43 +583,21 @@ static int sun55i_edp_link_train(struct sun55i_edp *edp)
 	if (ret < 0)
 		return ret;
 
-	/* Clock recovery: pattern 1, single-shot. TODO: VS/PE adjust loop. */
-	sun55i_edp_train_set_pattern(edp, 1);
-	dpcd = DP_TRAINING_PATTERN_1 | DP_LINK_SCRAMBLING_DISABLE;
-	ret = drm_dp_dpcd_writeb(&edp->aux, DP_TRAINING_PATTERN_SET, dpcd);
-	if (ret < 0)
-		return ret;
-	drm_dp_link_train_clock_recovery_delay(&edp->aux, edp->dpcd);
-	ret = drm_dp_dpcd_read_link_status(&edp->aux, link_status);
-	if (ret < 0)
-		return ret;
-	if (!drm_dp_clock_recovery_ok(link_status, lanes)) {
+	ret = sun55i_edp_link_train_cr(edp, lanes);
+	if (ret < 0) {
 		dev_warn(edp->dev,
-			 "Clock recovery failed (status %*ph), continuing.\n",
-			 DP_LINK_STATUS_SIZE, link_status);
+			 "Clock recovery failed (%d), continuing.\n", ret);
+	} else {
+		ret = sun55i_edp_link_train_eq(edp, lanes);
+		if (ret < 0)
+			dev_warn(edp->dev,
+				 "Channel EQ failed (%d), continuing.\n", ret);
 	}
 
-	/* Channel equalization: pattern 2. */
-	sun55i_edp_train_set_pattern(edp, 2);
-	dpcd = DP_TRAINING_PATTERN_2 | DP_LINK_SCRAMBLING_DISABLE;
-	ret = drm_dp_dpcd_writeb(&edp->aux, DP_TRAINING_PATTERN_SET, dpcd);
-	if (ret < 0)
-		return ret;
-	drm_dp_link_train_channel_eq_delay(&edp->aux, edp->dpcd);
-	ret = drm_dp_dpcd_read_link_status(&edp->aux, link_status);
-	if (ret < 0)
-		return ret;
-	if (!drm_dp_channel_eq_ok(link_status, lanes)) {
-		dev_warn(edp->dev,
-			 "Channel EQ failed (status %*ph), continuing.\n",
-			 DP_LINK_STATUS_SIZE, link_status);
-	}
-
-	/* End training. */
 	sun55i_edp_train_set_pattern(edp, 0);
 	drm_dp_dpcd_writeb(&edp->aux, DP_TRAINING_PATTERN_SET,
 			   DP_TRAINING_PATTERN_DISABLE);
-	return 0;
+	return ret;
 }
 
 static void sun55i_edp_set_video_timings(struct sun55i_edp *edp,
