@@ -85,4 +85,16 @@ config DRM_SUN8I_TCON_TOP
 	  TCON TOP is responsible for configuring display pipeline for
 	  HDMI, TVE and LCD.
 
+config DRM_SUN55I_EDP
+	tristate "Support for Allwinner A523 eDP/DP TX encoder"
+	default DRM_SUN4I
+	depends on DRM_SUN4I
+	select DRM_DISPLAY_DP_HELPER
+	select DRM_DISPLAY_HELPER
+	select DRM_KMS_HELPER
+	help
+	  Choose this option if you have an Allwinner A523/A527/T527 SoC
+	  with the Innosilicon eDP 1.3 TX controller used to drive an
+	  internal eDP panel or an external DisplayPort connector.
+
 endif
