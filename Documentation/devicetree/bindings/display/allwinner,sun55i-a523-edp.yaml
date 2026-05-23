@@ -55,6 +55,18 @@ properties:
   vcc-supply:
     description: I/O voltage rail powering the AUX/HPD pads.
 
+  allwinner,training-param-type:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    enum: [ 0, 1, 2 ]
+    default: 0
+    description: |
+      Selects the link-training swing / pre-emphasis table that
+      matches the board:
+        0 - low swing (200-350 mV), typical eDP panel.
+        1 - high swing (300-450 mV), DP sink with voltage
+            attenuation.
+        2 - wide swing (200-500 mV), covers both.
+
   ports:
     $ref: /schemas/graph.yaml#/properties/ports
 

@@ -194,6 +194,9 @@ struct sun55i_edp {
 	/* Last successfully negotiated link parameters. */
 	u8			link_rate;
 	u8			lanes;
+
+	/* Training swing/pre-emphasis variant (0 = low, 1 = high, 2 = wide). */
+	u8			train_param;
 };
 
 static inline struct sun55i_edp *bridge_to_sun55i_edp(struct drm_bridge *b)
@@ -327,19 +330,40 @@ static void sun55i_edp_corepll_set(struct sun55i_edp *edp,
 				   const struct sun55i_edp_pll_cfg *cfg);
 static int sun55i_edp_pixpll_set(struct sun55i_edp *edp, u32 pixel_khz);
 
-/* Voltage-swing / pre-emphasis table for low-voltage eDP panels (param 0). */
+/*
+ * Voltage-swing / pre-emphasis tables, indexed [param_type][vs][pe]:
+ *   0: low swing  (200mV - 350mV), default for eDP panels.
+ *   1: high swing (300mV - 450mV), DP sinks with voltage attenuation.
+ *   2: wide swing (200mV - 500mV), covers both.
+ * Values come from the Allwinner BSP and program the controller's
+ * MAINSEL / POSTSEL / TX32_ISEL_DRV registers.
+ */
 struct sun55i_edp_train_lvl {
 	u8 sw;
 	u8 pe;
 };
 
 static const struct sun55i_edp_train_lvl
-sun55i_edp_train_table[DP_TRAIN_VOLTAGE_SWING_LEVEL_3 + 1]
+sun55i_edp_train_table[3][DP_TRAIN_VOLTAGE_SWING_LEVEL_3 + 1]
 		      [DP_TRAIN_PRE_EMPH_LEVEL_3 + 1] = {
-	{ { 0x1, 0x0 }, { 0x3, 0x4 }, { 0x5, 0x7 }, { 0x5, 0x7 } },
-	{ { 0x2, 0x0 }, { 0x5, 0x4 }, { 0x7, 0x7 }, { 0x7, 0x7 } },
-	{ { 0x3, 0x0 }, { 0x6, 0x4 }, { 0xa, 0x7 }, { 0xa, 0x7 } },
-	{ { 0x5, 0x0 }, { 0x8, 0x4 }, { 0xf, 0x7 }, { 0xf, 0x7 } },
+	[0] = {
+		{ { 0x1, 0x0 }, { 0x3, 0x4 }, { 0x5, 0x7 }, { 0x5, 0x7 } },
+		{ { 0x2, 0x0 }, { 0x5, 0x4 }, { 0x7, 0x7 }, { 0x7, 0x7 } },
+		{ { 0x3, 0x0 }, { 0x6, 0x4 }, { 0xa, 0x7 }, { 0xa, 0x7 } },
+		{ { 0x5, 0x0 }, { 0x8, 0x4 }, { 0xf, 0x7 }, { 0xf, 0x7 } },
+	},
+	[1] = {
+		{ { 0x3, 0x0 }, { 0x6, 0x4 }, { 0xa, 0x7 }, { 0xa, 0x7 } },
+		{ { 0x5, 0x0 }, { 0x8, 0x4 }, { 0xf, 0x7 }, { 0xf, 0x7 } },
+		{ { 0x6, 0x0 }, { 0xb, 0x4 }, { 0xb, 0x4 }, { 0xb, 0x4 } },
+		{ { 0x8, 0x0 }, { 0x8, 0x0 }, { 0x8, 0x0 }, { 0x8, 0x0 } },
+	},
+	[2] = {
+		{ { 0x1, 0x0 }, { 0x3, 0x4 }, { 0x5, 0x7 }, { 0x5, 0x7 } },
+		{ { 0x3, 0x0 }, { 0x6, 0x4 }, { 0xa, 0x7 }, { 0xa, 0x7 } },
+		{ { 0x6, 0x0 }, { 0xb, 0x4 }, { 0xb, 0x4 }, { 0xb, 0x4 } },
+		{ { 0x9, 0x0 }, { 0x9, 0x0 }, { 0x9, 0x0 }, { 0x9, 0x0 } },
+	},
 };
 
 static void sun55i_edp_train_set_rate(struct sun55i_edp *edp, u8 link_rate)
@@ -391,8 +415,9 @@ static void sun55i_edp_train_set_pattern(struct sun55i_edp *edp, u8 pattern)
 static void sun55i_edp_train_set_lane_drive(struct sun55i_edp *edp,
 					    u8 lane, u8 vs, u8 pe)
 {
-	u8 sw_lv = sun55i_edp_train_table[vs][pe].sw;
-	u8 pe_lv = sun55i_edp_train_table[vs][pe].pe;
+	u8 type = edp->train_param;
+	u8 sw_lv = sun55i_edp_train_table[type][vs][pe].sw;
+	u8 pe_lv = sun55i_edp_train_table[type][vs][pe].pe;
 	u32 val;
 
 	switch (lane) {
@@ -1419,6 +1444,15 @@ static int sun55i_edp_probe(struct platform_device *pdev)
 	if (IS_ERR(edp->rst_bus))
 		return dev_err_probe(dev, PTR_ERR(edp->rst_bus),
 				     "missing bus reset\n");
+
+	if (of_property_read_u8(dev->of_node, "allwinner,training-param-type",
+				&edp->train_param))
+		edp->train_param = 0;
+	if (edp->train_param > 2) {
+		dev_warn(dev, "Invalid training-param-type %u, using 0\n",
+			 edp->train_param);
+		edp->train_param = 0;
+	}
 
 	edp->vdd_supply = devm_regulator_get_optional(dev, "vdd");
 	if (IS_ERR(edp->vdd_supply)) {
