@@ -124,6 +124,12 @@
 #define  SUN55I_EDP_CAP_RATE_HI		GENMASK(28, 26)
 #define  SUN55I_EDP_CAPACITY_LINK_RESET	(GENMASK(11, 0) | GENMASK(28, 26))
 
+#define SUN55I_EDP_VIDEO_MAPPING	SUN55I_EDP_VIDEO_STREAM_EN
+#define  SUN55I_EDP_VIDEO_MAPPING_MASK	GENMASK(20, 16)
+#define SUN55I_EDP_MSA_MISC0		0x0228
+#define  SUN55I_EDP_MSA_MISC0_VAL	GENMASK(31, 24)
+#define SUN55I_EDP_MSA_MISC1		0x022c
+#define  SUN55I_EDP_MSA_MISC1_VAL	GENMASK(31, 24)
 #define SUN55I_EDP_FRAME_UNIT		0x0220
 #define  SUN55I_EDP_FRAME_UNIT_SYMBOL	GENMASK(6, 0)
 #define  SUN55I_EDP_FRAME_UNIT_TU	GENMASK(13, 7)
@@ -619,6 +625,26 @@ out:
 
 #define SUN55I_EDP_LS_PER_TU	64
 
+static void sun55i_edp_set_video_format(struct sun55i_edp *edp)
+{
+	u32 val;
+
+	/* 24bpp RGB: mapping=1, MISC0[7:5]=1, MISC1=0. */
+	val = readl(edp->regs + SUN55I_EDP_VIDEO_MAPPING);
+	val &= ~SUN55I_EDP_VIDEO_MAPPING_MASK;
+	val |= FIELD_PREP(SUN55I_EDP_VIDEO_MAPPING_MASK, 1);
+	writel(val, edp->regs + SUN55I_EDP_VIDEO_MAPPING);
+
+	val = readl(edp->regs + SUN55I_EDP_MSA_MISC0);
+	val &= ~SUN55I_EDP_MSA_MISC0_VAL;
+	val |= FIELD_PREP(SUN55I_EDP_MSA_MISC0_VAL, 1 << 5);
+	writel(val, edp->regs + SUN55I_EDP_MSA_MISC0);
+
+	val = readl(edp->regs + SUN55I_EDP_MSA_MISC1);
+	val &= ~SUN55I_EDP_MSA_MISC1_VAL;
+	writel(val, edp->regs + SUN55I_EDP_MSA_MISC1);
+}
+
 static int sun55i_edp_set_transfer_unit(struct sun55i_edp *edp, u32 bpp,
 					u8 lanes, u8 link_rate, u32 pixel_khz)
 {
@@ -793,6 +819,8 @@ static void sun55i_edp_bridge_atomic_enable(struct drm_bridge *bridge,
 	if (sun55i_edp_link_train(edp))
 		dev_warn(edp->dev,
 			 "Link training failed, output may be unstable.\n");
+
+	sun55i_edp_set_video_format(edp);
 
 	if (mode && edp->lanes && edp->link_rate &&
 	    sun55i_edp_set_transfer_unit(edp, 24, edp->lanes,
