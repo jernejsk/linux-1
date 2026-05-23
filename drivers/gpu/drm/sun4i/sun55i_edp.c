@@ -103,7 +103,22 @@
 #define  SUN55I_EDP_HSTART		GENMASK(15, 0)
 #define  SUN55I_EDP_VSTART		GENMASK(31, 16)
 #define SUN55I_EDP_CAPACITY		0x0100
+#define  SUN55I_EDP_CAP_PATTERN		GENMASK(3, 0)
+#define  SUN55I_EDP_CAP_RATE		GENMASK(5, 4)
+#define  SUN55I_EDP_CAP_LANE_IDX	GENMASK(7, 6)
+#define  SUN55I_EDP_CAP_LANE_EN		GENMASK(11, 8)
+#define  SUN55I_EDP_CAP_RATE_HI		GENMASK(28, 26)
 #define  SUN55I_EDP_CAPACITY_LINK_RESET	(GENMASK(11, 0) | GENMASK(28, 26))
+
+#define SUN55I_EDP_TX32_ISEL_DRV	0x01a4
+#define  SUN55I_EDP_TX32_LANE2_SW	GENMASK(27, 24)
+#define  SUN55I_EDP_TX32_LANE3_SW	GENMASK(31, 28)
+#define SUN55I_EDP_TX_MAINSEL_LANE0_SW	GENMASK(3, 0)
+#define SUN55I_EDP_TX_MAINSEL_LANE1_SW	GENMASK(7, 4)
+#define SUN55I_EDP_TX_POSTSEL_LANE0_PE	GENMASK(27, 24)
+#define SUN55I_EDP_TX_POSTSEL_LANE1_PE	GENMASK(31, 28)
+#define SUN55I_EDP_TX_POSTSEL_LANE2_PE	GENMASK(19, 16)
+#define SUN55I_EDP_TX_POSTSEL_LANE3_PE	GENMASK(23, 20)
 
 #define SUN55I_EDP_PHY_AUX		0x0400
 #define SUN55I_EDP_AUX_TIMEOUT		0x0404
@@ -273,6 +288,203 @@ static int sun55i_edp_bridge_attach(struct drm_bridge *bridge,
 	return 0;
 }
 
+struct sun55i_edp_pll_cfg;
+static const struct sun55i_edp_pll_cfg sun55i_edp_pll_rbr;
+static const struct sun55i_edp_pll_cfg sun55i_edp_pll_hbr;
+static void sun55i_edp_aux_clock_setup(struct sun55i_edp *edp, u32 bit_mhz);
+static void sun55i_edp_corepll_set(struct sun55i_edp *edp,
+				   const struct sun55i_edp_pll_cfg *cfg);
+
+/* Voltage-swing / pre-emphasis table for low-voltage eDP panels (param 0). */
+struct sun55i_edp_train_lvl {
+	u8 sw;
+	u8 pe;
+};
+
+static const struct sun55i_edp_train_lvl
+sun55i_edp_train_table[DP_TRAIN_VOLTAGE_SWING_LEVEL_3 + 1]
+		      [DP_TRAIN_PRE_EMPH_LEVEL_3 + 1] = {
+	{ { 0x1, 0x0 }, { 0x3, 0x4 }, { 0x5, 0x7 }, { 0x5, 0x7 } },
+	{ { 0x2, 0x0 }, { 0x5, 0x4 }, { 0x7, 0x7 }, { 0x7, 0x7 } },
+	{ { 0x3, 0x0 }, { 0x6, 0x4 }, { 0xa, 0x7 }, { 0xa, 0x7 } },
+	{ { 0x5, 0x0 }, { 0x8, 0x4 }, { 0xf, 0x7 }, { 0xf, 0x7 } },
+};
+
+static void sun55i_edp_train_set_rate(struct sun55i_edp *edp, u8 link_rate)
+{
+	u32 val;
+
+	val = readl(edp->regs + SUN55I_EDP_CAPACITY);
+	val &= ~(SUN55I_EDP_CAP_RATE | SUN55I_EDP_CAP_RATE_HI);
+	if (link_rate == DP_LINK_BW_2_7)
+		val |= FIELD_PREP(SUN55I_EDP_CAP_RATE, 0x1);
+	writel(val, edp->regs + SUN55I_EDP_CAPACITY);
+}
+
+static void sun55i_edp_train_set_lanes(struct sun55i_edp *edp, u8 lanes)
+{
+	u32 val;
+
+	val = readl(edp->regs + SUN55I_EDP_CAPACITY);
+	val &= ~(SUN55I_EDP_CAP_LANE_IDX | SUN55I_EDP_CAP_LANE_EN);
+	switch (lanes) {
+	case 1:
+		val |= FIELD_PREP(SUN55I_EDP_CAP_LANE_IDX, 0x0);
+		val |= FIELD_PREP(SUN55I_EDP_CAP_LANE_EN, 0x1);
+		break;
+	case 2:
+		val |= FIELD_PREP(SUN55I_EDP_CAP_LANE_IDX, 0x1);
+		val |= FIELD_PREP(SUN55I_EDP_CAP_LANE_EN, 0x3);
+		break;
+	case 4:
+		val |= FIELD_PREP(SUN55I_EDP_CAP_LANE_IDX, 0x2);
+		val |= FIELD_PREP(SUN55I_EDP_CAP_LANE_EN, 0xf);
+		break;
+	default:
+		break;
+	}
+	writel(val, edp->regs + SUN55I_EDP_CAPACITY);
+}
+
+static void sun55i_edp_train_set_pattern(struct sun55i_edp *edp, u8 pattern)
+{
+	u32 val;
+
+	val = readl(edp->regs + SUN55I_EDP_CAPACITY);
+	val &= ~SUN55I_EDP_CAP_PATTERN;
+	val |= FIELD_PREP(SUN55I_EDP_CAP_PATTERN, pattern);
+	writel(val, edp->regs + SUN55I_EDP_CAPACITY);
+}
+
+static void sun55i_edp_train_set_lane_drive(struct sun55i_edp *edp,
+					    u8 lane, u8 vs, u8 pe)
+{
+	u8 sw_lv = sun55i_edp_train_table[vs][pe].sw;
+	u8 pe_lv = sun55i_edp_train_table[vs][pe].pe;
+	u32 val;
+
+	switch (lane) {
+	case 0:
+		val = readl(edp->regs + SUN55I_EDP_TX_MAINSEL);
+		val &= ~SUN55I_EDP_TX_MAINSEL_LANE0_SW;
+		val |= FIELD_PREP(SUN55I_EDP_TX_MAINSEL_LANE0_SW, sw_lv);
+		writel(val, edp->regs + SUN55I_EDP_TX_MAINSEL);
+
+		val = readl(edp->regs + SUN55I_EDP_TX_POSTSEL);
+		val &= ~SUN55I_EDP_TX_POSTSEL_LANE0_PE;
+		val |= FIELD_PREP(SUN55I_EDP_TX_POSTSEL_LANE0_PE, pe_lv);
+		writel(val, edp->regs + SUN55I_EDP_TX_POSTSEL);
+		break;
+	case 1:
+		val = readl(edp->regs + SUN55I_EDP_TX_MAINSEL);
+		val &= ~SUN55I_EDP_TX_MAINSEL_LANE1_SW;
+		val |= FIELD_PREP(SUN55I_EDP_TX_MAINSEL_LANE1_SW, sw_lv);
+		writel(val, edp->regs + SUN55I_EDP_TX_MAINSEL);
+
+		val = readl(edp->regs + SUN55I_EDP_TX_POSTSEL);
+		val &= ~SUN55I_EDP_TX_POSTSEL_LANE1_PE;
+		val |= FIELD_PREP(SUN55I_EDP_TX_POSTSEL_LANE1_PE, pe_lv);
+		writel(val, edp->regs + SUN55I_EDP_TX_POSTSEL);
+		break;
+	case 2:
+		val = readl(edp->regs + SUN55I_EDP_TX32_ISEL_DRV);
+		val &= ~SUN55I_EDP_TX32_LANE2_SW;
+		val |= FIELD_PREP(SUN55I_EDP_TX32_LANE2_SW, sw_lv);
+		writel(val, edp->regs + SUN55I_EDP_TX32_ISEL_DRV);
+
+		val = readl(edp->regs + SUN55I_EDP_TX_POSTSEL);
+		val &= ~SUN55I_EDP_TX_POSTSEL_LANE2_PE;
+		val |= FIELD_PREP(SUN55I_EDP_TX_POSTSEL_LANE2_PE, pe_lv);
+		writel(val, edp->regs + SUN55I_EDP_TX_POSTSEL);
+		break;
+	case 3:
+		val = readl(edp->regs + SUN55I_EDP_TX32_ISEL_DRV);
+		val &= ~SUN55I_EDP_TX32_LANE3_SW;
+		val |= FIELD_PREP(SUN55I_EDP_TX32_LANE3_SW, sw_lv);
+		writel(val, edp->regs + SUN55I_EDP_TX32_ISEL_DRV);
+
+		val = readl(edp->regs + SUN55I_EDP_TX_POSTSEL);
+		val &= ~SUN55I_EDP_TX_POSTSEL_LANE3_PE;
+		val |= FIELD_PREP(SUN55I_EDP_TX_POSTSEL_LANE3_PE, pe_lv);
+		writel(val, edp->regs + SUN55I_EDP_TX_POSTSEL);
+		break;
+	}
+}
+
+static int sun55i_edp_link_train(struct sun55i_edp *edp)
+{
+	u8 link_status[DP_LINK_STATUS_SIZE];
+	const struct sun55i_edp_pll_cfg *pll_cfg;
+	u8 link_rate, lanes, dpcd, value;
+	int ret, lane;
+
+	if (!edp->plugged || !edp->max_link_rate || !edp->max_lane_count)
+		return -ENODEV;
+
+	link_rate = min_t(u8, edp->max_link_rate, DP_LINK_BW_2_7);
+	lanes = min_t(u8, edp->max_lane_count, 4);
+
+	pll_cfg = (link_rate == DP_LINK_BW_2_7) ? &sun55i_edp_pll_hbr
+						: &sun55i_edp_pll_rbr;
+	sun55i_edp_aux_clock_setup(edp,
+				   link_rate == DP_LINK_BW_2_7 ? 1350 : 810);
+	sun55i_edp_corepll_set(edp, pll_cfg);
+	usleep_range(500, 1000);
+
+	sun55i_edp_train_set_rate(edp, link_rate);
+	sun55i_edp_train_set_lanes(edp, lanes);
+	for (lane = 0; lane < lanes; lane++)
+		sun55i_edp_train_set_lane_drive(edp, lane, 0, 0);
+
+	ret = drm_dp_dpcd_writeb(&edp->aux, DP_LINK_BW_SET, link_rate);
+	if (ret < 0)
+		return ret;
+	value = lanes;
+	if (drm_dp_enhanced_frame_cap(edp->dpcd))
+		value |= DP_LANE_COUNT_ENHANCED_FRAME_EN;
+	ret = drm_dp_dpcd_writeb(&edp->aux, DP_LANE_COUNT_SET, value);
+	if (ret < 0)
+		return ret;
+
+	/* Clock recovery: pattern 1, single-shot. TODO: VS/PE adjust loop. */
+	sun55i_edp_train_set_pattern(edp, 1);
+	dpcd = DP_TRAINING_PATTERN_1 | DP_LINK_SCRAMBLING_DISABLE;
+	ret = drm_dp_dpcd_writeb(&edp->aux, DP_TRAINING_PATTERN_SET, dpcd);
+	if (ret < 0)
+		return ret;
+	drm_dp_link_train_clock_recovery_delay(&edp->aux, edp->dpcd);
+	ret = drm_dp_dpcd_read_link_status(&edp->aux, link_status);
+	if (ret < 0)
+		return ret;
+	if (!drm_dp_clock_recovery_ok(link_status, lanes)) {
+		dev_warn(edp->dev,
+			 "Clock recovery failed (status %*ph), continuing.\n",
+			 DP_LINK_STATUS_SIZE, link_status);
+	}
+
+	/* Channel equalization: pattern 2. */
+	sun55i_edp_train_set_pattern(edp, 2);
+	dpcd = DP_TRAINING_PATTERN_2 | DP_LINK_SCRAMBLING_DISABLE;
+	ret = drm_dp_dpcd_writeb(&edp->aux, DP_TRAINING_PATTERN_SET, dpcd);
+	if (ret < 0)
+		return ret;
+	drm_dp_link_train_channel_eq_delay(&edp->aux, edp->dpcd);
+	ret = drm_dp_dpcd_read_link_status(&edp->aux, link_status);
+	if (ret < 0)
+		return ret;
+	if (!drm_dp_channel_eq_ok(link_status, lanes)) {
+		dev_warn(edp->dev,
+			 "Channel EQ failed (status %*ph), continuing.\n",
+			 DP_LINK_STATUS_SIZE, link_status);
+	}
+
+	/* End training. */
+	sun55i_edp_train_set_pattern(edp, 0);
+	drm_dp_dpcd_writeb(&edp->aux, DP_TRAINING_PATTERN_SET,
+			   DP_TRAINING_PATTERN_DISABLE);
+	return 0;
+}
+
 static void sun55i_edp_set_video_timings(struct sun55i_edp *edp,
 					 const struct drm_display_mode *mode)
 {
@@ -356,7 +568,11 @@ static void sun55i_edp_bridge_atomic_enable(struct drm_bridge *bridge,
 	if (mode)
 		sun55i_edp_set_video_timings(edp, mode);
 
-	/* TODO: link training + transfer-unit programming. */
+	if (sun55i_edp_link_train(edp))
+		dev_warn(edp->dev,
+			 "Link training failed, output may be unstable.\n");
+
+	/* TODO: transfer-unit programming. */
 
 	val = readl(edp->regs + SUN55I_EDP_VIDEO_STREAM_EN);
 	val |= SUN55I_EDP_VIDEO_STREAM_EN_BIT;
