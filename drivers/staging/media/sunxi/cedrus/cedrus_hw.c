@@ -57,6 +57,10 @@ int cedrus_engine_enable(struct cedrus_ctx *ctx)
 		reg |= VE_MODE_DEC_H265;
 		break;
 
+	case V4L2_PIX_FMT_VC1_SLICE:
+		reg |= VE_MODE_DEC_VC1;
+		break;
+
 	default:
 		return -EINVAL;
 	}
