@@ -80,11 +80,12 @@ const uint8_t ff_vc1_pquant_table[3][32] = {
 };
 
 /*
- * Map the VC-1 MVMODE (Table 46/47, indexed by enum vc1 mv mode value) to the
- * hardware PICMV MVMODE code. Verified against the vendor library: 1MV_HPEL_BILIN
- * -> 3, 1MV -> 2, 1MV_HPEL -> 0, MIXED_MV -> 1.
+ * Map the VC-1 MVMODE to the hardware PICMV MVMODE code, indexed by the mv mode
+ * enum value (1MV_HPEL_BILIN=0, 1MV=1, 1MV_HPEL=2, MIXED_MV=3). Per the vendor
+ * library (mMVModeTable): 1MV_HPEL_BILIN -> 3, 1MV -> 0, 1MV_HPEL -> 2,
+ * MIXED_MV -> 1.
  */
-static const unsigned int vc1_mvmode_map[] = {3, 2, 0, 1};
+static const unsigned int vc1_mvmode_map[] = {3, 0, 2, 1};
 
 static unsigned int cedrus_vc1_get_fraction(unsigned int index)
 {
