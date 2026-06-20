@@ -286,6 +286,42 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 
 	cedrus_engine_enable(ctx);
 
+	/*
+	 * Program EPHS first so that start-code / emulation-prevention-byte
+	 * (EPTB) detection is enabled before any bitstream is consumed. The
+	 * data_bit_offset skip below counts EPTB-removed (RBSP) bits, matching
+	 * the value ffmpeg reports, so the hardware bit reader must strip the
+	 * 0x000003 emulation bytes while skipping. If EPHS is programmed only
+	 * after the skip, headers containing emulation-prevention bytes desync
+	 * the VLD and the picture decodes to garbage.
+	 */
+	reg = VE_DEC_VC1_EPHS_PROFILE(sequence->profile);
+	if (entrypoint->flags & V4L2_VC1_ENTRYPOINT_HEADER_FLAG_LOOPFILTER)
+		reg |= VE_DEC_VC1_EPHS_LOOPFILTER;
+	if (metadata->flags & V4L2_VC1_METADATA_FLAG_MULTIRES)
+		reg |= VE_DEC_VC1_EPHS_MULTIRES;
+	if (entrypoint->flags & V4L2_VC1_ENTRYPOINT_HEADER_FLAG_FASTUVMC)
+		reg |= VE_DEC_VC1_EPHS_FASTUVMC;
+	if (entrypoint->flags & V4L2_VC1_ENTRYPOINT_HEADER_FLAG_EXTENDED_DMV)
+		reg |= VE_DEC_VC1_EPHS_EXTENDEDMV;
+	reg |= VE_DEC_VC1_EPHS_DQUANT(entrypoint->dquant);
+	if (entrypoint->flags & V4L2_VC1_ENTRYPOINT_HEADER_FLAG_VSTRANSFORM)
+		reg |= VE_DEC_VC1_EPHS_VSTRANSFORM;
+	if (entrypoint->flags & V4L2_VC1_ENTRYPOINT_HEADER_FLAG_OVERLAP)
+		reg |= VE_DEC_VC1_EPHS_OVERLAP;
+	reg |= VE_DEC_VC1_EPHS_QUANTIZER(entrypoint->quantizer);
+	if (metadata->flags & V4L2_VC1_METADATA_FLAG_RANGERED)
+		reg |= VE_DEC_VC1_EPHS_RANGERED;
+	if (sequence->flags & V4L2_VC1_SEQUENCE_FLAG_FINTERPFLAG)
+		reg |= VE_DEC_VC1_EPHS_FINTERPFLAG;
+	if (metadata->flags & V4L2_VC1_METADATA_FLAG_SYNCMARKER)
+		reg |= VE_DEC_VC1_EPHS_SYNCMARKER;
+	if (sequence->profile == VC1_PROFILE_ADVANCED)
+		reg |= VE_DEC_VC1_EPHS_STARTCODE_DET_EN;
+	else
+		reg |= VE_DEC_VC1_EPHS_EPTB_DET_BYPASS;
+	cedrus_write(dev, VE_DEC_VC1_EPHS, reg);
+
 	/* Set bitstream source */
 
 	slice_bytes = vb2_get_plane_payload(src_buf, 0);
@@ -330,33 +366,6 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	cedrus_write(dev, VE_DEC_VC1_PICHDRLEN,
 		     VE_DEC_VC1_PICHDRLEN_LENGTH(0));
 
-	reg = VE_DEC_VC1_EPHS_PROFILE(sequence->profile);
-	if (entrypoint->flags & V4L2_VC1_ENTRYPOINT_HEADER_FLAG_LOOPFILTER)
-		reg |= VE_DEC_VC1_EPHS_LOOPFILTER;
-	if (metadata->flags & V4L2_VC1_METADATA_FLAG_MULTIRES)
-		reg |= VE_DEC_VC1_EPHS_MULTIRES;
-	if (entrypoint->flags & V4L2_VC1_ENTRYPOINT_HEADER_FLAG_FASTUVMC)
-		reg |= VE_DEC_VC1_EPHS_FASTUVMC;
-	if (entrypoint->flags & V4L2_VC1_ENTRYPOINT_HEADER_FLAG_EXTENDED_DMV)
-		reg |= VE_DEC_VC1_EPHS_EXTENDEDMV;
-	reg |= VE_DEC_VC1_EPHS_DQUANT(entrypoint->dquant);
-	if (entrypoint->flags & V4L2_VC1_ENTRYPOINT_HEADER_FLAG_VSTRANSFORM)
-		reg |= VE_DEC_VC1_EPHS_VSTRANSFORM;
-	if (entrypoint->flags & V4L2_VC1_ENTRYPOINT_HEADER_FLAG_OVERLAP)
-		reg |= VE_DEC_VC1_EPHS_OVERLAP;
-	reg |= VE_DEC_VC1_EPHS_QUANTIZER(entrypoint->quantizer);
-	if (metadata->flags & V4L2_VC1_METADATA_FLAG_RANGERED)
-		reg |= VE_DEC_VC1_EPHS_RANGERED;
-	if (sequence->flags & V4L2_VC1_SEQUENCE_FLAG_FINTERPFLAG)
-		reg |= VE_DEC_VC1_EPHS_FINTERPFLAG;
-	if (metadata->flags & V4L2_VC1_METADATA_FLAG_SYNCMARKER)
-		reg |= VE_DEC_VC1_EPHS_SYNCMARKER;
-	if (sequence->profile == VC1_PROFILE_ADVANCED)
-		reg |= VE_DEC_VC1_EPHS_STARTCODE_DET_EN;
-	else
-		reg |= VE_DEC_VC1_EPHS_EPTB_DET_BYPASS;
-	cedrus_write(dev, VE_DEC_VC1_EPHS, reg);
-	
 	if (sequence->profile == VC1_PROFILE_ADVANCED &&
 	    (picture->ptype == VC1_PICTURE_TYPE_I ||
 	     picture->ptype == VC1_PICTURE_TYPE_BI))
