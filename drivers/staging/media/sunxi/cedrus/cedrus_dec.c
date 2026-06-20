@@ -102,7 +102,7 @@ void cedrus_device_run(void *priv)
 	cedrus_dst_format_set(dev, &ctx->dst_fmt);
 
 	error = ctx->current_codec->setup(ctx, &run);
-	if (error)
+	if (error < 0)
 		v4l2_err(&ctx->dev->v4l2_dev,
 			 "Failed to setup decoding job: %d\n", error);
 
@@ -111,9 +111,16 @@ void cedrus_device_run(void *priv)
 	if (src_req)
 		v4l2_ctrl_request_complete(src_req, &ctx->hdl);
 
-	/* Trigger decoding if setup went well, bail out otherwise. */
-	if (!error) {
-		/* Start the watchdog timer. */
+	if (error > 0) {
+		/*
+		 * Setup produced the output without the engine (e.g. a skipped
+		 * picture copied from its reference); finish the job directly.
+		 */
+		v4l2_m2m_buf_done_and_job_finish(ctx->dev->m2m_dev,
+						 ctx->fh.m2m_ctx,
+						 VB2_BUF_STATE_DONE);
+	} else if (!error) {
+		/* Setup went well, start the watchdog timer and trigger. */
 		schedule_delayed_work(&dev->watchdog_work,
 				      msecs_to_jiffies(2000));
 

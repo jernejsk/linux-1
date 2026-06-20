@@ -285,6 +285,34 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	else
 		bwd_buf = out_buf;
 
+	/*
+	 * A skipped picture (PTYPE == SKIPPED) carries no coded macroblocks;
+	 * its output is identical to the forward reference. The decode engine
+	 * cannot process such a 1-byte frame and wedges (watchdog timeout), so
+	 * produce the output here by copying the forward reference and return a
+	 * positive value to tell device_run to finish the job without the engine.
+	 */
+	if (picture->ptype == VC1_PICTURE_TYPE_SKIPPED) {
+		struct vb2_buffer *dst = &run->dst->vb2_buf;
+		unsigned int i;
+
+		if (forward_vb2) {
+			for (i = 0; i < dst->num_planes; i++) {
+				void *dvaddr = vb2_plane_vaddr(dst, i);
+				void *svaddr = vb2_plane_vaddr(forward_vb2, i);
+				unsigned long size = vb2_plane_size(dst, i);
+
+				if (dvaddr && svaddr)
+					memcpy(dvaddr, svaddr, size);
+				vb2_set_plane_payload(dst, i, size);
+			}
+			/* Inherit the forward reference's frame metadata. */
+			out_buf->codec.vc1 = fwd_buf->codec.vc1;
+		}
+
+		return 1;
+	}
+
 	cedrus_engine_enable(ctx);
 
 	/*
@@ -639,12 +667,6 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	      VE_DEC_VC1_CTRL_ERROR_IRQ_EN |
 	      VE_DEC_VC1_CTRL_VLD_DATA_REQ_IRQ_EN |
 	      VE_DEC_VC1_CTRL_MCRI_CACHE_EN;
-	if (picture->ptype == VC1_PICTURE_TYPE_SKIPPED) {
-#ifdef CEDRUS_VC1_DEBUG
-		printk("frame is skipped!\n");
-#endif
-		reg |= VE_DEC_VC1_CTRL_NO_RECONSTRUCT_PIC;
-	}
 	cedrus_write(dev, VE_DEC_VC1_CTRL, reg);
 
 	return 0;
