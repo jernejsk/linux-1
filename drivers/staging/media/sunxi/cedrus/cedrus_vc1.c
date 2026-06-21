@@ -537,6 +537,7 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 			cedrus_write(dev, VE_DEC_VC1_PICICBAK1, reg);
 		} else if (picture->ptype == VC1_PICTURE_TYPE_P) {
 			unsigned int field;
+			u32 bakreg;
 
 			if (picture->mvmode == VC1_MVMODE_INTENSITY_COMP)
 				field = picture->intcompfield ? picture->intcompfield : 3;
@@ -548,16 +549,30 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 			reg |= VE_DEC_VC1_PICINTENCOMP_LUMASCALE2(picture->lumscale2);
 			reg |= VE_DEC_VC1_PICINTENCOMP_LUMASHIFT2(picture->lumshift2);
 			cedrus_write(dev, VE_DEC_VC1_PICINTENCOMP, reg);
+
+			/*
+			 * The IC backup (PICICBAK0/1) is consumed by later fields,
+			 * which read the luma scale/shift from the slot selected by
+			 * the FIELD bits. Store the parameters in the slot matching
+			 * the compensated field (bottom -> slot 2) as the vendor does.
+			 */
+			if (field == 2)
+				bakreg = VE_DEC_VC1_PICINTENCOMP_LUMASCALE2(picture->lumscale) |
+					 VE_DEC_VC1_PICINTENCOMP_LUMASHIFT2(picture->lumshift);
+			else
+				bakreg = reg;
+			bakreg |= VE_DEC_VC1_PICINTENCOMP_FIELD(field);
+
 			if (!second_field) {
 				ctx->codec.vc1.ic_icf0_reg6c = ctx->codec.vc1.ic_icb1_regbak & 0xff3f3f3f;
 				cedrus_write(dev, VE_DEC_VC1_PICICBAK1, ctx->codec.vc1.ic_icf0_reg6c);
 				cedrus_write(dev, VE_DEC_VC1_PICICBAK0, 0);
-				ctx->codec.vc1.ic_icb0_reg68 = reg | VE_DEC_VC1_PICINTENCOMP_FIELD(field);
+				ctx->codec.vc1.ic_icb0_reg68 = bakreg;
 			} else {
 				cedrus_write(dev, VE_DEC_VC1_PICICBAK1, 0);
 				cedrus_write(dev, VE_DEC_VC1_PICICBAK0, ctx->codec.vc1.ic_icb0_reg68);
 				ctx->codec.vc1.ic_icf0_reg6c = ctx->codec.vc1.ic_icb1_regbak & 0xff3f3f3f;
-				ctx->codec.vc1.ic_icb1_regbak = reg | VE_DEC_VC1_PICINTENCOMP_FIELD(field);
+				ctx->codec.vc1.ic_icb1_regbak = bakreg;
 			}
 		}
 	} else {
