@@ -227,7 +227,7 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	struct vb2_buffer *backward_vb2;
 	struct vb2_buffer *forward_vb2;
 	dma_addr_t src_buf_addr;
-	u32 reg, condover, pq;
+	u32 reg, condover, pq, skip;
 	struct vb2_queue *vq;
 	size_t buf_size;
 	int brfd, flag;
@@ -390,11 +390,19 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	cedrus_write(dev, VE_DEC_VC1_TRIGGER_TYPE,
 		     VE_DEC_VC1_TRIGGER_TYPE_INIT_SWDEC);
 
-	/* TODO: minimize time impact of this block */
-	for (reg = 0; reg < slice->data_bit_offset; reg++) {
+	/*
+	 * Skip the picture-layer header to the start of the macroblock data.
+	 * Flush up to 24 bits per GET_BITS trigger: the engine's bit reader
+	 * handles <= 24-bit reads (the vendor reads 24-bit start codes the same
+	 * way) and strips emulation-prevention bytes, so this matches a 1-bit
+	 * loop but is far fewer register writes. Wider (e.g. 32-bit) reads
+	 * overrun the bit FIFO and desync the VLD.
+	 */
+	for (reg = 0; reg < slice->data_bit_offset; reg += skip) {
+		skip = min_t(u32, slice->data_bit_offset - reg, 24);
 		cedrus_write(dev, VE_DEC_VC1_TRIGGER_TYPE,
-				VE_DEC_VC1_TRIGGER_TYPE_GET_BITS |
-				VE_DEC_VC1_TRIGGER_TYPE_N_BITS(1));
+			     VE_DEC_VC1_TRIGGER_TYPE_GET_BITS |
+			     VE_DEC_VC1_TRIGGER_TYPE_N_BITS(skip));
 
 		cedrus_wait_for(dev, VE_DEC_VC1_STATUS, VE_DEC_VC1_STATUS_BITS_BUSY);
 	}
