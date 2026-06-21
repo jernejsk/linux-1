@@ -166,6 +166,8 @@ struct cedrus_ctx {
 			dma_addr_t	entropy_probs_buf_dma;
 		} vp8;
 		struct {
+			void		*aux_buf;
+			dma_addr_t	aux_buf_addr;
 			void		*mv_buf;
 			dma_addr_t	mv_buf_addr;
 			void		*acdc_buf;

@@ -20,6 +20,17 @@
 #define ACDC_BUF_SIZE			(16 * SZ_1K)
 #define BITPLANES_BUF_SIZE		(16 * SZ_1K)
 
+/* Vendor allocates BPLANE+DCAC+MV as one contiguous block:
+ *   BPLANE @ +0x0000  16KB
+ *   DCAC   @ +0x4000  16KB
+ *   MV     @ +0x8000 112KB
+ * Total = 144KB, 16KB-aligned
+ */
+#define VC1_AUX_ALLOC_SIZE		(144 * SZ_1K)
+#define VC1_AUX_BPLANE_OFF		0x0000
+#define VC1_AUX_DCAC_OFF		0x4000
+#define VC1_AUX_MV_OFF			0x8000
+
 #define VC1_PROFILE_SIMPLE		0
 #define VC1_PROFILE_MAIN		1
 #define VC1_PROFILE_COMPLEX		2
@@ -753,44 +764,21 @@ static int cedrus_vc1_start(struct cedrus_ctx *ctx)
 	offset = 0;
 #endif
 
-	ctx->codec.vc1.mv_buf =
-		dma_alloc_coherent(dev->dev, MV_BUF_SIZE,
-				   &ctx->codec.vc1.mv_buf_addr,
+	ctx->codec.vc1.aux_buf =
+		dma_alloc_coherent(dev->dev, VC1_AUX_ALLOC_SIZE,
+				   &ctx->codec.vc1.aux_buf_addr,
 				   GFP_KERNEL);
-	if (!ctx->codec.vc1.mv_buf)
+	if (!ctx->codec.vc1.aux_buf)
 		return -ENOMEM;
 
-	ctx->codec.vc1.acdc_buf =
-		dma_alloc_coherent(dev->dev, ACDC_BUF_SIZE,
-				   &ctx->codec.vc1.acdc_buf_addr,
-				   GFP_KERNEL);
-	if (!ctx->codec.vc1.acdc_buf) {
-		ret = -ENOMEM;
-		goto err_mv_buf;
-	}
-
-	ctx->codec.vc1.bitplanes_buf =
-		dma_alloc_coherent(dev->dev, BITPLANES_BUF_SIZE,
-				   &ctx->codec.vc1.bitplanes_buf_addr,
-				   GFP_KERNEL);
-	if (!ctx->codec.vc1.bitplanes_buf) {
-		ret = -ENOMEM;
-		goto err_acdc_buf;
-	}
+	ctx->codec.vc1.bitplanes_buf = ctx->codec.vc1.aux_buf + VC1_AUX_BPLANE_OFF;
+	ctx->codec.vc1.bitplanes_buf_addr = ctx->codec.vc1.aux_buf_addr + VC1_AUX_BPLANE_OFF;
+	ctx->codec.vc1.acdc_buf = ctx->codec.vc1.aux_buf + VC1_AUX_DCAC_OFF;
+	ctx->codec.vc1.acdc_buf_addr = ctx->codec.vc1.aux_buf_addr + VC1_AUX_DCAC_OFF;
+	ctx->codec.vc1.mv_buf = ctx->codec.vc1.aux_buf + VC1_AUX_MV_OFF;
+	ctx->codec.vc1.mv_buf_addr = ctx->codec.vc1.aux_buf_addr + VC1_AUX_MV_OFF;
 
 	return 0;
-
-err_acdc_buf:
-	dma_free_coherent(dev->dev, ACDC_BUF_SIZE,
-			  ctx->codec.vc1.acdc_buf,
-			  ctx->codec.vc1.acdc_buf_addr);
-
-err_mv_buf:
-	dma_free_coherent(dev->dev, MV_BUF_SIZE,
-			  ctx->codec.vc1.mv_buf,
-			  ctx->codec.vc1.mv_buf_addr);
-
-	return ret;
 }
 
 #ifdef CEDRUS_VC1_DEBUG
@@ -817,15 +805,9 @@ static void cedrus_vc1_stop(struct cedrus_ctx *ctx)
 	filp_close(f, NULL);
 #endif
 
-	dma_free_coherent(dev->dev, MV_BUF_SIZE,
-			  ctx->codec.vc1.mv_buf,
-			  ctx->codec.vc1.mv_buf_addr);
-	dma_free_coherent(dev->dev, ACDC_BUF_SIZE,
-			  ctx->codec.vc1.acdc_buf,
-			  ctx->codec.vc1.acdc_buf_addr);
-	dma_free_coherent(dev->dev, BITPLANES_BUF_SIZE,
-			  ctx->codec.vc1.bitplanes_buf,
-			  ctx->codec.vc1.bitplanes_buf_addr);
+	dma_free_coherent(dev->dev, VC1_AUX_ALLOC_SIZE,
+			  ctx->codec.vc1.aux_buf,
+			  ctx->codec.vc1.aux_buf_addr);
 }
 
 static void cedrus_vc1_trigger(struct cedrus_ctx *ctx)

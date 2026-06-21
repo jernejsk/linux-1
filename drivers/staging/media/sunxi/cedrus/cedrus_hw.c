@@ -119,6 +119,9 @@ void cedrus_dst_format_set(struct cedrus_dev *dev,
 		      VE_PRIMARY_FB_LINE_STRIDE_CHROMA(ALIGN(width, 16) / 2);
 		cedrus_write(dev, VE_PRIMARY_FB_LINE_STRIDE, reg);
 
+		/* Secondary FB line stride (vendor writes same value as primary) */
+		cedrus_write(dev, 0xcc, reg);
+
 		break;
 	case V4L2_PIX_FMT_NV12_32L32:
 	default:
