@@ -272,7 +272,7 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	else if (picture->fcm == VC1_FCM_INTERLACED_FRAME)
 		flag = !!(picture->flags & V4L2_VC1_PICTURE_LAYER_FLAG_INTCOMP);
 	else if (picture->mvmode == VC1_MVMODE_INTENSITY_COMP)
-		flag = picture->intcompfield != 2;
+		flag = true;
 	else
 		flag = false;
 
