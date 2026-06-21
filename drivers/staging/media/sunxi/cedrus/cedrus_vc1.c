@@ -14,9 +14,9 @@
 #include "cedrus_hw.h"
 #include "cedrus_regs.h"
 
-/* #define CEDRUS_VC1_DEBUG */
+#define CEDRUS_VC1_DEBUG
 
-#define MV_BUF_SIZE			(64 * SZ_1K)
+#define MV_BUF_SIZE			(112 * SZ_1K)
 #define ACDC_BUF_SIZE			(16 * SZ_1K)
 #define BITPLANES_BUF_SIZE		(16 * SZ_1K)
 
@@ -232,7 +232,7 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	size_t buf_size;
 	int brfd, flag;
 
-	unsigned int raw_coding = ~bitplanes->bitplane_flags;
+	unsigned int raw_coding = run->vc1.slice_params->raw_coding_flags;
 
 	sequence = &slice->sequence;
 	entrypoint = &slice->entrypoint_header;
@@ -273,13 +273,27 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 
 	vq = v4l2_m2m_get_vq(ctx->fh.m2m_ctx, V4L2_BUF_TYPE_VIDEO_CAPTURE);
 
-	forward_vb2 = vb2_find_buffer(vq, slice->forward_ref_ts);
+	/*
+	 * For interlaced-field I-frames the first field is intra-coded and the
+	 * second field is predictive but must reference the first field of the
+	 * same frame, not the previous reference.  If ffmpeg sends a stale
+	 * forward_ref_ts (still pointing to the last GOP’s P-frame), override it.
+	 */
+	if (second_field && out_buf->codec.vc1.ptype[0] == VC1_PICTURE_TYPE_I) {
+		forward_vb2 = NULL;
+		backward_vb2 = NULL;
+	} else {
+		forward_vb2 = slice->forward_ref_ts ?
+			vb2_find_buffer(vq, slice->forward_ref_ts) : NULL;
+		backward_vb2 = slice->backward_ref_ts ?
+			vb2_find_buffer(vq, slice->backward_ref_ts) : NULL;
+	}
+
 	if (forward_vb2)
 		fwd_buf = vb2_to_cedrus_buffer(forward_vb2);
 	else
 		fwd_buf = out_buf;
 
-	backward_vb2 = vb2_find_buffer(vq, slice->backward_ref_ts);
 	if (backward_vb2)
 		bwd_buf = vb2_to_cedrus_buffer(backward_vb2);
 	else
@@ -659,6 +673,19 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	reg = VE_DEC_VC1_PICSIZE_WIDTH(ctx->src_fmt.width);
 	reg |= VE_DEC_VC1_PICSIZE_HEIGHT(ctx->src_fmt.height);
 	cedrus_write(dev, VE_DEC_VC1_PICSIZE, reg);
+
+#ifdef CEDRUS_VC1_DEBUG
+	{
+		dma_addr_t rec_l = cedrus_dst_buf_addr(ctx, &run->dst->vb2_buf, 0);
+		dma_addr_t fwd_l = forward_vb2 ? cedrus_dst_buf_addr(ctx, forward_vb2, 0) : 0;
+		dma_addr_t bwd_l = backward_vb2 ? cedrus_dst_buf_addr(ctx, backward_vb2, 0) : 0;
+		pr_info("vc1: seq=%u pt=%d fcm=%d sf=%d rec=%pad fwd=%pad bwd=%pad fwd_ts=%llu bwd_ts=%llu mvmode_ff=%d mvmode_hw=%d\n",
+			seq, picture->ptype, picture->fcm, second_field,
+			&rec_l, &fwd_l, &bwd_l,
+			slice->forward_ref_ts, slice->backward_ref_ts,
+			picture->mvmode, vc1_mvmode_map[picture->mvmode & 3]);
+	}
+#endif
 
 	/* Destination luma and chroma buffers. */
 
