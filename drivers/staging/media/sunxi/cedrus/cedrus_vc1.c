@@ -229,7 +229,7 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	dma_addr_t src_buf_addr;
 	u32 reg, condover, pq;
 	struct vb2_queue *vq;
-	size_t slice_bytes;
+	size_t buf_size;
 	int brfd, flag;
 
 	unsigned int raw_coding = ~bitplanes->bitplane_flags;
@@ -353,13 +353,22 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 
 	/* Set bitstream source */
 
-	slice_bytes = vb2_get_plane_payload(src_buf, 0);
-	cedrus_write(dev, VE_DEC_VC1_BITS_LEN, slice_bytes * 8);
+	buf_size = vb2_plane_size(src_buf, 0);
+	/*
+	 * The vendor decoder keeps the whole multi-frame VBV buffer mapped and
+	 * sets BITS_LEN to the total buffered data, so the bit reader always has
+	 * data ahead of the current frame and the per-frame decode is bounded by
+	 * the macroblock count. The stateless interface hands us a single frame
+	 * per buffer; advertise the whole (page-rounded) source allocation so the
+	 * bitstream DMA does not stall fetching past the frame when the VLD over-
+	 * reads on the last macroblock (STATUS bs_dma_busy -> watchdog timeout).
+	 */
+	cedrus_write(dev, VE_DEC_VC1_BITS_LEN, buf_size * 8);
 	cedrus_write(dev, VE_DEC_VC1_BITS_OFFSET, 0);
 
 	src_buf_addr = vb2_dma_contig_plane_dma_addr(src_buf, 0);
 	cedrus_write(dev, VE_DEC_VC1_BITS_END_ADDR,
-		     src_buf_addr + slice_bytes);
+		     src_buf_addr + buf_size);
 	cedrus_write(dev, VE_DEC_VC1_BITS_ADDR,
 		     VE_DEC_VC1_BITS_ADDR_BASE(src_buf_addr) |
 		     VE_DEC_VC1_BITS_ADDR_VALID_SLICE_DATA |

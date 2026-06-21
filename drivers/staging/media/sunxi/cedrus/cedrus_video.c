@@ -138,6 +138,14 @@ void cedrus_prepare_format(struct v4l2_pix_format *pix_fmt)
 		bytesperline = 0;
 		/* Choose some minimum size since this can't be 0 */
 		sizeimage = max_t(u32, SZ_1K, sizeimage);
+		/*
+		 * VC-1 over-reads the bitstream a little past the end of a frame
+		 * on the last macroblock; pad the source allocation so the bit
+		 * reader has slack and the DMA does not stall (see
+		 * cedrus_vc1_setup()).
+		 */
+		if (pix_fmt->pixelformat == V4L2_PIX_FMT_VC1_SLICE)
+			sizeimage += SZ_16K;
 		break;
 
 	case V4L2_PIX_FMT_NV12_32L32:
