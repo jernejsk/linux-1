@@ -84,9 +84,6 @@ static int cedrus_try_ctrl(struct v4l2_ctrl *ctrl)
 			/* Complex profile is not supported by the hardware */
 			return -EINVAL;
 
-			if (slice->sequence.profile == V4L2_VC1_PROFILE_MAIN && slice->picture_layer.mvmode == 4)
-				return -EINVAL;
-
 		if (slice->picture_layer.respic)
 			/* Reduced-resolution (multi-res) coding is not supported */
 			return -EINVAL;
