@@ -338,6 +338,26 @@ static int cedrus_vc1_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 		return 1;
 	}
 
+	/*
+	 * The VC-1 engine does not write every destination macroblock for Main
+	 * profile P pictures. Seed the destination with its forward reference so
+	 * untouched macroblocks retain the reference samples they predict from.
+	 */
+	if (sequence->profile == VC1_PROFILE_MAIN &&
+	    picture->fcm == VC1_FCM_PROGRESSIVE &&
+	    picture->ptype == VC1_PICTURE_TYPE_P && forward_vb2) {
+		struct vb2_buffer *dst = &run->dst->vb2_buf;
+		unsigned int i;
+
+		for (i = 0; i < dst->num_planes; i++) {
+			void *dvaddr = vb2_plane_vaddr(dst, i);
+			void *svaddr = vb2_plane_vaddr(forward_vb2, i);
+
+			if (dvaddr && svaddr)
+				memcpy(dvaddr, svaddr, vb2_plane_size(dst, i));
+		}
+	}
+
 	cedrus_engine_enable(ctx);
 
 	/*
