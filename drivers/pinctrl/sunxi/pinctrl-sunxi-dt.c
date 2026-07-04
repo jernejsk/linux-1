@@ -143,12 +143,14 @@ static struct sunxi_desc_pin *init_pins_table(struct device *dev,
  */
 static int prepare_function_table(struct device *dev, struct device_node *pnode,
 				  struct sunxi_desc_pin *pins, int npins,
-				  unsigned pin_base, const u8 *irq_bank_muxes)
+				  unsigned int pin_base, const u8 *irq_bank_muxes,
+				  struct sunxi_pinctrl_desc *desc)
 {
 	struct device_node *node;
 	struct property *prop;
 	struct sunxi_desc_function *func;
-	int num_funcs, irq_bank, last_bank, i;
+	unsigned int *irq_bank_map;
+	int num_funcs, irq_bank, last_irq_bank, i;
 
 	/*
 	 * We need at least three functions per pin:
@@ -207,8 +209,20 @@ static int prepare_function_table(struct device *dev, struct device_node *pnode,
 	 * Assign the function's memory and fill in GPIOs, IRQ and a sentinel.
 	 * The extra functions will be filled in later.
 	 */
-	irq_bank = 0;
-	last_bank = 0;
+	/*
+	 * The interrupt bank index selects both the per-bank parent
+	 * interrupt (the DT lists one per IRQ-capable bank, in order)
+	 * and, through irq_bank_map, the pin bank holding the EINT
+	 * registers. The first IRQ-capable bank with any pins must get
+	 * index 0 even when lower banks (like PA here) have no pins.
+	 */
+	irq_bank_map = devm_kcalloc(dev, SUNXI_PINCTRL_MAX_BANKS,
+				    sizeof(*irq_bank_map), GFP_KERNEL);
+	if (!irq_bank_map)
+		return -ENOMEM;
+
+	irq_bank = -1;
+	last_irq_bank = -1;
 	for (i = 0; i < npins; i++) {
 		struct sunxi_desc_pin *pin = &pins[i];
 		int bank = (pin->pin.number - pin_base) / PINS_PER_BANK;
@@ -221,16 +235,16 @@ static int prepare_function_table(struct device *dev, struct device_node *pnode,
 		func[1].muxval = 1;
 
 		if (irq_mux) {
-			if (bank > last_bank)
+			if (bank != last_irq_bank) {
 				irq_bank++;
+				irq_bank_map[irq_bank] = bank;
+				last_irq_bank = bank;
+			}
 			func[lastfunc].muxval = irq_mux;
 			func[lastfunc].irqbank = irq_bank;
 			func[lastfunc].irqnum = pin->pin.number % PINS_PER_BANK;
 			func[lastfunc].name = "irq";
 		}
-
-		if (bank > last_bank)
-			last_bank = bank;
 
 		pin->functions = func;
 
@@ -243,6 +257,8 @@ static int prepare_function_table(struct device *dev, struct device_node *pnode,
 		 */
 		pin->variant = 2;
 	}
+
+	desc->irq_bank_map = irq_bank_map;
 
 	return 0;
 }
@@ -352,7 +368,7 @@ int sunxi_pinctrl_dt_table_init(struct platform_device *pdev,
 		return PTR_ERR(pins);
 
 	ret = prepare_function_table(&pdev->dev, pnode, pins, desc->npins,
-				     desc->pin_base, irq_bank_muxes);
+				     desc->pin_base, irq_bank_muxes, desc);
 	if (ret)
 		return ret;
 
