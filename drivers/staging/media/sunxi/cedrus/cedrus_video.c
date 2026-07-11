@@ -56,6 +56,13 @@ static struct cedrus_format cedrus_formats[] = {
 		.capabilities	= CEDRUS_CAPABILITY_VP9_DEC,
 	},
 	{
+		.pixelformat	= V4L2_PIX_FMT_P010,
+		.directions	= CEDRUS_DECODE_DST,
+		.capabilities	= CEDRUS_CAPABILITY_UNTILED |
+				  CEDRUS_CAPABILITY_H265_10_DEC,
+		.depth		= 10,
+	},
+	{
 		.pixelformat	= V4L2_PIX_FMT_NV12,
 		.directions	= CEDRUS_DECODE_DST,
 		.capabilities	= CEDRUS_CAPABILITY_UNTILED,
@@ -177,6 +184,18 @@ void cedrus_prepare_format(struct v4l2_pix_format *pix_fmt)
 		sizeimage += bytesperline * height / 2;
 
 		break;
+
+	case V4L2_PIX_FMT_P010:
+		/* 16-aligned stride, two bytes per luma sample. */
+		bytesperline = ALIGN(width, 16) * 2;
+
+		/* 16-aligned height. */
+		height = ALIGN(height, 16);
+
+		/* Luma plane plus interleaved 4:2:0 chroma plane. */
+		sizeimage = bytesperline * height * 3 / 2;
+
+		break;
 	}
 
 	pix_fmt->width = width;
@@ -275,8 +294,8 @@ static int cedrus_try_fmt_vid_cap_p(struct cedrus_ctx *ctx,
 	cedrus_prepare_format(pix_fmt);
 
 	/*
-	 * The VP9 decoder reconstructs into the capture buffer, so its chroma
-	 * plane must be 1 KiB aligned.
+	 * The VP9 decoder reconstructs into the capture buffer unless it
+	 * outputs P010, so its chroma plane must be 1 KiB aligned.
 	 */
 	if (ctx->src_fmt.pixelformat == V4L2_PIX_FMT_VP9_FRAME &&
 	    (pix_fmt->pixelformat == V4L2_PIX_FMT_NV12 ||

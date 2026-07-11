@@ -22,6 +22,9 @@ void cedrus_engine_disable(struct cedrus_dev *dev);
 void cedrus_dst_format_set(struct cedrus_dev *dev,
 			   struct v4l2_pix_format *fmt);
 
+void cedrus_dst_p010_output_set(struct cedrus_ctx *ctx,
+				struct vb2_buffer *dst_buf);
+
 int cedrus_hw_suspend(struct device *device);
 int cedrus_hw_resume(struct device *device);
 

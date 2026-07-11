@@ -279,6 +279,103 @@ static inline dma_addr_t cedrus_dst_buf_addr(struct cedrus_ctx *ctx,
 	return buf ? cedrus_buf_addr(buf, &ctx->dst_fmt, plane) : 0;
 }
 
+/*
+ * Line stride and size of the low-2-bit plane the hardware appends after
+ * the 8-bit NV12 planes for 10-bit reconstruction.  Shared by all codecs.
+ */
+static inline u32 cedrus_dst_2bit_stride(unsigned int width)
+{
+	return ALIGN(DIV_ROUND_UP(width, 4), 32);
+}
+
+static inline u32 cedrus_dst_2bit_size(unsigned int width, unsigned int height)
+{
+	return cedrus_dst_2bit_stride(width) * height * 3 / 2;
+}
+
+static inline bool cedrus_dst_is_p010(struct cedrus_ctx *ctx)
+{
+	return ctx->dst_fmt.pixelformat == V4L2_PIX_FMT_P010;
+}
+
+/*
+ * Offset of the hidden reconstruction surface, which follows the
+ * userspace-visible P010 surface at the start of the buffer.
+ */
+static inline u32 cedrus_p010_recon_offset(const struct v4l2_pix_format *fmt)
+{
+	return ALIGN(fmt->bytesperline * fmt->height * 3 / 2, SZ_1K);
+}
+
+/*
+ * Format describing the 8-bit NV12 reconstruction/reference surface.
+ * For P010 output this is a hidden surface (NV12 planes plus an appended
+ * 2-bit plane) that follows the visible P010 data; otherwise it is the
+ * capture format itself.
+ */
+static inline struct v4l2_pix_format cedrus_dst_frame_fmt(struct cedrus_ctx *ctx)
+{
+	struct v4l2_pix_format fmt = ctx->dst_fmt;
+
+	if (cedrus_dst_is_p010(ctx)) {
+		fmt.pixelformat = V4L2_PIX_FMT_NV12;
+		fmt.bytesperline = ALIGN(fmt.width, CEDRUS_RECON_STRIDE_ALIGN);
+	}
+
+	return fmt;
+}
+
+/*
+ * Address of a plane of the reconstruction/reference surface.  Identical
+ * to cedrus_dst_buf_addr() for non-P010 output; for P010 it points past
+ * the visible P010 data to the hidden NV12 surface.
+ */
+static inline dma_addr_t cedrus_dst_frame_addr(struct cedrus_ctx *ctx,
+					       struct vb2_buffer *buf,
+					       unsigned int plane)
+{
+	struct v4l2_pix_format fmt = cedrus_dst_frame_fmt(ctx);
+	dma_addr_t addr;
+
+	if (!buf)
+		return 0;
+
+	addr = vb2_dma_contig_plane_dma_addr(buf, 0);
+	if (cedrus_dst_is_p010(ctx))
+		addr += cedrus_p010_recon_offset(&ctx->dst_fmt);
+
+	return addr + (dma_addr_t)fmt.bytesperline * fmt.height * plane;
+}
+
+/*
+ * Extra capture-buffer space needed for 10-bit decoding beyond the
+ * visible plane: the appended low-2-bit reconstruction plane, plus (for
+ * P010) the hidden 8-bit NV12 reconstruction surface.  Shared by the
+ * VP9 and H.265 decoders as the extra_cap_size op.
+ */
+static inline unsigned int
+cedrus_dst_10bit_extra_size(struct cedrus_ctx *ctx,
+			    struct v4l2_pix_format *pix_fmt)
+{
+	unsigned int extra;
+
+	if (ctx->bit_depth <= 8)
+		return 0;
+
+	extra = cedrus_dst_2bit_size(pix_fmt->width, pix_fmt->height);
+
+	if (pix_fmt->pixelformat == V4L2_PIX_FMT_P010) {
+		u32 visible = pix_fmt->bytesperline * pix_fmt->height * 3 / 2;
+
+		/* Hidden NV12 reconstruction surface, 1 KiB aligned. */
+		extra += cedrus_p010_recon_offset(pix_fmt) - visible +
+			 ALIGN(pix_fmt->width, CEDRUS_RECON_STRIDE_ALIGN) *
+			 pix_fmt->height * 3 / 2;
+	}
+
+	return extra;
+}
+
 static inline void cedrus_write_ref_buf_addr(struct cedrus_ctx *ctx,
 					     struct vb2_queue *q,
 					     u64 timestamp,
