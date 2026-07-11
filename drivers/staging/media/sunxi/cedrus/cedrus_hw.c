@@ -134,6 +134,39 @@ void cedrus_dst_format_set(struct cedrus_dev *dev,
 	}
 }
 
+/*
+ * Program the secondary ("scale-down/rotate") output engine to convert
+ * the 8-bit NV12 reconstruction into the userspace-visible P010 surface
+ * at the start of the capture buffer.  The caller must already have
+ * configured the primary output (which writes the hidden NV12
+ * reconstruction/reference surface after the P010 data) and must still
+ * set the per-codec 10-bit configuration and the second-output enable
+ * bit in the function control register.  Shared by the VP9 and H.265
+ * decoders, which drive the same video engine.
+ */
+void cedrus_dst_p010_output_set(struct cedrus_ctx *ctx,
+				struct vb2_buffer *dst_buf)
+{
+	struct cedrus_dev *dev = ctx->dev;
+	u32 stride = ctx->dst_fmt.bytesperline;
+	u32 chroma_size = stride * ctx->dst_fmt.height / 2;
+	dma_addr_t luma = cedrus_dst_buf_addr(ctx, dst_buf, 0);
+	dma_addr_t chroma = cedrus_dst_buf_addr(ctx, dst_buf, 1);
+
+	/* Secondary output: the visible P010 surface. */
+	cedrus_write(dev, VE_SECONDARY_FB_LINE_STRIDE,
+		     VE_PRIMARY_FB_LINE_STRIDE_LUMA(stride) |
+		     VE_PRIMARY_FB_LINE_STRIDE_CHROMA(stride));
+	cedrus_write(dev, VE_CHROMA_BUF_LEN,
+		     VE_SECONDARY_OUT_FMT_EXT |
+		     VE_CHROMA_BUF_LEN_SDRT(chroma_size));
+	cedrus_write(dev, VE_PRIMARY_OUT_FMT,
+		     VE_PRIMARY_OUT_FMT_NV12 | VE_SECONDARY_OUT_FMT_EXT_NV12);
+	cedrus_write(dev, VE_DEC_SECOND_OUT_CTRL, 0);
+	cedrus_write(dev, VE_DEC_SECOND_OUT_LUMA_ADDR, luma >> 8);
+	cedrus_write(dev, VE_DEC_SECOND_OUT_CHROMA_ADDR, chroma >> 8);
+}
+
 static irqreturn_t cedrus_irq(int irq, void *data)
 {
 	struct cedrus_dev *dev = data;
