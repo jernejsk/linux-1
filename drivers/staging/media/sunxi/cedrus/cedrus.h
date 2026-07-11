@@ -34,6 +34,15 @@
 #define CEDRUS_CAPABILITY_MPEG2_DEC	BIT(3)
 #define CEDRUS_CAPABILITY_VP8_DEC	BIT(4)
 #define CEDRUS_CAPABILITY_H265_10_DEC	BIT(5)
+#define CEDRUS_CAPABILITY_VP9_DEC	BIT(6)
+
+/*
+ * The VP9 decoder takes its reconstruction addresses in 1 KiB units, so
+ * the chroma plane, at bytesperline * height, must be 1 KiB aligned. A
+ * 64 byte aligned line stride guarantees it for any 16 line aligned
+ * height.
+ */
+#define CEDRUS_RECON_STRIDE_ALIGN	64
 
 enum cedrus_irq_status {
 	CEDRUS_IRQ_NONE,
@@ -81,6 +90,11 @@ struct cedrus_vp8_run {
 	const struct v4l2_ctrl_vp8_frame		*frame_params;
 };
 
+struct cedrus_vp9_run {
+	const struct v4l2_ctrl_vp9_frame		*frame_params;
+	const struct v4l2_ctrl_vp9_compressed_hdr	*prob_updates;
+};
+
 struct cedrus_run {
 	struct vb2_v4l2_buffer	*src;
 	struct vb2_v4l2_buffer	*dst;
@@ -90,8 +104,11 @@ struct cedrus_run {
 		struct cedrus_mpeg2_run	mpeg2;
 		struct cedrus_h265_run	h265;
 		struct cedrus_vp8_run	vp8;
+		struct cedrus_vp9_run	vp9;
 	};
 };
+
+struct cedrus_vp9_ctx;
 
 struct cedrus_buffer {
 	struct v4l2_m2m_buffer          m2m_buf;
@@ -109,6 +126,11 @@ struct cedrus_buffer {
 			dma_addr_t	mv_col_buf_dma;
 			ssize_t		mv_col_buf_size;
 		} h265;
+		struct {
+			u32		width;
+			u32		height;
+			u8		bit_depth;
+		} vp9;
 	} codec;
 };
 
@@ -164,6 +186,7 @@ struct cedrus_ctx {
 			dma_addr_t	intra_pred_buf_dma;
 			ssize_t		intra_pred_buf_size;
 		} vp8;
+		struct cedrus_vp9_ctx	*vp9;
 	} codec;
 };
 
@@ -219,6 +242,7 @@ extern struct cedrus_dec_ops cedrus_dec_ops_mpeg2;
 extern struct cedrus_dec_ops cedrus_dec_ops_h264;
 extern struct cedrus_dec_ops cedrus_dec_ops_h265;
 extern struct cedrus_dec_ops cedrus_dec_ops_vp8;
+extern struct cedrus_dec_ops cedrus_dec_ops_vp9;
 
 static inline void cedrus_write(struct cedrus_dev *dev, u32 reg, u32 val)
 {

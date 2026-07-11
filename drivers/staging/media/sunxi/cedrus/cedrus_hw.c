@@ -57,6 +57,16 @@ int cedrus_engine_enable(struct cedrus_ctx *ctx)
 		reg |= VE_MODE_DEC_H265;
 		break;
 
+	/*
+	 * The H616 VP9 decoder runs in the H265 engine but needs the RAMPD
+	 * and reserved bits set, DDR mode 2 (256-bit) and 1 MiB write mode
+	 * (no 2 MiB write mode).
+	 */
+	case V4L2_PIX_FMT_VP9_FRAME:
+		reg = VE_MODE_RAMPD | VE_MODE_H616_VP9_RESERVED |
+		      VE_MODE_DDR_MODE_BW_256 | VE_MODE_DEC_H265;
+		break;
+
 	default:
 		return -EINVAL;
 	}
@@ -180,6 +190,7 @@ void cedrus_watchdog(struct work_struct *work)
 		return;
 
 	v4l2_err(&dev->v4l2_dev, "frame processing timed out!\n");
+
 	reset_control_reset(dev->rstc);
 	v4l2_m2m_buf_done_and_job_finish(ctx->dev->m2m_dev, ctx->fh.m2m_ctx,
 					 VB2_BUF_STATE_ERROR);
