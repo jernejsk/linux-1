@@ -37,18 +37,25 @@
 
 /*
  * Bits 30-31 of the mode register are set by the H616 BSP on the VP9
- * decode path. In the vendor headers bit 31 is named "rampd" and bit 30
- * is marked reserved; their exact function is undocumented, but both are
- * required for correct VP9 decoding on the H616.
+ * decode path. Per the Allwinner Decoder Engine Registers Guide bit 31
+ * ("rampd") selects the internal SRAM power-down mode and is documented
+ * as unused; bit 30 is marked reserved. Both are required for correct
+ * VP9 decoding on the H616.
  */
 #define VE_MODE_RAMPD				BIT(31)
 #define VE_MODE_H616_VP9_RESERVED		BIT(30)
+#define VE_MODE_COMPRESS_EN			BIT(29)
+#define VE_MODE_MIN_VAL_WRAP_EN			BIT(27)
+#define VE_MODE_RGB_DEF_COLOR_EN		BIT(26)
 #define VE_MODE_PIC_WIDTH_IS_4096		BIT(22)
 #define VE_MODE_PIC_WIDTH_MORE_2048		BIT(21)
 #define VE_MODE_REC_WR_MODE_2MB			(0x01 << 20)
 #define VE_MODE_REC_WR_MODE_1MB			(0x00 << 20)
 #define VE_MODE_DDR_MODE_BW_128			(0x03 << 16)
 #define VE_MODE_DDR_MODE_BW_256			(0x02 << 16)
+#define VE_MODE_BODYBUF_1K_ALIGNED		BIT(12)
+#define VE_MODE_COMPRESS_MODE_LOSSLESS		(0x00 << 4)
+#define VE_MODE_COMPRESS_MODE_AFBC		(0x01 << 4)
 #define VE_MODE_DISABLED			(0x07 << 0)
 #define VE_MODE_DEC_H265			(0x04 << 0)
 #define VE_MODE_DEC_H264			(0x01 << 0)

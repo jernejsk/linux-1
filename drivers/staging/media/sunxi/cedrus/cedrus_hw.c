@@ -76,6 +76,19 @@ int cedrus_engine_enable(struct cedrus_ctx *ctx)
 	if (ctx->src_fmt.width > 2048)
 		reg |= VE_MODE_PIC_WIDTH_MORE_2048;
 
+	/*
+	 * NOTE: Not sure if RGB default color feature is part of the official
+	 * AFBC standard or not and if it is, which feature that is. However,
+	 * in order to render it properly with the display engine, the default
+	 * color has to be set to white there.
+	 */
+	if (cedrus_dst_is_afbc(ctx))
+		reg |= VE_MODE_COMPRESS_EN |
+		       VE_MODE_MIN_VAL_WRAP_EN |
+		       VE_MODE_RGB_DEF_COLOR_EN |
+		       VE_MODE_BODYBUF_1K_ALIGNED |
+		       VE_MODE_COMPRESS_MODE_AFBC;
+
 	cedrus_write(ctx->dev, VE_MODE, reg);
 
 	return 0;
@@ -95,6 +108,10 @@ void cedrus_dst_format_set(struct cedrus_dev *dev,
 	u32 reg;
 
 	switch (fmt->pixelformat) {
+	case V4L2_PIX_FMT_YUV420_8_AFBC_16X16_SPLIT:
+	case V4L2_PIX_FMT_YUV420_10_AFBC_16X16_SPLIT:
+		/* The AFBC output format is selected in cedrus_engine_enable(). */
+		break;
 	case V4L2_PIX_FMT_NV12:
 	case V4L2_PIX_FMT_NV21:
 	case V4L2_PIX_FMT_YUV420:
