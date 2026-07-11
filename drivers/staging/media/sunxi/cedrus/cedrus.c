@@ -103,6 +103,46 @@ static int cedrus_try_ctrl(struct v4l2_ctrl *ctrl)
 			ctx->bit_depth = bit_depth;
 			cedrus_reset_cap_format(ctx);
 		}
+	} else if (ctrl->id == V4L2_CID_STATELESS_VP9_FRAME) {
+		const struct v4l2_ctrl_vp9_frame *dec = ctrl->p_new.p_vp9_frame;
+		struct cedrus_ctx *ctx = container_of(ctrl->handler, struct cedrus_ctx, hdl);
+		unsigned int max_depth;
+		struct vb2_queue *vq;
+
+		/* The hardware only supports 4:2:0 profiles (0 and 2). */
+		if (dec->profile != 0 && dec->profile != 2)
+			return -EINVAL;
+
+		if (cedrus_is_capable(ctx, CEDRUS_CAPABILITY_H265_10_DEC))
+			max_depth = 10;
+		else
+			max_depth = 8;
+
+		if (dec->bit_depth > max_depth)
+			return -EINVAL;
+
+		/* The VP9 specification allows up to 4 tile rows. */
+		if (dec->tile_rows_log2 > 2)
+			return -EINVAL;
+
+		if (!cedrus_pic_size_supported(dec->frame_width_minus_1 + 1,
+					       dec->frame_height_minus_1 + 1))
+			return -EINVAL;
+
+		/* The bit depth of another codec's stream is not ours to set. */
+		if (ctx->src_fmt.pixelformat != V4L2_PIX_FMT_VP9_FRAME)
+			return 0;
+
+		vq = v4l2_m2m_get_vq(ctx->fh.m2m_ctx,
+				     V4L2_BUF_TYPE_VIDEO_CAPTURE);
+
+		if (vb2_is_busy(vq)) {
+			if (ctx->bit_depth < dec->bit_depth)
+				return -EINVAL;
+		} else {
+			ctx->bit_depth = dec->bit_depth;
+			cedrus_reset_cap_format(ctx);
+		}
 	}
 
 	return 0;
@@ -261,6 +301,19 @@ static const struct cedrus_control cedrus_controls[] = {
 			.ops	= &cedrus_ctrl_ops,
 		},
 		.capabilities	= CEDRUS_CAPABILITY_VP8_DEC,
+	},
+	{
+		.cfg = {
+			.id	= V4L2_CID_STATELESS_VP9_FRAME,
+			.ops	= &cedrus_ctrl_ops,
+		},
+		.capabilities	= CEDRUS_CAPABILITY_VP9_DEC,
+	},
+	{
+		.cfg = {
+			.id	= V4L2_CID_STATELESS_VP9_COMPRESSED_HDR,
+		},
+		.capabilities	= CEDRUS_CAPABILITY_VP9_DEC,
 	},
 	{
 		.cfg = {
@@ -692,7 +745,8 @@ static const struct cedrus_variant sun50i_h616_cedrus_variant = {
 			  CEDRUS_CAPABILITY_H264_DEC |
 			  CEDRUS_CAPABILITY_H265_DEC |
 			  CEDRUS_CAPABILITY_H265_10_DEC |
-			  CEDRUS_CAPABILITY_VP8_DEC,
+			  CEDRUS_CAPABILITY_VP8_DEC |
+			  CEDRUS_CAPABILITY_VP9_DEC,
 	.mod_rate	= 600000000,
 	.ve_mode_ddr	= VE_MODE_DDR_MODE_BW_256,
 };

@@ -96,6 +96,13 @@ static void cedrus_run_slice(struct cedrus_ctx *ctx)
 			V4L2_CID_STATELESS_VP8_FRAME);
 		break;
 
+	case V4L2_PIX_FMT_VP9_FRAME:
+		run.vp9.frame_params = cedrus_find_control_data(ctx,
+			V4L2_CID_STATELESS_VP9_FRAME);
+		run.vp9.prob_updates = cedrus_find_control_data(ctx,
+			V4L2_CID_STATELESS_VP9_COMPRESSED_HDR);
+		break;
+
 	default:
 		break;
 	}
