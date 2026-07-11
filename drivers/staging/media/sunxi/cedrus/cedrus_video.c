@@ -60,6 +60,7 @@ static struct cedrus_format cedrus_formats[] = {
 		.directions	= CEDRUS_DECODE_DST,
 		.capabilities	= CEDRUS_CAPABILITY_UNTILED |
 				  CEDRUS_CAPABILITY_H265_10_DEC,
+		.depth		= 10,
 	},
 	{
 		.pixelformat	= V4L2_PIX_FMT_NV12,
@@ -89,21 +90,6 @@ static struct cedrus_format cedrus_formats[] = {
 
 #define CEDRUS_FORMATS_COUNT	ARRAY_SIZE(cedrus_formats)
 
-static bool cedrus_is_10bit_dst_format_supported(struct cedrus_ctx *ctx)
-{
-	if (ctx->bit_depth <= 8)
-		return false;
-
-	switch (ctx->src_fmt.pixelformat) {
-	case V4L2_PIX_FMT_HEVC_SLICE:
-		return cedrus_is_capable(ctx, CEDRUS_CAPABILITY_H265_10_DEC);
-	case V4L2_PIX_FMT_VP9_FRAME:
-		return true;
-	default:
-		return false;
-	}
-}
-
 static struct cedrus_format *cedrus_find_format(struct cedrus_ctx *ctx,
 						u32 pixelformat, u32 directions)
 {
@@ -123,17 +109,6 @@ static struct cedrus_format *cedrus_find_format(struct cedrus_ctx *ctx,
 
 		if (fmt->src_format &&
 		    fmt->src_format != ctx->src_fmt.pixelformat)
-			continue;
-
-		/*
-		 * The 10-bit P010 format is only usable when the current
-		 * stream is actually 10-bit; skip it otherwise so the
-		 * default (first matching) format falls through to an
-		 * 8-bit one.  Its early position in the array makes it the
-		 * preferred default for 10-bit streams.
-		 */
-		if (fmt->pixelformat == V4L2_PIX_FMT_P010 &&
-		    !cedrus_is_10bit_dst_format_supported(ctx))
 			continue;
 
 		if (fmt->pixelformat == pixelformat)
