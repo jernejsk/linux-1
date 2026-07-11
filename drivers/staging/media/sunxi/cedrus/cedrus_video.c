@@ -56,6 +56,12 @@ static struct cedrus_format cedrus_formats[] = {
 		.capabilities	= CEDRUS_CAPABILITY_VP9_DEC,
 	},
 	{
+		.pixelformat	= V4L2_PIX_FMT_P010,
+		.directions	= CEDRUS_DECODE_DST,
+		.capabilities	= CEDRUS_CAPABILITY_P010,
+		.depth		= 10,
+	},
+	{
 		.pixelformat	= V4L2_PIX_FMT_NV12,
 		.directions	= CEDRUS_DECODE_DST,
 		.capabilities	= CEDRUS_CAPABILITY_UNTILED,
@@ -92,6 +98,15 @@ static bool cedrus_check_format(struct cedrus_ctx *ctx,
 		return false;
 
 	if (fmt->depth && fmt->depth != ctx->bit_depth)
+		return false;
+
+	/*
+	 * Only the H.265 and VP9 decoders produce 10-bit output, but the
+	 * controls of either set the bit depth, whatever the OUTPUT format.
+	 */
+	if (fmt->depth > 8 &&
+	    ctx->src_fmt.pixelformat != V4L2_PIX_FMT_HEVC_SLICE &&
+	    ctx->src_fmt.pixelformat != V4L2_PIX_FMT_VP9_FRAME)
 		return false;
 
 	/*
@@ -194,6 +209,18 @@ void cedrus_prepare_format(struct v4l2_pix_format *pix_fmt)
 
 		/* Chroma plane size. */
 		sizeimage += bytesperline * height / 2;
+
+		break;
+
+	case V4L2_PIX_FMT_P010:
+		/* 16-aligned stride, two bytes per luma sample. */
+		bytesperline = ALIGN(width, 16) * 2;
+
+		/* 16-aligned height. */
+		height = ALIGN(height, 16);
+
+		/* Luma plane plus interleaved 4:2:0 chroma plane. */
+		sizeimage = bytesperline * height * 3 / 2;
 
 		break;
 	}
