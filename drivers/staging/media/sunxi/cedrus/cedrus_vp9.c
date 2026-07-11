@@ -745,7 +745,7 @@ static int cedrus_vp9_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	dma_addr_t src_dma, src_end, luma, chroma;
 	u32 src_len, hdr_off, cur_w, cur_h;
 	u32 hdr_syn, fc;
-	bool intra_only, resolution_change, use_temporal_mv;
+	bool intra_only, p010, resolution_change, use_temporal_mv;
 	int ret;
 
 	if (!dec || !prob)
@@ -753,6 +753,7 @@ static int cedrus_vp9_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 
 	cur_w = dec->frame_width_minus_1 + 1;
 	cur_h = dec->frame_height_minus_1 + 1;
+	p010 = cedrus_dst_is_p010(ctx);
 
 	intra_only = !!(dec->flags & (V4L2_VP9_FRAME_FLAG_KEY_FRAME |
 				      V4L2_VP9_FRAME_FLAG_INTRA_ONLY));
@@ -812,7 +813,7 @@ static int cedrus_vp9_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 		return ret;
 
 	{
-		struct v4l2_pix_format fmt = ctx->dst_fmt;
+		struct v4l2_pix_format fmt = cedrus_dst_frame_fmt(ctx);
 
 		fmt.width = ALIGN(cur_w, 16);
 		fmt.height = ALIGN(cur_h, 16);
@@ -968,42 +969,50 @@ static int cedrus_vp9_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 		cedrus_write(dev, VE_DEC_VP9_ALTREF_SCALE1, s1);
 
 		cedrus_write(dev, VE_DEC_VP9_LAST_LUMA_ADDR,
-			     VE_DEC_VP9_BUF_ADDR(cedrus_dst_buf_addr(ctx, last_buf, 0)));
+			     VE_DEC_VP9_BUF_ADDR(cedrus_dst_frame_addr(ctx, last_buf, 0)));
 		cedrus_write(dev, VE_DEC_VP9_LAST_CHROMA_ADDR,
-			     VE_DEC_VP9_BUF_ADDR(cedrus_dst_buf_addr(ctx, last_buf, 1)));
+			     VE_DEC_VP9_BUF_ADDR(cedrus_dst_frame_addr(ctx, last_buf, 1)));
 		cedrus_write(dev, VE_DEC_VP9_GOLDEN_LUMA_ADDR,
-			     VE_DEC_VP9_BUF_ADDR(cedrus_dst_buf_addr(ctx, gold_buf, 0)));
+			     VE_DEC_VP9_BUF_ADDR(cedrus_dst_frame_addr(ctx, gold_buf, 0)));
 		cedrus_write(dev, VE_DEC_VP9_GOLDEN_CHROMA_ADDR,
-			     VE_DEC_VP9_BUF_ADDR(cedrus_dst_buf_addr(ctx, gold_buf, 1)));
+			     VE_DEC_VP9_BUF_ADDR(cedrus_dst_frame_addr(ctx, gold_buf, 1)));
 
 		/* Altref chroma sits at an unusual register slot. */
 		cedrus_write(dev, VE_DEC_VP9_ALTREF_LUMA_ADDR,
-			     VE_DEC_VP9_BUF_ADDR(cedrus_dst_buf_addr(ctx, alt_buf, 0)));
+			     VE_DEC_VP9_BUF_ADDR(cedrus_dst_frame_addr(ctx, alt_buf, 0)));
 		cedrus_write(dev, VE_DEC_VP9_ALTREF_CHROMA_ADDR,
-			     VE_DEC_VP9_BUF_ADDR(cedrus_dst_buf_addr(ctx, alt_buf, 1)));
+			     VE_DEC_VP9_BUF_ADDR(cedrus_dst_frame_addr(ctx, alt_buf, 1)));
 	}
 
 	/* Current frame reconstruction targets. */
-	luma   = cedrus_dst_buf_addr(ctx, &run->dst->vb2_buf, 0);
-	chroma = cedrus_dst_buf_addr(ctx, &run->dst->vb2_buf, 1);
+	luma = cedrus_dst_frame_addr(ctx, &run->dst->vb2_buf, 0);
+	chroma = cedrus_dst_frame_addr(ctx, &run->dst->vb2_buf, 1);
 	cedrus_write(dev, VE_DEC_VP9_CUR_LUMA_ADDR, VE_DEC_VP9_BUF_ADDR(luma));
 	cedrus_write(dev, VE_DEC_VP9_CUR_CHROMA_ADDR, VE_DEC_VP9_BUF_ADDR(chroma));
 
 	cedrus_write(dev, VE_DEC_VP9_SDRT_CTRL, 0);
-	cedrus_write(dev, VE_DEC_VP9_SDRT_LUMA_ADDR, 0);
-	cedrus_write(dev, VE_DEC_VP9_SDRT_CHROMA_ADDR, 0);
+	if (p010) {
+		cedrus_dst_p010_output_set(ctx, &run->dst->vb2_buf);
+	} else {
+		cedrus_write(dev, VE_DEC_VP9_SDRT_LUMA_ADDR, 0);
+		cedrus_write(dev, VE_DEC_VP9_SDRT_CHROMA_ADDR, 0);
+	}
 
 	/* 10-bit output: lower-2-bit plane offset and stride. */
 	if (dec->bit_depth > 8) {
-		u32 stride = ctx->dst_fmt.bytesperline;
-		u32 h = ctx->dst_fmt.height;
+		struct v4l2_pix_format fmt = cedrus_dst_frame_fmt(ctx);
+		u32 stride = fmt.bytesperline;
+		u32 h = fmt.height;
 		u32 stride2 = ALIGN(stride >> 2, 32);
 		u32 off = (u32)(chroma - luma) + stride * (h >> 1);
+		u32 cfg = VE_DEC_VP9_10BIT_CFG_STRIDE(stride2);
+
+		if (p010)
+			cfg |= VE_DEC_10BIT_CFG_P010;
 
 		cedrus_write(dev, VE_DEC_VP9_FIRST_OUT_OFFSET,
 			     off & GENMASK(27, 0));
-		cedrus_write(dev, VE_DEC_VP9_10BIT_CFG,
-			     VE_DEC_VP9_10BIT_CFG_STRIDE(stride2));
+		cedrus_write(dev, VE_DEC_VP9_10BIT_CFG, cfg);
 	}
 
 	/* Side buffers and segment feature register. */
@@ -1054,6 +1063,8 @@ static int cedrus_vp9_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 		if ((wa - 0x81u) < 0x40 && ha > 64)
 			fc |= VE_DEC_VP9_FUNC_CTRL_DDR_CONS;
 	}
+	if (p010)
+		fc |= VE_DEC_VP9_FUNC_CTRL_SECOND_OUT;
 	cedrus_write(dev, VE_DEC_VP9_FUNC_CTRL, fc);
 
 	cedrus_write(dev, VE_DEC_VP9_DEC_CTB_NUM, 0);
@@ -1271,22 +1282,8 @@ static void cedrus_vp9_irq_clear_and_adapt(struct cedrus_ctx *ctx)
 	cedrus_vp9_irq_clear(ctx);
 }
 
-/*
- * For 10-bit output the hardware appends a plane holding the low two
- * bits of each sample after the 8-bit NV12 planes.  Grow the capture
- * buffer to hold it; layout matches the H.265 decoder.
- */
-static unsigned int cedrus_vp9_extra_cap_size(struct cedrus_ctx *ctx,
-					      struct v4l2_pix_format *pix_fmt)
-{
-	if (ctx->bit_depth > 8)
-		return ALIGN(pix_fmt->width / 4, 32) * pix_fmt->height * 3 / 2;
-
-	return 0;
-}
-
 struct cedrus_dec_ops cedrus_dec_ops_vp9 = {
-	.extra_cap_size	= cedrus_vp9_extra_cap_size,
+	.extra_cap_size	= cedrus_dst_10bit_extra_size,
 	.irq_clear	= cedrus_vp9_irq_clear_and_adapt,
 	.irq_disable	= cedrus_vp9_irq_disable,
 	.irq_status	= cedrus_vp9_irq_status,
