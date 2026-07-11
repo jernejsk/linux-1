@@ -57,10 +57,14 @@ int cedrus_engine_enable(struct cedrus_ctx *ctx)
 		reg |= VE_MODE_DEC_H265;
 		break;
 
-	/* The H616 VP9 decoder wants DDR mode 2 and no 2 MiB write mode. */
+	/*
+	 * The H616 VP9 decoder runs in the H265 engine but needs the RAMPD
+	 * and reserved bits set, DDR mode 2 (256-bit) and 1 MiB write mode
+	 * (no 2 MiB write mode).
+	 */
 	case V4L2_PIX_FMT_VP9_FRAME:
-		reg = BIT(31) | BIT(30) | VE_MODE_DDR_MODE_BW_256 |
-		      VE_MODE_DEC_H265;
+		reg = VE_MODE_RAMPD | VE_MODE_H616_VP9_RESERVED |
+		      VE_MODE_DDR_MODE_BW_256 | VE_MODE_DEC_H265;
 		break;
 
 	default:

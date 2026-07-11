@@ -35,6 +35,14 @@
 
 #define VE_MODE					0x00
 
+/*
+ * Bits 30-31 of the mode register are set by the H616 BSP on the VP9
+ * decode path. In the vendor headers bit 31 is named "rampd" and bit 30
+ * is marked reserved; their exact function is undocumented, but both are
+ * required for correct VP9 decoding on the H616.
+ */
+#define VE_MODE_RAMPD				BIT(31)
+#define VE_MODE_H616_VP9_RESERVED		BIT(30)
 #define VE_MODE_PIC_WIDTH_IS_4096		BIT(22)
 #define VE_MODE_PIC_WIDTH_MORE_2048		BIT(21)
 #define VE_MODE_REC_WR_MODE_2MB			(0x01 << 20)
