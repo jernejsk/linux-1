@@ -56,6 +56,12 @@ static struct cedrus_format cedrus_formats[] = {
 		.capabilities	= CEDRUS_CAPABILITY_VP9_DEC,
 	},
 	{
+		.pixelformat	= V4L2_PIX_FMT_P010,
+		.directions	= CEDRUS_DECODE_DST,
+		.capabilities	= CEDRUS_CAPABILITY_UNTILED |
+				  CEDRUS_CAPABILITY_H265_10_DEC,
+	},
+	{
 		.pixelformat	= V4L2_PIX_FMT_NV12,
 		.directions	= CEDRUS_DECODE_DST,
 		.capabilities	= CEDRUS_CAPABILITY_UNTILED,
@@ -83,6 +89,17 @@ static struct cedrus_format cedrus_formats[] = {
 
 #define CEDRUS_FORMATS_COUNT	ARRAY_SIZE(cedrus_formats)
 
+static bool cedrus_is_10bit_dst_format_supported(struct cedrus_ctx *ctx)
+{
+	if (ctx->bit_depth <= 8)
+		return false;
+
+	switch (ctx->src_fmt.pixelformat) {
+	default:
+		return false;
+	}
+}
+
 static struct cedrus_format *cedrus_find_format(struct cedrus_ctx *ctx,
 						u32 pixelformat, u32 directions)
 {
@@ -95,6 +112,17 @@ static struct cedrus_format *cedrus_find_format(struct cedrus_ctx *ctx,
 
 		if (!cedrus_is_capable(ctx, fmt->capabilities) ||
 		    !(fmt->directions & directions))
+			continue;
+
+		/*
+		 * The 10-bit P010 format is only usable when the current
+		 * stream is actually 10-bit; skip it otherwise so the
+		 * default (first matching) format falls through to an
+		 * 8-bit one.  Its early position in the array makes it the
+		 * preferred default for 10-bit streams.
+		 */
+		if (fmt->pixelformat == V4L2_PIX_FMT_P010 &&
+		    !cedrus_is_10bit_dst_format_supported(ctx))
 			continue;
 
 		if (fmt->pixelformat == pixelformat)
@@ -165,6 +193,18 @@ void cedrus_prepare_format(struct v4l2_pix_format *pix_fmt)
 
 		/* Chroma plane size. */
 		sizeimage += bytesperline * height / 2;
+
+		break;
+
+	case V4L2_PIX_FMT_P010:
+		/* 16-aligned stride, two bytes per luma sample. */
+		bytesperline = ALIGN(width, 16) * 2;
+
+		/* 16-aligned height. */
+		height = ALIGN(height, 16);
+
+		/* Luma plane plus interleaved 4:2:0 chroma plane. */
+		sizeimage = bytesperline * height * 3 / 2;
 
 		break;
 	}
@@ -272,6 +312,7 @@ static int cedrus_try_fmt_vid_cap_p(struct cedrus_ctx *ctx,
 	if (ctx->src_fmt.pixelformat == V4L2_PIX_FMT_VP9_FRAME &&
 	    (pix_fmt->pixelformat == V4L2_PIX_FMT_NV12 ||
 	     pix_fmt->pixelformat == V4L2_PIX_FMT_NV21 ||
+	     pix_fmt->pixelformat == V4L2_PIX_FMT_P010 ||
 	     pix_fmt->pixelformat == V4L2_PIX_FMT_YUV420 ||
 	     pix_fmt->pixelformat == V4L2_PIX_FMT_YVU420)) {
 		while (!IS_ALIGNED(pix_fmt->bytesperline * pix_fmt->height, SZ_1K))
