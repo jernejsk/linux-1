@@ -62,6 +62,15 @@ int cedrus_engine_enable(struct cedrus_ctx *ctx)
 		reg |= VE_MODE_DEC_H265;
 		break;
 
+	/*
+	 * VP9 runs in the H.265 engine. Like the vendor library, also set
+	 * the RAMPD bit and bit 30.
+	 */
+	case V4L2_PIX_FMT_VP9_FRAME:
+		reg |= VE_MODE_RAMPD | VE_MODE_H616_VP9_RESERVED |
+		       VE_MODE_DEC_H265;
+		break;
+
 	default:
 		return -EINVAL;
 	}
@@ -120,7 +129,7 @@ void cedrus_dst_format_set(struct cedrus_dev *dev,
 	case V4L2_PIX_FMT_NV21:
 	case V4L2_PIX_FMT_YUV420:
 	case V4L2_PIX_FMT_YVU420:
-		chroma_size = bytesperline * ALIGN(height, 16) / 2;
+		chroma_size = bytesperline * height / 2;
 
 		switch (fmt->pixelformat) {
 		case V4L2_PIX_FMT_NV12:

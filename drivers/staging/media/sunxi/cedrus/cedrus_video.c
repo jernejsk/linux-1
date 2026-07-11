@@ -51,6 +51,11 @@ static struct cedrus_format cedrus_formats[] = {
 		.capabilities	= CEDRUS_CAPABILITY_VP8_DEC,
 	},
 	{
+		.pixelformat	= V4L2_PIX_FMT_VP9_FRAME,
+		.directions	= CEDRUS_DECODE_SRC,
+		.capabilities	= CEDRUS_CAPABILITY_VP9_DEC,
+	},
+	{
 		.pixelformat	= V4L2_PIX_FMT_NV12,
 		.directions	= CEDRUS_DECODE_DST,
 		.capabilities	= CEDRUS_CAPABILITY_UNTILED,
@@ -84,6 +89,16 @@ static bool cedrus_check_format(struct cedrus_ctx *ctx,
 {
 	if (!cedrus_is_capable(ctx, fmt->capabilities) ||
 	    !(fmt->directions & directions))
+		return false;
+
+	/*
+	 * The VP9 decoder derives the location of the plane of the two low
+	 * bits of 10-bit frames from the frame height, which can put it inside
+	 * the chroma plane of the tiled format.
+	 */
+	if (ctx->src_fmt.pixelformat == V4L2_PIX_FMT_VP9_FRAME &&
+	    ctx->bit_depth > 8 &&
+	    fmt->pixelformat == V4L2_PIX_FMT_NV12_32L32)
 		return false;
 
 	return true;
@@ -133,10 +148,17 @@ void cedrus_prepare_format(struct v4l2_pix_format *pix_fmt)
 	case V4L2_PIX_FMT_H264_SLICE:
 	case V4L2_PIX_FMT_HEVC_SLICE:
 	case V4L2_PIX_FMT_VP8_FRAME:
+	case V4L2_PIX_FMT_VP9_FRAME:
 		/* Zero bytes per line for encoded source. */
 		bytesperline = 0;
 		/* Choose some minimum size since this can't be 0 */
 		sizeimage = max_t(u32, SZ_1K, sizeimage);
+		/*
+		 * The VP9 bitstream end address has a 1 KiB granularity.
+		 * Round down, rounding up could wrap around to 0.
+		 */
+		if (pix_fmt->pixelformat == V4L2_PIX_FMT_VP9_FRAME)
+			sizeimage = ALIGN_DOWN(sizeimage, SZ_1K);
 		break;
 
 	case V4L2_PIX_FMT_NV12_32L32:
@@ -265,6 +287,19 @@ static int cedrus_try_fmt_vid_cap_p(struct cedrus_ctx *ctx,
 	pix_fmt->height = ctx->src_fmt.height;
 	cedrus_prepare_format(pix_fmt);
 
+	/* See cedrus_vp9_stride_align(). */
+	if (ctx->src_fmt.pixelformat == V4L2_PIX_FMT_VP9_FRAME &&
+	    (pix_fmt->pixelformat == V4L2_PIX_FMT_NV12 ||
+	     pix_fmt->pixelformat == V4L2_PIX_FMT_NV21 ||
+	     cedrus_vp9_is_planar(pix_fmt->pixelformat))) {
+		if (cedrus_vp9_is_planar(pix_fmt->pixelformat))
+			pix_fmt->height = ALIGN(ctx->src_fmt.height, 8);
+		pix_fmt->bytesperline =
+			ALIGN(pix_fmt->width,
+			      cedrus_vp9_stride_align(pix_fmt->pixelformat));
+		pix_fmt->sizeimage = pix_fmt->bytesperline * pix_fmt->height * 3 / 2;
+	}
+
 	if (ctx->current_codec->extra_cap_size)
 		pix_fmt->sizeimage +=
 			ctx->current_codec->extra_cap_size(ctx, pix_fmt);
@@ -364,6 +399,9 @@ static int cedrus_s_fmt_vid_out_p(struct cedrus_ctx *ctx,
 		break;
 	case V4L2_PIX_FMT_VP8_FRAME:
 		ctx->current_codec = &cedrus_dec_ops_vp8;
+		break;
+	case V4L2_PIX_FMT_VP9_FRAME:
+		ctx->current_codec = &cedrus_dec_ops_vp9;
 		break;
 	}
 
