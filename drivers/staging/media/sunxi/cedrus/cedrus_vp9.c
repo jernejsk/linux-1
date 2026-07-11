@@ -745,7 +745,7 @@ static int cedrus_vp9_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	dma_addr_t src_dma, src_end, luma, chroma;
 	u32 src_len, hdr_off, cur_w, cur_h;
 	u32 hdr_syn, fc;
-	bool intra_only, p010, resolution_change, use_temporal_mv;
+	bool intra_only, p010, afbc, resolution_change, use_temporal_mv;
 	int ret;
 
 	if (!dec || !prob)
@@ -754,6 +754,7 @@ static int cedrus_vp9_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	cur_w = dec->frame_width_minus_1 + 1;
 	cur_h = dec->frame_height_minus_1 + 1;
 	p010 = cedrus_dst_is_p010(ctx);
+	afbc = cedrus_dst_is_afbc(ctx);
 
 	intra_only = !!(dec->flags & (V4L2_VP9_FRAME_FLAG_KEY_FRAME |
 				      V4L2_VP9_FRAME_FLAG_INTRA_ONLY));
@@ -998,8 +999,12 @@ static int cedrus_vp9_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 		cedrus_write(dev, VE_DEC_VP9_SDRT_CHROMA_ADDR, 0);
 	}
 
-	/* 10-bit output: lower-2-bit plane offset and stride. */
-	if (dec->bit_depth > 8) {
+	/*
+	 * 10-bit output: lower-2-bit plane offset and stride. AFBC output is
+	 * self-contained (the compressed body already carries the full 10-bit
+	 * samples), so the 8-bit + 2-bit split does not apply there.
+	 */
+	if (dec->bit_depth > 8 && !afbc) {
 		struct v4l2_pix_format fmt = cedrus_dst_frame_fmt(ctx);
 		u32 stride = fmt.bytesperline;
 		u32 h = fmt.height;

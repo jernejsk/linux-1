@@ -272,6 +272,22 @@ static inline bool cedrus_dst_is_p010(struct cedrus_ctx *ctx)
 	return ctx->dst_fmt.pixelformat == V4L2_PIX_FMT_P010;
 }
 
+static inline bool cedrus_is_afbc_format(u32 format)
+{
+	switch (format) {
+	case V4L2_PIX_FMT_YUV420_8_AFBC_16X16_SPLIT:
+	case V4L2_PIX_FMT_YUV420_10_AFBC_16X16_SPLIT:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static inline bool cedrus_dst_is_afbc(struct cedrus_ctx *ctx)
+{
+	return cedrus_is_afbc_format(ctx->dst_fmt.pixelformat);
+}
+
 /* Size of the userspace-visible P010 surface at the buffer start. */
 static inline u32 cedrus_dst_p010_size(struct cedrus_ctx *ctx)
 {
@@ -331,6 +347,14 @@ cedrus_dst_10bit_extra_size(struct cedrus_ctx *ctx,
 	unsigned int extra;
 
 	if (ctx->bit_depth <= 8)
+		return 0;
+
+	/*
+	 * AFBC buffers are sized in full by cedrus_prepare_format(); the
+	 * compressed body already carries the 10-bit samples, so no extra
+	 * low-2-bit plane is appended.
+	 */
+	if (cedrus_is_afbc_format(pix_fmt->pixelformat))
 		return 0;
 
 	extra = cedrus_dst_2bit_size(pix_fmt->width, pix_fmt->height);
