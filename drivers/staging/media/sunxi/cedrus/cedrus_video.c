@@ -95,6 +95,8 @@ static bool cedrus_is_10bit_dst_format_supported(struct cedrus_ctx *ctx)
 		return false;
 
 	switch (ctx->src_fmt.pixelformat) {
+	case V4L2_PIX_FMT_VP9_FRAME:
+		return true;
 	default:
 		return false;
 	}
