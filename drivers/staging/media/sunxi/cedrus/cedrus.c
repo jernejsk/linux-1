@@ -77,6 +77,34 @@ static int cedrus_try_ctrl(struct v4l2_ctrl *ctrl)
 			ctx->bit_depth = bit_depth;
 			cedrus_reset_cap_format(ctx);
 		}
+	} else if (ctrl->id == V4L2_CID_STATELESS_VP9_FRAME) {
+		const struct v4l2_ctrl_vp9_frame *dec = ctrl->p_new.p_vp9_frame;
+		struct cedrus_ctx *ctx = container_of(ctrl->handler, struct cedrus_ctx, hdl);
+		unsigned int max_depth;
+		struct vb2_queue *vq;
+
+		/* The hardware only supports 4:2:0 profiles (0 and 2). */
+		if (dec->profile != 0 && dec->profile != 2)
+			return -EINVAL;
+
+		if (cedrus_is_capable(ctx, CEDRUS_CAPABILITY_H265_10_DEC))
+			max_depth = 10;
+		else
+			max_depth = 8;
+
+		if (dec->bit_depth > max_depth)
+			return -EINVAL;
+
+		vq = v4l2_m2m_get_vq(ctx->fh.m2m_ctx,
+				     V4L2_BUF_TYPE_VIDEO_CAPTURE);
+
+		if (vb2_is_busy(vq)) {
+			if (ctx->bit_depth < dec->bit_depth)
+				return -EINVAL;
+		} else {
+			ctx->bit_depth = dec->bit_depth;
+			cedrus_reset_cap_format(ctx);
+		}
 	}
 
 	return 0;
@@ -234,6 +262,19 @@ static const struct cedrus_control cedrus_controls[] = {
 			.id	= V4L2_CID_STATELESS_VP8_FRAME,
 		},
 		.capabilities	= CEDRUS_CAPABILITY_VP8_DEC,
+	},
+	{
+		.cfg = {
+			.id	= V4L2_CID_STATELESS_VP9_FRAME,
+			.ops	= &cedrus_ctrl_ops,
+		},
+		.capabilities	= CEDRUS_CAPABILITY_VP9_DEC,
+	},
+	{
+		.cfg = {
+			.id	= V4L2_CID_STATELESS_VP9_COMPRESSED_HDR,
+		},
+		.capabilities	= CEDRUS_CAPABILITY_VP9_DEC,
 	},
 	{
 		.cfg = {
@@ -647,6 +688,17 @@ static const struct cedrus_variant sun50i_h6_cedrus_variant = {
 	.mod_rate	= 600000000,
 };
 
+static const struct cedrus_variant sun50i_h616_cedrus_variant = {
+	.capabilities	= CEDRUS_CAPABILITY_UNTILED |
+			  CEDRUS_CAPABILITY_MPEG2_DEC |
+			  CEDRUS_CAPABILITY_H264_DEC |
+			  CEDRUS_CAPABILITY_H265_DEC |
+			  CEDRUS_CAPABILITY_H265_10_DEC |
+			  CEDRUS_CAPABILITY_VP8_DEC |
+			  CEDRUS_CAPABILITY_VP9_DEC,
+	.mod_rate	= 600000000,
+};
+
 static const struct of_device_id cedrus_dt_match[] = {
 	{
 		.compatible = "allwinner,sun4i-a10-video-engine",
@@ -694,7 +746,7 @@ static const struct of_device_id cedrus_dt_match[] = {
 	},
 	{
 		.compatible = "allwinner,sun50i-h616-video-engine",
-		.data = &sun50i_h6_cedrus_variant,
+		.data = &sun50i_h616_cedrus_variant,
 	},
 	{ /* sentinel */ }
 };
