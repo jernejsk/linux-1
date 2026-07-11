@@ -86,6 +86,25 @@ static struct cedrus_format cedrus_formats[] = {
 		.directions	= CEDRUS_DECODE_DST,
 		.capabilities	= CEDRUS_CAPABILITY_UNTILED,
 	},
+	/*
+	 * AFBC-compressed output. Only wired up for VP9 (H616) so far and
+	 * opt-in: placed after the plain formats so P010/NV12 stay the
+	 * default capture format. Selected explicitly via S_FMT.
+	 */
+	{
+		.pixelformat	= V4L2_PIX_FMT_YUV420_10_AFBC_16X16_SPLIT,
+		.directions	= CEDRUS_DECODE_DST,
+		.capabilities	= CEDRUS_CAPABILITY_UNTILED,
+		.depth		= 10,
+		.src_format	= V4L2_PIX_FMT_VP9_FRAME,
+	},
+	{
+		.pixelformat	= V4L2_PIX_FMT_YUV420_8_AFBC_16X16_SPLIT,
+		.directions	= CEDRUS_DECODE_DST,
+		.capabilities	= CEDRUS_CAPABILITY_UNTILED,
+		.depth		= 8,
+		.src_format	= V4L2_PIX_FMT_VP9_FRAME,
+	},
 };
 
 #define CEDRUS_FORMATS_COUNT	ARRAY_SIZE(cedrus_formats)
@@ -191,6 +210,27 @@ void cedrus_prepare_format(struct v4l2_pix_format *pix_fmt)
 
 		/* Luma plane plus interleaved 4:2:0 chroma plane. */
 		sizeimage = bytesperline * height * 3 / 2;
+
+		break;
+
+	case V4L2_PIX_FMT_YUV420_10_AFBC_16X16_SPLIT:
+		/* Compressed destination, no meaningful line stride. */
+		bytesperline = 0;
+
+		/* AFBC header (one 16-byte entry per 16x16 block) plus body. */
+		sizeimage = DIV_ROUND_UP(width, 16) *
+			    DIV_ROUND_UP(height + 4, 16) * (512 + 16) +
+			    32 + SZ_1K;
+
+		break;
+
+	case V4L2_PIX_FMT_YUV420_8_AFBC_16X16_SPLIT:
+		/* Compressed destination, no meaningful line stride. */
+		bytesperline = 0;
+
+		sizeimage = DIV_ROUND_UP(width, 16) *
+			    DIV_ROUND_UP(height + 4, 16) * (384 + 16) +
+			    32 + SZ_1K;
 
 		break;
 	}
