@@ -859,6 +859,7 @@ static const struct sun8i_mixer_cfg sun50i_h6_mixer0_cfg = {
 		.vi_scaler_num	= 1,
 		.scaler_mask	= 0xf,
 		.scanline_yuv	= 4096,
+		.has_afbc	= 1,
 	},
 	.de_type	= SUN8I_MIXER_DE3,
 	.mod_rate	= 600000000,

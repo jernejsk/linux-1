@@ -11,10 +11,12 @@
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_gem_atomic_helper.h>
 #include <drm/drm_gem_dma_helper.h>
+#include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
 
 #include "sun4i_crtc.h"
+#include "sun50i_afbc.h"
 #include "sun8i_csc.h"
 #include "sun8i_mixer.h"
 #include "sun8i_vi_layer.h"
@@ -26,6 +28,8 @@ static void sun8i_vi_layer_disable(struct sun8i_layer *layer)
 
 	regmap_write(layer->regs,
 		     SUN8I_MIXER_CHAN_VI_LAYER_ATTR(ch_base, layer->overlay), 0);
+	if (layer->cfg->has_afbc)
+		sun50i_afbc_disable(layer);
 }
 
 static void sun8i_vi_layer_update_attributes(struct sun8i_layer *layer,
@@ -61,7 +65,7 @@ static void sun8i_vi_layer_update_attributes(struct sun8i_layer *layer,
 }
 
 static void sun8i_vi_layer_update_coord(struct sun8i_layer *layer,
-					struct drm_plane *plane)
+					struct drm_plane *plane, bool afbc)
 {
 	struct drm_plane_state *state = plane->state;
 	struct sun4i_crtc *scrtc = drm_crtc_to_sun4i_crtc(state->crtc);
@@ -145,7 +149,7 @@ static void sun8i_vi_layer_update_coord(struct sun8i_layer *layer,
 
 		required = src_h * 100 / dst_h;
 
-		if (ability < required) {
+		if (!afbc && ability < required) {
 			DRM_DEBUG_DRIVER("Using vertical coarse scaling\n");
 			vm = src_h;
 			vn = (u32)ability * dst_h / 100;
@@ -155,7 +159,7 @@ static void sun8i_vi_layer_update_coord(struct sun8i_layer *layer,
 		/* it seems that every RGB scaler has buffer for 2048 pixels */
 		scanline = subsampled ? layer->cfg->scanline_yuv : 2048;
 
-		if (src_w > scanline) {
+		if (!afbc && src_w > scanline) {
 			DRM_DEBUG_DRIVER("Using horizontal coarse scaling\n");
 			hm = src_w;
 			hn = scanline;
@@ -166,7 +170,8 @@ static void sun8i_vi_layer_update_coord(struct sun8i_layer *layer,
 		vscale = (src_h << 16) / dst_h;
 
 		sun8i_vi_scaler_setup(layer, src_w, src_h, dst_w, dst_h,
-				      hscale, vscale, hphase, vphase, format);
+				      hscale, vscale, hphase, vphase, format,
+				      afbc);
 		sun8i_vi_scaler_enable(layer, true);
 	} else {
 		DRM_DEBUG_DRIVER("HW scaling is not needed\n");
@@ -225,6 +230,14 @@ static void sun8i_vi_layer_update_buffer(struct sun8i_layer *layer,
 	}
 }
 
+static void sun8i_vi_layer_prepare_non_linear(struct sun8i_layer *layer)
+{
+	u32 ch_base = sun8i_channel_base(layer);
+
+	regmap_write(layer->regs,
+		     SUN8I_MIXER_CHAN_VI_LAYER_ATTR(ch_base, layer->overlay), 0);
+}
+
 static int sun8i_vi_layer_atomic_check(struct drm_plane *plane,
 				       struct drm_atomic_state *state)
 {
@@ -244,11 +257,21 @@ static int sun8i_vi_layer_atomic_check(struct drm_plane *plane,
 	if (WARN_ON(!crtc_state))
 		return -EINVAL;
 
-	fmt = new_plane_state->fb->format;
-	ret = sun8i_mixer_drm_format_to_hw(fmt->format, &hw_fmt);
-	if (ret) {
-		DRM_DEBUG_DRIVER("Invalid plane format\n");
-		return ret;
+	if (drm_is_afbc(new_plane_state->fb->modifier)) {
+		struct drm_framebuffer *fb = new_plane_state->fb;
+
+		/* FBD size fields are limited to 12 bits. */
+		if (fb->width > 4096 || fb->height > 4096) {
+			DRM_DEBUG_DRIVER("AFBC framebuffer too large\n");
+			return -EINVAL;
+		}
+	} else {
+		fmt = new_plane_state->fb->format;
+		ret = sun8i_mixer_drm_format_to_hw(fmt->format, &hw_fmt);
+		if (ret) {
+			DRM_DEBUG_DRIVER("Invalid plane format\n");
+			return ret;
+		}
 	}
 
 	min_scale = DRM_PLANE_NO_SCALING;
@@ -277,10 +300,27 @@ static void sun8i_vi_layer_atomic_update(struct drm_plane *plane,
 		return;
 	}
 
-	sun8i_vi_layer_update_attributes(layer, plane);
-	sun8i_vi_layer_update_coord(layer, plane);
-	sun8i_csc_config(layer, new_state);
-	sun8i_vi_layer_update_buffer(layer, plane);
+	if (drm_is_afbc(new_state->fb->modifier)) {
+		sun8i_vi_layer_prepare_non_linear(layer);
+		sun50i_afbc_atomic_update(layer, plane);
+		sun8i_vi_layer_update_coord(layer, plane, true);
+		sun8i_csc_config(layer, new_state);
+	} else {
+		if (layer->cfg->has_afbc)
+			sun50i_afbc_disable(layer);
+		sun8i_vi_layer_update_attributes(layer, plane);
+		sun8i_vi_layer_update_coord(layer, plane, false);
+		sun8i_csc_config(layer, new_state);
+		sun8i_vi_layer_update_buffer(layer, plane);
+	}
+}
+
+static bool sun8i_vi_layer_format_mod_supported(struct drm_plane *plane,
+						u32 format, u64 modifier)
+{
+	struct sun8i_layer *layer = plane_to_sun8i_layer(plane);
+
+	return sun50i_afbc_format_mod_supported(layer, format, modifier);
 }
 
 static const struct drm_plane_helper_funcs sun8i_vi_layer_helper_funcs = {
@@ -295,6 +335,7 @@ static const struct drm_plane_funcs sun8i_vi_layer_funcs = {
 	.disable_plane		= drm_atomic_helper_disable_plane,
 	.reset			= drm_atomic_helper_plane_reset,
 	.update_plane		= drm_atomic_helper_update_plane,
+	.format_mod_supported   = sun8i_vi_layer_format_mod_supported,
 };
 
 /*
@@ -378,9 +419,30 @@ static const u32 sun8i_vi_layer_de3_formats[] = {
 	DRM_FORMAT_YVU411,
 	DRM_FORMAT_YVU420,
 	DRM_FORMAT_YVU422,
+
+	DRM_FORMAT_YUV420_8BIT,
+	DRM_FORMAT_YUV420_10BIT,
+	DRM_FORMAT_Y210,
 };
 
-static const uint64_t sun8i_layer_modifiers[] = {
+static const u64 sun8i_layer_modifiers[] = {
+	DRM_FORMAT_MOD_LINEAR,
+	DRM_FORMAT_MOD_INVALID
+};
+
+static const u64 sun50i_layer_de3_modifiers[] = {
+	DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 |
+				AFBC_FORMAT_MOD_SPARSE),
+	DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 |
+				AFBC_FORMAT_MOD_YTR |
+				AFBC_FORMAT_MOD_SPARSE),
+	DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 |
+				AFBC_FORMAT_MOD_SPARSE |
+				AFBC_FORMAT_MOD_SPLIT),
+	DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 |
+				AFBC_FORMAT_MOD_YTR |
+				AFBC_FORMAT_MOD_SPARSE |
+				AFBC_FORMAT_MOD_SPLIT),
 	DRM_FORMAT_MOD_LINEAR,
 	DRM_FORMAT_MOD_INVALID
 };
@@ -395,6 +457,7 @@ struct sun8i_layer *sun8i_vi_layer_init_one(struct drm_device *drm,
 	u32 supported_encodings, supported_ranges;
 	unsigned int format_count;
 	struct sun8i_layer *layer;
+	const u64 *modifiers;
 	const u32 *formats;
 	int ret;
 
@@ -412,17 +475,19 @@ struct sun8i_layer *sun8i_vi_layer_init_one(struct drm_device *drm,
 	if (layer->cfg->de_type >= SUN8I_MIXER_DE3) {
 		formats = sun8i_vi_layer_de3_formats;
 		format_count = ARRAY_SIZE(sun8i_vi_layer_de3_formats);
+		modifiers = layer->cfg->has_afbc ? sun50i_layer_de3_modifiers
+						 : sun8i_layer_modifiers;
 	} else {
 		formats = sun8i_vi_layer_formats;
 		format_count = ARRAY_SIZE(sun8i_vi_layer_formats);
+		modifiers = sun8i_layer_modifiers;
 	}
 
 	/* possible crtcs are set later */
 	ret = drm_universal_plane_init(drm, &layer->plane, 0,
 				       &sun8i_vi_layer_funcs,
 				       formats, format_count,
-				       sun8i_layer_modifiers,
-				       type, NULL);
+				       modifiers, type, NULL);
 	if (ret) {
 		dev_err(drm->dev, "Couldn't initialize layer\n");
 		return ERR_PTR(ret);

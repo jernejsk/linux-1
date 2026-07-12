@@ -183,6 +183,7 @@ struct sun8i_layer_cfg {
 	unsigned int	de_type;
 	unsigned int	scanline_yuv;
 	unsigned int	de2_fcc_alpha : 1;
+	unsigned int	has_afbc : 1;
 };
 
 /**

@@ -929,7 +929,7 @@ void sun8i_vi_scaler_enable(struct sun8i_layer *layer, bool enable)
 void sun8i_vi_scaler_setup(struct sun8i_layer *layer,
 			   u32 src_w, u32 src_h, u32 dst_w, u32 dst_h,
 			   u32 hscale, u32 vscale, u32 hphase, u32 vphase,
-			   const struct drm_format_info *format)
+			   const struct drm_format_info *format, bool afbc)
 {
 	u32 chphase, cvphase;
 	u32 insize, outsize;
@@ -950,7 +950,13 @@ void sun8i_vi_scaler_setup(struct sun8i_layer *layer,
 	 * BSP driver. There is no detailed explanation. YUV 420
 	 * chroma is threated specialy for some reason.
 	 */
-	if (format->hsub == 2 && format->vsub == 2) {
+	if (afbc && format->hsub == 2 && format->vsub == 2) {
+		/* FBD 4:2:0 uses zero luma and -0.25 chroma phases. */
+		hphase = 0;
+		vphase = 0;
+		chphase = 0xfffe0000;
+		cvphase = 0xfffe0000;
+	} else if (format->hsub == 2 && format->vsub == 2) {
 		chphase = hphase >> 1;
 		cvphase = (vphase >> 1) -
 			(1UL << (SUN8I_VI_SCALER_SCALE_FRAC - 2));
