@@ -45,9 +45,12 @@ static void sun8i_vi_layer_update_attributes(struct sun8i_layer *layer,
 	val |= SUN8I_MIXER_CHAN_VI_LAYER_ATTR_EN;
 	if (layer->cfg->de_type >= SUN8I_MIXER_DE3) {
 		val |= SUN50I_MIXER_CHAN_VI_LAYER_ATTR_ALPHA(state->alpha >> 8);
-		val |= (state->alpha == DRM_BLEND_ALPHA_OPAQUE) ?
-			SUN50I_MIXER_CHAN_VI_LAYER_ATTR_ALPHA_MODE_PIXEL :
-			SUN50I_MIXER_CHAN_VI_LAYER_ATTR_ALPHA_MODE_COMBINED;
+		if (!fmt->has_alpha)
+			val |= SUN50I_MIXER_CHAN_VI_LAYER_ATTR_ALPHA_MODE_LAYER;
+		else if (state->alpha == DRM_BLEND_ALPHA_OPAQUE)
+			val |= SUN50I_MIXER_CHAN_VI_LAYER_ATTR_ALPHA_MODE_PIXEL;
+		else
+			val |= SUN50I_MIXER_CHAN_VI_LAYER_ATTR_ALPHA_MODE_COMBINED;
 	}
 
 	regmap_write(layer->regs,
@@ -360,6 +363,7 @@ static const u32 sun8i_vi_layer_de3_formats[] = {
 	DRM_FORMAT_RGBA8888,
 	DRM_FORMAT_RGBX8888,
 	DRM_FORMAT_XBGR8888,
+	DRM_FORMAT_XRGB2101010,
 	DRM_FORMAT_XRGB8888,
 
 	DRM_FORMAT_NV16,
