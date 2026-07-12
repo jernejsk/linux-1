@@ -179,6 +179,10 @@ static const struct de2_fmt_info de2_formats[] = {
 		.de2_fmt = SUN8I_MIXER_FBFMT_ARGB2101010,
 	},
 	{
+		.drm_fmt = DRM_FORMAT_XRGB2101010,
+		.de2_fmt = SUN8I_MIXER_FBFMT_ARGB2101010,
+	},
+	{
 		.drm_fmt = DRM_FORMAT_ABGR2101010,
 		.de2_fmt = SUN8I_MIXER_FBFMT_ABGR2101010,
 	},
