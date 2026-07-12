@@ -187,7 +187,9 @@ int drm_gem_fb_init_with_funcs(struct drm_device *dev,
 			 + drm_format_info_min_pitch(info, i, width)
 			 + mode_cmd->offsets[i];
 
-		if (objs[i]->size < min_size) {
+		/* AFBC size is validated by drm_gem_fb_afbc_init(). */
+		if (!drm_is_afbc(mode_cmd->modifier[0]) &&
+		    objs[i]->size < min_size) {
 			drm_dbg_kms(dev,
 				    "GEM object size (%zu) smaller than minimum size (%u) for plane %d\n",
 				    objs[i]->size, min_size, i);
