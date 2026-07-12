@@ -528,6 +528,8 @@ static __u32 drm_gem_afbc_get_bpp(struct drm_device *dev,
 		return 12;
 	case DRM_FORMAT_YUV420_10BIT:
 		return 15;
+	case DRM_FORMAT_Y210:
+		return 20;
 	case DRM_FORMAT_VUY101010:
 		return 30;
 	default:
