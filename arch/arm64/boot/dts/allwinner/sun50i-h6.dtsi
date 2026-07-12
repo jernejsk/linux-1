@@ -162,6 +162,34 @@
 				#reset-cells = <1>;
 			};
 
+			writeback: writeback@10000 {
+				compatible = "allwinner,sun50i-h6-de3-wb";
+				reg = <0x10000 0x1000>;
+				clocks = <&display_clocks CLK_BUS_WB>,
+					 <&display_clocks CLK_WB>;
+				clock-names = "bus",
+					      "mod";
+				resets = <&display_clocks RST_WB>;
+				iommus = <&iommu 0>;
+				interrupts = <GIC_SPI 78 IRQ_TYPE_LEVEL_HIGH>;
+
+				ports {
+					#address-cells = <1>;
+					#size-cells = <0>;
+
+					writeback_in: port@0 {
+						#address-cells = <1>;
+						#size-cells = <0>;
+						reg = <0>;
+
+						writeback_in_mixer0: endpoint@0 {
+							reg = <0>;
+							remote-endpoint = <&mixer0_out_writeback>;
+						};
+					};
+				};
+			};
+
 			mixer0: mixer@100000 {
 				compatible = "allwinner,sun50i-h6-de3-mixer-0";
 				reg = <0x100000 0x100000>;
@@ -177,10 +205,18 @@
 					#size-cells = <0>;
 
 					mixer0_out: port@1 {
+						#address-cells = <1>;
+						#size-cells = <0>;
 						reg = <1>;
 
-						mixer0_out_tcon_top_mixer0: endpoint {
+						mixer0_out_tcon_top_mixer0: endpoint@0 {
+							reg = <0>;
 							remote-endpoint = <&tcon_top_mixer0_in_mixer0>;
+						};
+
+						mixer0_out_writeback: endpoint@1 {
+							reg = <1>;
+							remote-endpoint = <&writeback_in_mixer0>;
 						};
 					};
 				};
