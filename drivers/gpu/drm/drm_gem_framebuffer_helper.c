@@ -89,6 +89,11 @@ drm_gem_fb_init(struct drm_device *dev,
 	return ret;
 }
 
+static int drm_gem_afbc_min_size(struct drm_device *dev,
+				 const struct drm_format_info *info,
+				 const struct drm_mode_fb_cmd2 *mode_cmd,
+				 struct drm_afbc_framebuffer *afbc_fb);
+
 /**
  * drm_gem_fb_destroy - Free GEM backed framebuffer
  * @fb: Framebuffer
@@ -183,9 +188,19 @@ int drm_gem_fb_init_with_funcs(struct drm_device *dev,
 			goto err_gem_object_put;
 		}
 
-		min_size = (height - 1) * mode_cmd->pitches[i]
-			 + drm_format_info_min_pitch(info, i, width)
-			 + mode_cmd->offsets[i];
+		if (drm_is_afbc(mode_cmd->modifier[0])) {
+			struct drm_afbc_framebuffer afbc_fb = {};
+
+			ret = drm_gem_afbc_min_size(dev, info, mode_cmd,
+						    &afbc_fb);
+			if (ret)
+				goto err_gem_object_put;
+			min_size = afbc_fb.afbc_size;
+		} else {
+			min_size = (height - 1) * mode_cmd->pitches[i]
+				 + drm_format_info_min_pitch(info, i, width)
+				 + mode_cmd->offsets[i];
+		}
 
 		if (objs[i]->size < min_size) {
 			drm_dbg_kms(dev,
@@ -573,6 +588,9 @@ static int drm_gem_afbc_min_size(struct drm_device *dev,
 	afbc_fb->afbc_size = ALIGN(n_blocks * AFBC_HEADER_SIZE, hdr_alignment);
 	afbc_fb->afbc_size += n_blocks * ALIGN(bpp * AFBC_SUPERBLOCK_PIXELS / 8,
 					       AFBC_SUPERBLOCK_ALIGNMENT);
+	if (afbc_fb->afbc_size > U32_MAX - afbc_fb->offset)
+		return -EINVAL;
+	afbc_fb->afbc_size += afbc_fb->offset;
 
 	return 0;
 }
