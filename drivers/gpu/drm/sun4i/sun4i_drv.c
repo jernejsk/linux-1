@@ -208,6 +208,11 @@ static bool sun4i_drv_node_is_tcon_top(struct device_node *node)
 		!!of_match_node(sun8i_tcon_top_of_table, node);
 }
 
+static bool sun4i_drv_node_is_writeback(struct device_node *node)
+{
+	return of_device_is_compatible(node, "allwinner,sun50i-h6-de3-wb");
+}
+
 /*
  * The encoder drivers use drm_of_find_possible_crtcs to get upstream
  * crtcs from the device tree using of_graph. For the results to be
@@ -299,6 +304,10 @@ static int sun4i_drv_add_endpoints(struct device *dev,
 				   struct device_node *node)
 {
 	int count = 0;
+
+	/* Writeback is bound after all CRTCs have been registered. */
+	if (sun4i_drv_node_is_writeback(node))
+		return 0;
 
 	/*
 	 * The frontend has been disabled in some of our old device
@@ -403,6 +412,19 @@ static int sun4i_drv_probe(struct platform_device *pdev)
 			return ret;
 
 		count += ret;
+	}
+
+	if (count) {
+		struct device_node *wb;
+
+		for_each_compatible_node(wb, NULL,
+					 "allwinner,sun50i-h6-de3-wb") {
+			if (of_device_is_available(wb)) {
+				component_match_add(&pdev->dev, &match,
+						    component_compare_of, wb);
+				count++;
+			}
+		}
 	}
 
 	if (count)
