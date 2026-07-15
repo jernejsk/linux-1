@@ -285,17 +285,18 @@ static const struct sunxi_ccu_desc sun50i_h616_de33_clk_desc = {
 };
 
 /*
- * Add a regmap for the DE33 plane driver to access plane
- * mapping registers.
+ * Add a regmap for the DE33 plane and writeback drivers to access
+ * routing registers.
  * Only these registers are allowed to be written, to prevent
  * overriding clock and reset configuration.
  */
 
+#define SUN50I_DE33_RTWB_MUX_REG 0x20
 #define SUN50I_DE33_CHN2CORE_REG 0x24
 #define SUN50I_DE33_PORT12CHN_REG 0x2c
 
 static const struct regmap_range sun8i_de2_ccu_regmap_accessible_ranges[] = {
-	regmap_reg_range(SUN50I_DE33_CHN2CORE_REG, SUN50I_DE33_PORT12CHN_REG),
+	regmap_reg_range(SUN50I_DE33_RTWB_MUX_REG, SUN50I_DE33_PORT12CHN_REG),
 };
 
 static const struct regmap_access_table sun8i_de2_ccu_regmap_accessible_table = {
