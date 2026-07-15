@@ -424,6 +424,7 @@ struct sun8i_layer *sun8i_vi_layer_init_one(struct drm_device *drm,
 	u32 supported_encodings, supported_ranges;
 	unsigned int format_count;
 	struct sun8i_layer *layer;
+	bool yuv_support = true;
 	const u32 *formats;
 	u32 ch_base;
 	int ret;
@@ -457,7 +458,9 @@ struct sun8i_layer *sun8i_vi_layer_init_one(struct drm_device *drm,
 		 * TODO: DE33 drivers doesn't support scaling yet, which is a
 		 * requirement for YUV support.
 		 */
-		if (layer->cfg->scaler_type[phy_index] != SUN8I_SCALER_NONE) {
+		yuv_support = layer->cfg->scaler_type[phy_index] !=
+			      SUN8I_SCALER_NONE;
+		if (yuv_support) {
 			formats = sun8i_vi_layer_de3_formats;
 			format_count = ARRAY_SIZE(sun8i_vi_layer_de3_formats);
 		} else {
