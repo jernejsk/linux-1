@@ -233,6 +233,8 @@ struct sun8i_mixer {
 	struct device			*planes_dev;
 
 	struct sun8i_rdma		*rdma;
+	struct sun8i_rdma_unit		*global_rdma;
+	struct sun8i_rdma_unit		*blender_rdma;
 	void __iomem			*base;
 	void __iomem			*top;
 };
@@ -252,6 +254,8 @@ struct sun8i_layer {
 	const struct sun8i_layer_cfg	*cfg;
 	struct sun8i_rdma_unit		*layer_rdma;
 	struct sun8i_rdma_unit		*fcc_rdma;
+	struct sun8i_rdma_unit		*scaler_rdma;
+	struct sun8i_rdma_unit		*csc_rdma;
 };
 
 static inline struct sun8i_layer *
