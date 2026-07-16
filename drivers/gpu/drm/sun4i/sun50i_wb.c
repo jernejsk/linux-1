@@ -522,6 +522,7 @@ static void sun50i_wb_atomic_commit(struct drm_connector *conn,
 
 	gctrl = WB_GCTRL_CLK_GATE | WB_GCTRL_AUTO_GATE;
 	if (wb->cfg->has_rcq) {
+		gctrl = WB_GCTRL_AUTO_GATE;
 		wb->rtwb_mux = port * 2;
 		regmap_write(wb->top, DE33_RTWB_MUX, wb->rtwb_mux);
 	} else {
@@ -557,7 +558,8 @@ static void sun50i_wb_atomic_commit(struct drm_connector *conn,
 
 	/* capture starts with the next frame */
 	if (wb->cfg->has_rcq) {
-		sun50i_wb_write(wb, WB_START, gctrl | WB_GCTRL_START);
+		sun50i_wb_write(wb, WB_START,
+				WB_GCTRL_AUTO_GATE | WB_GCTRL_START);
 		sun50i_wb_submit_rcq(wb);
 		regmap_write(wb->top, DE33_RTWB_MUX,
 			     wb->rtwb_mux | DE33_RTWB_START);
