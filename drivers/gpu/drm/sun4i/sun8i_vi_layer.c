@@ -469,10 +469,6 @@ struct sun8i_layer *sun8i_vi_layer_init_one(struct drm_device *drm,
 	}
 
 	if (layer->cfg->de_type >= SUN8I_MIXER_DE3) {
-		/*
-		 * TODO: DE33 drivers doesn't support scaling yet, which is a
-		 * requirement for YUV support.
-		 */
 		yuv_support = layer->cfg->scaler_type[phy_index] !=
 			      SUN8I_SCALER_NONE;
 		if (yuv_support) {
