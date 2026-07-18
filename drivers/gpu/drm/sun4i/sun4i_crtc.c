@@ -114,7 +114,9 @@ static void sun4i_crtc_atomic_flush(struct drm_crtc *crtc,
 
 	DRM_DEBUG_DRIVER("Committing plane changes\n");
 
-	sunxi_engine_commit(scrtc->engine, crtc, state);
+	/* Self-timed writeback commits the engine after arming writeback. */
+	if (!crtc->state->no_vblank)
+		sunxi_engine_commit(scrtc->engine, crtc, state);
 
 	if (event && !crtc->state->no_vblank) {
 		crtc->state->event = NULL;
