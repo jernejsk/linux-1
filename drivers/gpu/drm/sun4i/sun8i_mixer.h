@@ -252,6 +252,8 @@ struct sun8i_layer {
 	const struct sun8i_layer_cfg	*cfg;
 	struct sun8i_rdma_unit		*layer_rdma;
 	struct sun8i_rdma_unit		*fcc_rdma;
+	struct sun8i_rdma_unit		*scaler_rdma;
+	struct sun8i_rdma_unit		*csc_rdma;
 };
 
 static inline struct sun8i_layer *
