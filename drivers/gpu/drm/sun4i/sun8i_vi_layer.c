@@ -446,6 +446,16 @@ struct sun8i_layer *sun8i_vi_layer_init_one(struct drm_device *drm,
 	if (!layer->layer_rdma)
 		return ERR_PTR(-ENOMEM);
 
+	if (layer->cfg->scaler_type[phy_index] != SUN8I_SCALER_NONE) {
+		ret = sun8i_vi_scaler_init(layer, rdma, reg_base);
+		if (ret)
+			return ERR_PTR(ret);
+	}
+
+	ret = sun8i_csc_init(layer, rdma, reg_base);
+	if (ret)
+		return ERR_PTR(ret);
+
 	if (layer->cfg->de2_fcc_alpha) {
 		layer->fcc_rdma = sun8i_rdma_add_unit(rdma, reg_base + SUN8I_MIXER_FCC,
 						      0x94, fcc_regions);
