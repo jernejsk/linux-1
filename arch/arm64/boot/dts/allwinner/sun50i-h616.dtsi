@@ -187,7 +187,6 @@
 				clock-names = "bus", "mod";
 				resets = <&display_clocks RST_WB>;
 				interrupts = <GIC_SPI 88 IRQ_TYPE_LEVEL_HIGH>;
-				iommus = <&iommu 0>;
 				allwinner,top = <&display_clocks>;
 
 				ports {
@@ -215,6 +214,7 @@
 			planes: planes@100000 {
 				compatible = "allwinner,sun50i-h616-de33-planes";
 				reg = <0x100000 0x180000>;
+				iommus = <&iommu 0>;
 				allwinner,plane-mapping = <&display_clocks>;
 			};
 
