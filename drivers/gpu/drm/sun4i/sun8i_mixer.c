@@ -28,6 +28,7 @@
 #include "sun4i_drv.h"
 #include "sun50i_planes.h"
 #include "sun8i_mixer.h"
+#include "sun8i_rdma.h"
 #include "sun8i_ui_layer.h"
 #include "sun8i_vi_layer.h"
 #include "sunxi_engine.h"
@@ -307,6 +308,8 @@ static void sun8i_mixer_commit(struct sunxi_engine *engine,
 	regmap_write(engine->regs, SUN8I_MIXER_BLEND_PIPE_CTL(bld_base),
 		     pipe_en | SUN8I_MIXER_BLEND_PIPE_CTL_FC_EN(0));
 
+	sun8i_rdma_apply(mixer->rdma);
+
 	if (mixer->cfg->de_type != SUN8I_MIXER_DE33)
 		regmap_write(engine->regs, SUN8I_MIXER_GLOBAL_DBUFF,
 			     SUN8I_MIXER_GLOBAL_DBUFF_ENABLE);
@@ -532,7 +535,6 @@ static int sun8i_mixer_bind(struct device *dev, struct device *master,
 	struct drm_device *drm = data;
 	struct sun4i_drv *drv = drm->dev_private;
 	struct sun8i_mixer *mixer;
-	void __iomem *regs;
 	int ret;
 
 	/*
@@ -589,11 +591,11 @@ static int sun8i_mixer_bind(struct device *dev, struct device *master,
 	else
 		mixer->engine.ops = &sun8i_engine_ops;
 
-	regs = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(regs))
-		return PTR_ERR(regs);
+	mixer->base = devm_platform_ioremap_resource(pdev, 0);
+	if (IS_ERR(mixer->base))
+		return PTR_ERR(mixer->base);
 
-	mixer->engine.regs = devm_regmap_init_mmio(dev, regs,
+	mixer->engine.regs = devm_regmap_init_mmio(dev, mixer->base,
 						   &sun8i_mixer_regmap_config);
 	if (IS_ERR(mixer->engine.regs)) {
 		dev_err(dev, "Couldn't create the mixer regmap\n");
@@ -601,11 +603,11 @@ static int sun8i_mixer_bind(struct device *dev, struct device *master,
 	}
 
 	if (mixer->cfg->de_type == SUN8I_MIXER_DE33) {
-		regs = devm_platform_ioremap_resource_byname(pdev, "top");
-		if (IS_ERR(regs))
-			return PTR_ERR(regs);
+		mixer->top = devm_platform_ioremap_resource_byname(pdev, "top");
+		if (IS_ERR(mixer->top))
+			return PTR_ERR(mixer->top);
 
-		mixer->top_regs = devm_regmap_init_mmio(dev, regs,
+		mixer->top_regs = devm_regmap_init_mmio(dev, mixer->top,
 							&sun8i_top_regmap_config);
 		if (IS_ERR(mixer->top_regs)) {
 			dev_err(dev, "Couldn't create the top regmap\n");
@@ -684,12 +686,19 @@ static int sun8i_mixer_bind(struct device *dev, struct device *master,
 		}
 	}
 
+	mixer->rdma = sun8i_rdma_init();
+	if (!mixer->rdma) {
+		ret = -ENOMEM;
+		if (mixer->cfg->de_type == SUN8I_MIXER_DE33)
+			goto err_put_device;
+		goto err_disable_mod_clk;
+	}
+
 	list_add_tail(&mixer->engine.list, &drv->engine_list);
 
 	sun8i_mixer_init(mixer);
 
 	return 0;
-
 err_put_device:
 	put_device(mixer->planes_dev);
 err_disable_mod_clk:
@@ -707,6 +716,8 @@ static void sun8i_mixer_unbind(struct device *dev, struct device *master,
 	struct sun8i_mixer *mixer = dev_get_drvdata(dev);
 
 	list_del(&mixer->engine.list);
+
+	sun8i_rdma_deinit(mixer->rdma);
 
 	if (mixer->cfg->de_type == SUN8I_MIXER_DE33)
 		put_device(mixer->planes_dev);
