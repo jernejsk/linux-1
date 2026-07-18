@@ -79,6 +79,6 @@ int sun8i_vi_scaler_init(struct sun8i_layer *layer, struct sun8i_rdma *rdma,
 void sun8i_vi_scaler_setup(struct sun8i_layer *layer,
 			   u32 src_w, u32 src_h, u32 dst_w, u32 dst_h,
 			   u32 hscale, u32 vscale, u32 hphase, u32 vphase,
-			   const struct drm_format_info *format);
+			   const struct drm_format_info *format, bool afbc);
 
 #endif
