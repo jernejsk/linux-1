@@ -14,26 +14,23 @@
 
 #include <drm/drm_plane.h>
 
-#define SUN8I_MIXER_CHAN_UI_LAYER_ATTR(base, layer) \
-			((base) + 0x20 * (layer) + 0x0)
-#define SUN8I_MIXER_CHAN_UI_LAYER_SIZE(base, layer) \
-			((base) + 0x20 * (layer) + 0x4)
-#define SUN8I_MIXER_CHAN_UI_LAYER_COORD(base, layer) \
-			((base) + 0x20 * (layer) + 0x8)
-#define SUN8I_MIXER_CHAN_UI_LAYER_PITCH(base, layer) \
-			((base) + 0x20 * (layer) + 0xc)
-#define SUN8I_MIXER_CHAN_UI_LAYER_TOP_LADDR(base, layer) \
-			((base) + 0x20 * (layer) + 0x10)
-#define SUN8I_MIXER_CHAN_UI_LAYER_BOT_LADDR(base, layer) \
-			((base) + 0x20 * (layer) + 0x14)
-#define SUN8I_MIXER_CHAN_UI_LAYER_FCOLOR(base, layer) \
-			((base) + 0x20 * (layer) + 0x18)
-#define SUN8I_MIXER_CHAN_UI_TOP_HADDR(base) \
-			((base) + 0x80)
-#define SUN8I_MIXER_CHAN_UI_BOT_HADDR(base) \
-			((base) + 0x84)
-#define SUN8I_MIXER_CHAN_UI_OVL_SIZE(base) \
-			((base) + 0x88)
+#define SUN8I_MIXER_CHAN_UI_LAYER_ATTR(layer) \
+			(0x20 * (layer) + 0x0)
+#define SUN8I_MIXER_CHAN_UI_LAYER_SIZE(layer) \
+			(0x20 * (layer) + 0x4)
+#define SUN8I_MIXER_CHAN_UI_LAYER_COORD(layer) \
+			(0x20 * (layer) + 0x8)
+#define SUN8I_MIXER_CHAN_UI_LAYER_PITCH(layer) \
+			(0x20 * (layer) + 0xc)
+#define SUN8I_MIXER_CHAN_UI_LAYER_TOP_LADDR(layer) \
+			(0x20 * (layer) + 0x10)
+#define SUN8I_MIXER_CHAN_UI_LAYER_BOT_LADDR(layer) \
+			(0x20 * (layer) + 0x14)
+#define SUN8I_MIXER_CHAN_UI_LAYER_FCOLOR(layer) \
+			(0x20 * (layer) + 0x18)
+#define SUN8I_MIXER_CHAN_UI_TOP_HADDR	0x80
+#define SUN8I_MIXER_CHAN_UI_BOT_HADDR	0x84
+#define SUN8I_MIXER_CHAN_UI_OVL_SIZE	0x88
 
 #define SUN8I_MIXER_CHAN_UI_LAYER_ATTR_EN		BIT(0)
 #define SUN8I_MIXER_CHAN_UI_LAYER_ATTR_ALPHA_MODE_MASK	GENMASK(2, 1)
@@ -54,5 +51,7 @@ struct sun8i_layer *sun8i_ui_layer_init_one(struct drm_device *drm,
 					    struct regmap *regs,
 					    int index, int phy_index,
 					    int plane_cnt,
-					    const struct sun8i_layer_cfg *cfg);
+					    const struct sun8i_layer_cfg *cfg,
+					    struct sun8i_rdma *rdma,
+					    void __iomem *reg_base);
 #endif /* _SUN8I_UI_LAYER_H_ */
