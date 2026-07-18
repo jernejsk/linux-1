@@ -45,17 +45,40 @@ static struct drm_encoder *sun4i_crtc_get_encoder(struct drm_crtc *crtc)
 	return NULL;
 }
 
+void sun4i_crtc_finish_page_flip(struct drm_crtc *crtc)
+{
+	struct sun4i_crtc *scrtc = drm_crtc_to_sun4i_crtc(crtc);
+	unsigned long flags;
+
+	spin_lock_irqsave(&crtc->dev->event_lock, flags);
+	if (scrtc->event) {
+		drm_crtc_send_vblank_event(crtc, scrtc->event);
+		drm_crtc_vblank_put(crtc);
+		scrtc->event = NULL;
+	} else if (crtc->state->event) {
+		drm_crtc_send_vblank_event(crtc, crtc->state->event);
+		crtc->state->event = NULL;
+	}
+	spin_unlock_irqrestore(&crtc->dev->event_lock, flags);
+}
+
 static int sun4i_crtc_atomic_check(struct drm_crtc *crtc,
 				    struct drm_atomic_commit *state)
 {
 	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state,
 									  crtc);
+	struct drm_crtc_state *old_state = drm_atomic_get_old_crtc_state(state,
+									 crtc);
 	struct sun4i_crtc *scrtc = drm_crtc_to_sun4i_crtc(crtc);
 	struct sunxi_engine *engine = scrtc->engine;
 	int ret = 0;
 
 	if (engine && engine->ops && engine->ops->atomic_check)
 		ret = engine->ops->atomic_check(engine, crtc_state);
+	if (old_state->no_vblank &&
+	    (!crtc_state->connector_mask ||
+	     crtc_state->connector_mask == old_state->connector_mask))
+		crtc_state->no_vblank = true;
 
 	return ret;
 }
@@ -70,7 +93,7 @@ static void sun4i_crtc_atomic_begin(struct drm_crtc *crtc,
 	struct sunxi_engine *engine = scrtc->engine;
 	unsigned long flags;
 
-	if (crtc->state->event) {
+	if (crtc->state->event && !crtc->state->no_vblank) {
 		WARN_ON(drm_crtc_vblank_get(crtc) != 0);
 
 		spin_lock_irqsave(&dev->event_lock, flags);
@@ -93,7 +116,7 @@ static void sun4i_crtc_atomic_flush(struct drm_crtc *crtc,
 
 	sunxi_engine_commit(scrtc->engine, crtc, state);
 
-	if (event) {
+	if (event && !crtc->state->no_vblank) {
 		crtc->state->event = NULL;
 
 		spin_lock_irq(&crtc->dev->event_lock);
