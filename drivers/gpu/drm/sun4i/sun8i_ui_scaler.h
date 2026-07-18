@@ -36,6 +36,8 @@
 #define SUN8I_SCALER_GSU_CTRL_COEFF_RDY		BIT(4)
 
 void sun8i_ui_scaler_enable(struct sun8i_layer *layer, bool enable);
+int sun8i_ui_scaler_init(struct sun8i_layer *layer, struct sun8i_rdma *rdma,
+			 void __iomem *reg_base);
 void sun8i_ui_scaler_setup(struct sun8i_layer *layer,
 			   u32 src_w, u32 src_h, u32 dst_w, u32 dst_h,
 			   u32 hscale, u32 vscale, u32 hphase, u32 vphase);
