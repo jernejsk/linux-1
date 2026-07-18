@@ -38,7 +38,7 @@ static void sun8i_vi_layer_update_attributes(struct sun8i_layer *layer,
 	sun8i_mixer_drm_format_to_hw(fmt->format, &hw_fmt);
 
 	val = hw_fmt << SUN8I_MIXER_CHAN_VI_LAYER_ATTR_FBFMT_OFFSET;
-	if (!fmt->is_yuv)
+	if (!fmt->is_yuv || fmt->format == DRM_FORMAT_AYUV)
 		val |= SUN8I_MIXER_CHAN_VI_LAYER_ATTR_RGB_MODE;
 	val |= SUN8I_MIXER_CHAN_VI_LAYER_ATTR_EN;
 	if (layer->cfg->de_type >= SUN8I_MIXER_DE3) {
@@ -329,6 +329,7 @@ static const u32 sun8i_vi_layer_formats[] = {
 };
 
 static const u32 sun8i_vi_layer_de3_formats[] = {
+	DRM_FORMAT_AYUV,
 	DRM_FORMAT_ABGR1555,
 	DRM_FORMAT_ABGR2101010,
 	DRM_FORMAT_ABGR4444,
