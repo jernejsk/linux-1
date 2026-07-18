@@ -710,9 +710,16 @@ static int sun8i_mixer_bind(struct device *dev, struct device *master,
 			ret = -EINVAL;
 			goto err_put_device;
 		}
+
+		/*
+		 * All DE33 memory clients share one IOMMU master. Use the
+		 * planes device for framebuffer and RCQ allocations so they
+		 * are mapped in the same domain.
+		 */
+		drm_dev_set_dma_dev(drm, mixer->planes_dev);
 	}
 
-	mixer->rdma = sun8i_rdma_init(dev,
+	mixer->rdma = sun8i_rdma_init(mixer->planes_dev ?: dev,
 				      mixer->cfg->de_type == SUN8I_MIXER_DE33 ?
 				      mixer->top + 0x10 : NULL,
 				      mixer->cfg->de_type == SUN8I_MIXER_DE33);

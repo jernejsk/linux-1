@@ -4,6 +4,7 @@
 #include <drm/drm_device.h>
 
 #include <linux/device.h>
+#include <linux/dma-mapping.h>
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -157,6 +158,11 @@ static int sun50i_planes_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct sun50i_planes *planes;
 	struct device_node *np;
+	int ret;
+
+	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(40));
+	if (ret)
+		return dev_err_probe(dev, ret, "Cannot set DMA mask\n");
 
 	planes = devm_kzalloc(dev, sizeof(*planes), GFP_KERNEL);
 	if (!planes)
