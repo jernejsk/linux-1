@@ -8,29 +8,23 @@
 
 #include <drm/drm_plane.h>
 
-#define SUN8I_MIXER_CHAN_VI_LAYER_ATTR(base, layer) \
-		((base) + 0x30 * (layer) + 0x0)
-#define SUN8I_MIXER_CHAN_VI_LAYER_SIZE(base, layer) \
-		((base) + 0x30 * (layer) + 0x4)
-#define SUN8I_MIXER_CHAN_VI_LAYER_COORD(base, layer) \
-		((base) + 0x30 * (layer) + 0x8)
-#define SUN8I_MIXER_CHAN_VI_LAYER_PITCH(base, layer, plane) \
-		((base) + 0x30 * (layer) + 0xc + 4 * (plane))
-#define SUN8I_MIXER_CHAN_VI_LAYER_TOP_LADDR(base, layer, plane) \
-		((base) + 0x30 * (layer) + 0x18 + 4 * (plane))
-#define SUN8I_MIXER_CHAN_VI_OVL_SIZE(base) \
-		((base) + 0xe8)
-#define SUN8I_MIXER_CHAN_VI_HDS_Y(base) \
-		((base) + 0xf0)
-#define SUN8I_MIXER_CHAN_VI_HDS_UV(base) \
-		((base) + 0xf4)
-#define SUN8I_MIXER_CHAN_VI_VDS_Y(base) \
-		((base) + 0xf8)
-#define SUN8I_MIXER_CHAN_VI_VDS_UV(base) \
-		((base) + 0xfc)
+#define SUN8I_MIXER_CHAN_VI_LAYER_ATTR(layer) \
+		(0x30 * (layer) + 0x0)
+#define SUN8I_MIXER_CHAN_VI_LAYER_SIZE(layer) \
+		(0x30 * (layer) + 0x4)
+#define SUN8I_MIXER_CHAN_VI_LAYER_COORD(layer) \
+		(0x30 * (layer) + 0x8)
+#define SUN8I_MIXER_CHAN_VI_LAYER_PITCH(layer, plane) \
+		(0x30 * (layer) + 0xc + 4 * (plane))
+#define SUN8I_MIXER_CHAN_VI_LAYER_TOP_LADDR(layer, plane) \
+		(0x30 * (layer) + 0x18 + 4 * (plane))
+#define SUN8I_MIXER_CHAN_VI_OVL_SIZE	0xe8
+#define SUN8I_MIXER_CHAN_VI_HDS_Y	0xf0
+#define SUN8I_MIXER_CHAN_VI_HDS_UV	0xf4
+#define SUN8I_MIXER_CHAN_VI_VDS_Y	0xf8
+#define SUN8I_MIXER_CHAN_VI_VDS_UV	0xfc
 
-#define SUN8I_MIXER_FCC_GLOBAL_ALPHA_REG \
-		(0xAA000 + 0x90)
+#define SUN8I_MIXER_FCC_GLOBAL_ALPHA_REG	0x90
 
 #define SUN8I_MIXER_FCC_GLOBAL_ALPHA(x)			((x) << 24)
 #define SUN8I_MIXER_FCC_GLOBAL_ALPHA_MASK		GENMASK(31, 24)
@@ -59,5 +53,7 @@ struct sun8i_layer *sun8i_vi_layer_init_one(struct drm_device *drm,
 					    struct regmap *regs,
 					    int index, int phy_index,
 					    int plane_cnt,
-					    const struct sun8i_layer_cfg *cfg);
+					    const struct sun8i_layer_cfg *cfg,
+					    struct sun8i_rdma *rdma,
+					    void __iomem *reg_base);
 #endif /* _SUN8I_VI_LAYER_H_ */
