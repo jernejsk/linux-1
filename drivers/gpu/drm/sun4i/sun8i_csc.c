@@ -10,6 +10,24 @@
 
 #include "sun8i_csc.h"
 #include "sun8i_mixer.h"
+#include "sun8i_rdma.h"
+
+static const struct reg_region sun8i_csc_regions[] = {
+	{ 0x00, 1 },
+	{ 0x10, 12 },
+	{ }
+};
+
+static const struct reg_region sun8i_de3_csc_regions[] = {
+	{ 0x00, 12 },
+	{ }
+};
+
+static const struct reg_region sun8i_de33_csc_regions[] = {
+	{ 0x00, 1 },
+	{ 0x04, 15 },
+	{ }
+};
 
 enum sun8i_csc_mode {
 	SUN8I_CSC_MODE_OFF,
@@ -22,6 +40,32 @@ static const u32 ccsc_base[][2] = {
 	[CCSC_MIXER1_LAYOUT]	= {CCSC10_OFFSET, CCSC11_OFFSET},
 	[CCSC_D1_MIXER0_LAYOUT]	= {CCSC00_OFFSET, CCSC01_D1_OFFSET},
 };
+
+int sun8i_csc_init(struct sun8i_layer *layer, struct sun8i_rdma *rdma,
+		   void __iomem *reg_base)
+{
+	const struct reg_region *regions;
+	u32 base, size;
+
+	if (layer->cfg->de_type == SUN8I_MIXER_DE3) {
+		base = DE3_BLD_BASE + 0x110 + layer->channel * 0x30;
+		regions = sun8i_de3_csc_regions;
+		size = 0x30;
+	} else if (layer->cfg->de_type == SUN8I_MIXER_DE33) {
+		base = DE33_CCSC_BASE + layer->channel * DE33_CH_SIZE;
+		regions = sun8i_de33_csc_regions;
+		size = 0x44;
+	} else {
+		base = ccsc_base[layer->cfg->ccsc][layer->channel];
+		regions = sun8i_csc_regions;
+		size = 0x40;
+	}
+
+	layer->csc_rdma = sun8i_rdma_add_unit(rdma, reg_base + base, size,
+					      regions);
+
+	return layer->csc_rdma ? 0 : -ENOMEM;
+}
 
 /*
  * Factors are in two's complement format, 10 bits for fractinal part.
@@ -116,7 +160,7 @@ static const u32 yuv2rgb_de3[2][3][12] = {
 	},
 };
 
-static void sun8i_csc_setup(struct regmap *map, u32 base,
+static void sun8i_csc_setup(struct sun8i_rdma_unit *rdma,
 			    enum sun8i_csc_mode mode,
 			    enum drm_color_encoding encoding,
 			    enum drm_color_range range)
@@ -133,19 +177,19 @@ static void sun8i_csc_setup(struct regmap *map, u32 base,
 		break;
 	case SUN8I_CSC_MODE_YUV2RGB:
 		val = SUN8I_CSC_CTRL_EN;
-		base_reg = SUN8I_CSC_COEFF(base, 0);
-		regmap_bulk_write(map, base_reg, table, 12);
+		base_reg = SUN8I_CSC_COEFF(0, 0);
+		sun8i_rdma_memcpy(rdma, base_reg, table, 12);
 		break;
 	case SUN8I_CSC_MODE_YVU2RGB:
 		val = SUN8I_CSC_CTRL_EN;
 		for (i = 0; i < 12; i++) {
 			if ((i & 3) == 1)
-				base_reg = SUN8I_CSC_COEFF(base, i + 1);
+				base_reg = SUN8I_CSC_COEFF(0, i + 1);
 			else if ((i & 3) == 2)
-				base_reg = SUN8I_CSC_COEFF(base, i - 1);
+				base_reg = SUN8I_CSC_COEFF(0, i - 1);
 			else
-				base_reg = SUN8I_CSC_COEFF(base, i);
-			regmap_write(map, base_reg, table[i]);
+				base_reg = SUN8I_CSC_COEFF(0, i);
+			sun8i_rdma_write(rdma, base_reg, table[i]);
 		}
 		break;
 	default:
@@ -154,10 +198,10 @@ static void sun8i_csc_setup(struct regmap *map, u32 base,
 		return;
 	}
 
-	regmap_write(map, SUN8I_CSC_CTRL(base), val);
+	sun8i_rdma_write(rdma, SUN8I_CSC_CTRL(0), val);
 }
 
-static void sun8i_de3_ccsc_setup(struct regmap *map, int layer,
+static void sun8i_de3_ccsc_setup(struct sun8i_rdma_unit *rdma,
 				 enum sun8i_csc_mode mode,
 				 enum drm_color_encoding encoding,
 				 enum drm_color_range range)
@@ -173,23 +217,17 @@ static void sun8i_de3_ccsc_setup(struct regmap *map, int layer,
 		/* nothing to do */
 		break;
 	case SUN8I_CSC_MODE_YUV2RGB:
-		addr = SUN50I_MIXER_BLEND_CSC_COEFF(DE3_BLD_BASE, layer, 0);
-		regmap_bulk_write(map, addr, table, 12);
+		sun8i_rdma_memcpy(rdma, 0, table, 12);
 		break;
 	case SUN8I_CSC_MODE_YVU2RGB:
 		for (i = 0; i < 12; i++) {
 			if ((i & 3) == 1)
-				addr = SUN50I_MIXER_BLEND_CSC_COEFF(DE3_BLD_BASE,
-								    layer,
-								    i + 1);
+				addr = (i + 1) * sizeof(u32);
 			else if ((i & 3) == 2)
-				addr = SUN50I_MIXER_BLEND_CSC_COEFF(DE3_BLD_BASE,
-								    layer,
-								    i - 1);
+				addr = (i - 1) * sizeof(u32);
 			else
-				addr = SUN50I_MIXER_BLEND_CSC_COEFF(DE3_BLD_BASE,
-								    layer, i);
-			regmap_write(map, addr, table[i]);
+				addr = i * sizeof(u32);
+			sun8i_rdma_write(rdma, addr, table[i]);
 		}
 		break;
 	default:
@@ -220,17 +258,16 @@ static void sun8i_de33_convert_table(const u32 *src, u32 *dst)
 	dst[14] &= 0xffff;
 }
 
-static void sun8i_de33_ccsc_setup(struct regmap *map, int layer,
+static void sun8i_de33_ccsc_setup(struct sun8i_rdma_unit *rdma,
 				  enum sun8i_csc_mode mode,
 				  enum drm_color_encoding encoding,
 				  enum drm_color_range range)
 {
-	u32 addr, val, base, csc[15];
+	u32 addr, val, csc[15];
 	const u32 *table;
 	int i;
 
 	table = yuv2rgb_de3[range][encoding];
-	base = DE33_CCSC_BASE + layer * DE33_CH_SIZE;
 
 	switch (mode) {
 	case SUN8I_CSC_MODE_OFF:
@@ -239,20 +276,20 @@ static void sun8i_de33_ccsc_setup(struct regmap *map, int layer,
 	case SUN8I_CSC_MODE_YUV2RGB:
 		val = SUN8I_CSC_CTRL_EN;
 		sun8i_de33_convert_table(table, csc);
-		regmap_bulk_write(map, SUN50I_CSC_COEFF(base, 0), csc, 15);
+		sun8i_rdma_memcpy(rdma, SUN50I_CSC_COEFF(0, 0), csc, 15);
 		break;
 	case SUN8I_CSC_MODE_YVU2RGB:
 		val = SUN8I_CSC_CTRL_EN;
 		sun8i_de33_convert_table(table, csc);
 		for (i = 0; i < 15; i++) {
-			addr = SUN50I_CSC_COEFF(base, i);
+			addr = SUN50I_CSC_COEFF(0, i);
 			if (i > 3) {
 				if (((i - 3) & 3) == 1)
-					addr = SUN50I_CSC_COEFF(base, i + 1);
+					addr = SUN50I_CSC_COEFF(0, i + 1);
 				else if (((i - 3) & 3) == 2)
-					addr = SUN50I_CSC_COEFF(base, i - 1);
+					addr = SUN50I_CSC_COEFF(0, i - 1);
 			}
-			regmap_write(map, addr, csc[i]);
+			sun8i_rdma_write(rdma, addr, csc[i]);
 		}
 		break;
 	default:
@@ -261,7 +298,7 @@ static void sun8i_de33_ccsc_setup(struct regmap *map, int layer,
 		return;
 	}
 
-	regmap_write(map, SUN8I_CSC_CTRL(base), val);
+	sun8i_rdma_write(rdma, SUN8I_CSC_CTRL(0), val);
 }
 
 static u32 sun8i_csc_get_mode(struct drm_plane_state *state)
@@ -290,23 +327,20 @@ void sun8i_csc_config(struct sun8i_layer *layer,
 		      struct drm_plane_state *state)
 {
 	u32 mode = sun8i_csc_get_mode(state);
-	u32 base;
 
 	if (layer->cfg->de_type == SUN8I_MIXER_DE3) {
-		sun8i_de3_ccsc_setup(layer->regs, layer->channel,
+		sun8i_de3_ccsc_setup(layer->csc_rdma,
 				     mode, state->color_encoding,
 				     state->color_range);
 		return;
 	} else if (layer->cfg->de_type == SUN8I_MIXER_DE33) {
-		sun8i_de33_ccsc_setup(layer->regs, layer->channel,
+		sun8i_de33_ccsc_setup(layer->csc_rdma,
 				      mode, state->color_encoding,
 				      state->color_range);
 		return;
 	}
 
-	base = ccsc_base[layer->cfg->ccsc][layer->channel];
-
-	sun8i_csc_setup(layer->regs, base,
+	sun8i_csc_setup(layer->csc_rdma,
 			mode, state->color_encoding,
 			state->color_range);
 }
