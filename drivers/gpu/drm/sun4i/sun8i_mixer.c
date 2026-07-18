@@ -988,6 +988,7 @@ static const struct sun8i_mixer_cfg sun50i_a64_mixer1_cfg = {
 static const struct sun8i_mixer_cfg sun50i_h6_mixer0_cfg = {
 	.lay_cfg = {
 		.de_type	= SUN8I_MIXER_DE3,
+		.afbc_mask	= BIT(0),
 		.vi_scaler_num	= 1,
 		.scaler_type	= {
 			SUN8I_SCALER_VI_ED,
