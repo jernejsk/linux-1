@@ -181,6 +181,7 @@ struct sun8i_rdma;
  * @scaler_type: Type of supported scaler for each channel.
  * @ccsc: select set of CCSC base addresses from the enumeration above.
  * @de_type: sun8i_mixer_type enum representing the display engine generation.
+ * @afbc_mask: bitmask of physical channels with an AFBC decompressor.
  * @scanline_yuv: array of sizes of a scanline for VI scaler for YUV formats.
  * @scanline_rgb: array of sizes of a scanline for VI scaler for RGB formats.
  * @scanline_ed: array of sizes of a scanline for VI scaler in edge detection
@@ -193,6 +194,7 @@ struct sun8i_layer_cfg {
 	unsigned int	scaler_type[MAX_CHANNELS];
 	int		ccsc;
 	unsigned int	de_type;
+	unsigned int	afbc_mask;
 	unsigned int	scanline_yuv[MAX_CHANNELS];
 	unsigned int	scanline_rgb[MAX_CHANNELS];
 	unsigned int	scanline_ed[MAX_CHANNELS];
@@ -251,6 +253,7 @@ struct sun8i_layer {
 	int				overlay;
 	const struct sun8i_layer_cfg	*cfg;
 	struct sun8i_rdma_unit		*layer_rdma;
+	struct sun8i_rdma_unit		*afbc_rdma;
 	struct sun8i_rdma_unit		*fcc_rdma;
 	struct sun8i_rdma_unit		*scaler_rdma;
 	struct sun8i_rdma_unit		*csc_rdma;
