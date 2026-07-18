@@ -44,11 +44,6 @@ static const struct reg_region sun8i_global_regions[] = {
 	{ }
 };
 
-static const struct reg_region sun50i_de33_global_regions[] = {
-	{ SUN50I_MIXER_GLOBAL_SIZE, 1 },
-	{ }
-};
-
 static const struct reg_region sun8i_blender_regions[] = {
 	{ 0x000, 1 },
 	{ 0x004, 16 },
@@ -338,6 +333,10 @@ static void sun8i_mixer_commit(struct sunxi_engine *engine,
 			 SUN8I_MIXER_BLEND_PIPE_CTL(bld_base) - bld_base,
 			 pipe_en | SUN8I_MIXER_BLEND_PIPE_CTL_FC_EN(0));
 
+	if (mixer->cfg->de_type == SUN8I_MIXER_DE33)
+		writel(mixer->global_size,
+		       mixer->top + SUN50I_MIXER_GLOBAL_SIZE);
+
 	WARN_ON(sun8i_rdma_apply(mixer->rdma));
 
 	if (mixer->cfg->de_type != SUN8I_MIXER_DE33)
@@ -438,10 +437,11 @@ static void sun8i_mixer_mode_set(struct sunxi_engine *engine,
 	DRM_DEBUG_DRIVER("Updating global size W: %u H: %u\n",
 			 mode->hdisplay, mode->vdisplay);
 
-	sun8i_rdma_write(mixer->global_rdma,
-			 mixer->cfg->de_type == SUN8I_MIXER_DE33 ?
-			 SUN50I_MIXER_GLOBAL_SIZE : SUN8I_MIXER_GLOBAL_SIZE,
-			 size);
+	if (mixer->cfg->de_type == SUN8I_MIXER_DE33)
+		mixer->global_size = size;
+	else
+		sun8i_rdma_write(mixer->global_rdma,
+				 SUN8I_MIXER_GLOBAL_SIZE, size);
 
 	sun8i_rdma_write(mixer->blender_rdma,
 			 SUN8I_MIXER_BLEND_OUTSIZE(bld_base) - bld_base, size);
@@ -523,12 +523,6 @@ static int sun8i_mixer_init(struct sun8i_mixer *mixer)
 
 	/* Enable the mixer */
 	if (mixer->cfg->de_type == SUN8I_MIXER_DE33) {
-		mixer->global_rdma = sun8i_rdma_add_unit(mixer->rdma,
-			mixer->top, 0x8100 + mixer->engine.id * 0x40, 0x0c,
-			sun50i_de33_global_regions);
-		if (!mixer->global_rdma)
-			return -ENOMEM;
-
 		writel(SUN8I_MIXER_GLOBAL_CTL_RT_EN,
 		       mixer->top + SUN8I_MIXER_GLOBAL_CTL);
 		writel(1, mixer->top + SUN50I_MIXER_GLOBAL_CLK);

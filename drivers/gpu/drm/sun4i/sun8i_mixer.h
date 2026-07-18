@@ -235,6 +235,7 @@ struct sun8i_mixer {
 	struct sun8i_rdma		*rdma;
 	struct sun8i_rdma_unit		*global_rdma;
 	struct sun8i_rdma_unit		*blender_rdma;
+	u32				global_size;
 	void __iomem			*base;
 	void __iomem			*top;
 };
