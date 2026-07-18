@@ -738,24 +738,9 @@ void sun4i_tcon_mode_set(struct sun4i_tcon *tcon,
 }
 EXPORT_SYMBOL(sun4i_tcon_mode_set);
 
-static void sun4i_tcon_finish_page_flip(struct drm_device *dev,
-					struct sun4i_crtc *scrtc)
-{
-	unsigned long flags;
-
-	spin_lock_irqsave(&dev->event_lock, flags);
-	if (scrtc->event) {
-		drm_crtc_send_vblank_event(&scrtc->crtc, scrtc->event);
-		drm_crtc_vblank_put(&scrtc->crtc);
-		scrtc->event = NULL;
-	}
-	spin_unlock_irqrestore(&dev->event_lock, flags);
-}
-
 static irqreturn_t sun4i_tcon_handler(int irq, void *private)
 {
 	struct sun4i_tcon *tcon = private;
-	struct drm_device *drm = tcon->drm;
 	struct sun4i_crtc *scrtc = tcon->crtc;
 	struct sunxi_engine *engine = scrtc->engine;
 	unsigned int status;
@@ -768,7 +753,7 @@ static irqreturn_t sun4i_tcon_handler(int irq, void *private)
 		return IRQ_NONE;
 
 	drm_crtc_handle_vblank(&scrtc->crtc);
-	sun4i_tcon_finish_page_flip(drm, scrtc);
+	sun4i_crtc_finish_page_flip(&scrtc->crtc);
 
 	/* Acknowledge the interrupt */
 	regmap_update_bits(tcon->regs, SUN4I_TCON_GINT0_REG,
