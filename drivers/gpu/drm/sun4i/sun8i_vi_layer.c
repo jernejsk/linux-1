@@ -195,11 +195,28 @@ static void sun8i_vi_layer_update_buffer(struct sun8i_layer *layer,
 	struct drm_plane_state *state = plane->state;
 	struct drm_framebuffer *fb = state->fb;
 	const struct drm_format_info *format = fb->format;
+	struct drm_gem_dma_object *gem;
 	dma_addr_t dma_addr;
+	u32 dx, dy, src_x, src_y;
 	int i;
+
+	/* Keep every plane aligned to its chroma sampling grid. */
+	src_x = (state->src.x1 >> 16) & ~(format->hsub - 1);
+	src_y = (state->src.y1 >> 16) & ~(format->vsub - 1);
+
 	for (i = 0; i < format->num_planes; i++) {
-		/* Get the start of the displayed memory */
-		dma_addr = drm_fb_dma_get_gem_addr(fb, state, i);
+		gem = drm_fb_dma_get_gem_obj(fb, i);
+		dma_addr = gem->dma_addr + fb->offsets[i];
+
+		dx = src_x;
+		dy = src_y;
+		if (i > 0) {
+			dx /= format->hsub;
+			dy /= format->vsub;
+		}
+
+		dma_addr += dx * format->cpp[i];
+		dma_addr += dy * fb->pitches[i];
 
 		/* Set the line width */
 		DRM_DEBUG_DRIVER("Layer %d. line width: %d bytes\n",
