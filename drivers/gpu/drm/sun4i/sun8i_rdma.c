@@ -21,7 +21,9 @@ struct sun8i_rdma_unit {
 	struct list_head node;
 	void __iomem *base;
 	void *mem;
-	dma_addr_t dma_addr;
+	void *rcq_mem;
+	dma_addr_t rcq_dma;
+	size_t rcq_size;
 	u32 reg_offset;
 	u32 size;
 	const struct reg_region *regions;
@@ -73,10 +75,9 @@ void sun8i_rdma_deinit(struct sun8i_rdma *rdma)
 	list_for_each_entry_safe(unit, tmp, &rdma->list, node) {
 		list_del(&unit->node);
 		if (rdma->rcq_enabled)
-			dma_free_coherent(rdma->dev, unit->size, unit->mem,
-					  unit->dma_addr);
-		else
-			kfree(unit->mem);
+			dma_free_coherent(rdma->dev, unit->rcq_size,
+					  unit->rcq_mem, unit->rcq_dma);
+		kfree(unit->mem);
 		kfree(unit);
 	}
 
@@ -107,20 +108,23 @@ static int sun8i_rdma_prepare_rcq(struct sun8i_rdma *rdma)
 					 &rdma->heads_dma, GFP_KERNEL);
 	if (!rdma->heads)
 		return -ENOMEM;
+	memset(rdma->heads, 0, rdma->head_alloc * sizeof(*rdma->heads));
 
 	count = 0;
 	list_for_each_entry(unit, &rdma->list, node) {
 		const struct reg_region *region = unit->regions;
+		size_t offset = 0;
 
 		unit->first_head = count;
 		while (region->count) {
 			struct sun8i_rcq_head *head = &rdma->heads[count++];
-			dma_addr_t addr = unit->dma_addr + region->offset;
+			dma_addr_t addr = unit->rcq_dma + offset;
 
 			head->low_addr = lower_32_bits(addr);
 			head->len_hi = region->count * sizeof(u32) |
 				       (upper_32_bits(addr) << 24);
 			head->reg_offset = unit->reg_offset + region->offset;
+			offset += ALIGN(region->count * sizeof(u32), 32);
 			region++;
 		}
 	}
@@ -148,13 +152,19 @@ int sun8i_rdma_apply(struct sun8i_rdma *rdma)
 		list_for_each_entry(unit, &rdma->list, node) {
 			const struct reg_region *region;
 			unsigned int head;
+			size_t offset = 0;
 
 			if (!unit->dirty)
 				continue;
 
 			head = unit->first_head;
-			for (region = unit->regions; region->count; region++)
+			for (region = unit->regions; region->count; region++) {
+				memcpy(unit->rcq_mem + offset,
+				       unit->mem + region->offset,
+				       region->count * sizeof(u32));
 				rdma->heads[head++].dirty = 1;
+				offset += ALIGN(region->count * sizeof(u32), 32);
+			}
 			unit->dirty = false;
 			dirty = true;
 		}
@@ -188,19 +198,30 @@ sun8i_rdma_add_unit(struct sun8i_rdma *rdma, void __iomem *base,
 		    const struct reg_region *regions)
 {
 	struct sun8i_rdma_unit *unit;
+	const struct reg_region *region;
 
 	unit = kzalloc(sizeof(*unit), GFP_KERNEL);
 	if (!unit)
 		return NULL;
 
-	if (rdma->rcq_enabled)
-		unit->mem = dma_alloc_coherent(rdma->dev, size, &unit->dma_addr,
-					       GFP_KERNEL);
-	else
-		unit->mem = kzalloc(size, GFP_KERNEL);
+	unit->mem = kzalloc(size, GFP_KERNEL);
 	if (!unit->mem) {
 		kfree(unit);
 		return NULL;
+	}
+
+	if (rdma->rcq_enabled) {
+		/* Every RCQ source block must start at a 32-byte boundary. */
+		for (region = regions; region->count; region++)
+			unit->rcq_size += ALIGN(region->count * sizeof(u32), 32);
+
+		unit->rcq_mem = dma_alloc_coherent(rdma->dev, unit->rcq_size,
+						   &unit->rcq_dma, GFP_KERNEL);
+		if (!unit->rcq_mem) {
+			kfree(unit->mem);
+			kfree(unit);
+			return NULL;
+		}
 	}
 
 	unit->base = base;
