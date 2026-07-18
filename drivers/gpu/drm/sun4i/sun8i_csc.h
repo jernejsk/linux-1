@@ -11,6 +11,7 @@
 struct drm_plane_state;
 struct regmap;
 struct sun8i_layer;
+struct sun8i_rdma;
 
 /* VI channel CSC units offsets */
 #define CCSC00_OFFSET 0xAA050
@@ -32,5 +33,7 @@ struct sun8i_layer;
 void sun8i_csc_config(struct sun8i_layer *layer,
 		      struct drm_plane_state *state);
 void sun8i_de3_ccsc_init(struct regmap *map);
+int sun8i_csc_init(struct sun8i_layer *layer, struct sun8i_rdma *rdma,
+		   void __iomem *reg_base);
 
 #endif
