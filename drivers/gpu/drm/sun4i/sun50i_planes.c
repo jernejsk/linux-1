@@ -30,11 +30,14 @@ static const struct sun50i_planes_quirks sun50i_h616_planes_quirks = {
 	},
 	.cfg = {
 		.de_type	= SUN8I_MIXER_DE33,
-		/*
-		 * TODO: All planes support scaling, but driver needs
-		 * improvements to properly support it.
-		 */
-		.scaler_type    = {},
+		.scaler_type    = {
+			[0] = SUN8I_SCALER_VI_ED,
+			[1] = SUN8I_SCALER_VI_8,
+			[2] = SUN8I_SCALER_VI_8,
+			[6] = SUN8I_SCALER_VI_8,
+			[7] = SUN8I_SCALER_VI_8,
+			[8] = SUN8I_SCALER_VI_8,
+		},
 		.scanline_yuv	= {4096, 2048, 2048},
 		.scanline_rgb	= {4096, 2048, 2048, 0, 0, 0, 2048, 2048, 2048},
 		.scanline_ed	= {4096},
