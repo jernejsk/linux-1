@@ -31,6 +31,7 @@ static const struct sun50i_planes_quirks sun50i_h616_planes_quirks = {
 	},
 	.cfg = {
 		.de_type	= SUN8I_MIXER_DE33,
+		.afbc_mask	= BIT(0),
 		.scaler_type    = {
 			[0] = SUN8I_SCALER_VI_ED,
 			[1] = SUN8I_SCALER_VI_8,
