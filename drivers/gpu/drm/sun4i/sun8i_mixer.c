@@ -339,7 +339,8 @@ static struct drm_plane **sun8i_layers_init(struct drm_device *drm,
 
 		layer = sun8i_vi_layer_init_one(drm, type, mixer->engine.regs,
 						i, i, plane_cnt,
-						&mixer->cfg->lay_cfg);
+						&mixer->cfg->lay_cfg,
+						mixer->rdma, mixer->base);
 		if (IS_ERR(layer)) {
 			dev_err(drm->dev,
 				"Couldn't initialize overlay plane\n");
@@ -381,7 +382,8 @@ static struct drm_plane **sun50i_layers_init(struct drm_device *drm,
 	struct drm_plane **planes;
 	int i;
 
-	planes = sun50i_planes_setup(mixer->planes_dev, drm, engine->id);
+	planes = sun50i_planes_setup(mixer->planes_dev, drm,
+				     engine->id, mixer->rdma);
 	if (IS_ERR(planes))
 		return planes;
 
@@ -723,7 +725,7 @@ static int sun8i_mixer_bind(struct device *dev, struct device *master,
 		regmap_write(mixer->engine.regs, SUN8I_MIXER_LTI_EN, 0);
 		regmap_write(mixer->engine.regs, SUN8I_MIXER_PEAK_EN, 0);
 		regmap_write(mixer->engine.regs, SUN8I_MIXER_ASE_EN, 0);
-		regmap_write(mixer->engine.regs, SUN8I_MIXER_FCC_EN, 0);
+		regmap_write(mixer->engine.regs, SUN8I_MIXER_FCC, 0);
 		regmap_write(mixer->engine.regs, SUN8I_MIXER_DCSC_EN, 0);
 	}
 
