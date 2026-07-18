@@ -97,7 +97,8 @@ sun50i_planes_setup(struct device *dev, struct drm_device *drm,
 		else
 			layer = sun8i_ui_layer_init_one(drm, type, planes->regs,
 							i, phy_ch, map->num_ch,
-							&quirks->cfg);
+							&quirks->cfg, rdma,
+							planes->base);
 
 		if (IS_ERR(layer))
 			return ERR_PTR(dev_err_probe(drm->dev, PTR_ERR(layer),
