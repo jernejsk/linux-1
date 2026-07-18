@@ -86,7 +86,6 @@ required:
   - reg
   - clocks
   - clock-names
-  - iommus
   - interrupts
   - resets
   - ports
@@ -102,6 +101,7 @@ allOf:
           minItems: 2
         reg-names:
           minItems: 2
+        iommus: false
       required:
         - reg-names
         - allwinner,top
@@ -111,6 +111,8 @@ allOf:
           maxItems: 1
         reg-names: false
         allwinner,top: false
+      required:
+        - iommus
 
 additionalProperties: false
 
