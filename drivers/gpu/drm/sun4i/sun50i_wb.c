@@ -132,6 +132,7 @@ struct sun50i_wb {
 	struct clk			*mod_clk;
 	struct reset_control		*reset;
 	struct device			*dev;
+	struct device			*dma_dev;
 	const struct sun50i_wb_cfg	*cfg;
 	struct regmap			*top;
 	void __iomem			*rcq;
@@ -267,12 +268,12 @@ static int sun50i_wb_init_rcq(struct sun50i_wb *wb)
 	};
 	unsigned int i;
 
-	wb->shadow = dmam_alloc_coherent(wb->dev, 0x300, &wb->shadow_dma,
+	wb->shadow = dmam_alloc_coherent(wb->dma_dev, 0x300, &wb->shadow_dma,
 					 GFP_KERNEL);
 	if (!wb->shadow)
 		return -ENOMEM;
 
-	wb->heads = dmam_alloc_coherent(wb->dev, sizeof(*wb->heads) * 4,
+	wb->heads = dmam_alloc_coherent(wb->dma_dev, sizeof(*wb->heads) * 4,
 					&wb->heads_dma, GFP_KERNEL);
 	if (!wb->heads)
 		return -ENOMEM;
@@ -654,6 +655,13 @@ static int sun50i_wb_bind(struct device *dev, struct device *master,
 	u32 possible_crtcs;
 	int ret;
 
+	if (wb->cfg->has_rcq && !wb->shadow) {
+		wb->dma_dev = drm_dev_dma_dev(drm);
+		ret = sun50i_wb_init_rcq(wb);
+		if (ret)
+			return ret;
+	}
+
 	possible_crtcs = 0;
 	memset(wb->crtc_port, U8_MAX, sizeof(wb->crtc_port));
 	port = of_graph_get_port_by_id(wb->dev->of_node, 0);
@@ -718,9 +726,6 @@ static int sun50i_wb_probe(struct platform_device *pdev)
 	if (!wb->cfg)
 		return -EINVAL;
 
-	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(40));
-	if (ret)
-		return ret;
 	init_completion(&wb->job_done);
 	complete(&wb->job_done);
 
@@ -768,12 +773,6 @@ static int sun50i_wb_probe(struct platform_device *pdev)
 	ret = reset_control_deassert(wb->reset);
 	if (ret)
 		return ret;
-
-	if (wb->cfg->has_rcq) {
-		ret = sun50i_wb_init_rcq(wb);
-		if (ret)
-			goto err_reset;
-	}
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0) {
