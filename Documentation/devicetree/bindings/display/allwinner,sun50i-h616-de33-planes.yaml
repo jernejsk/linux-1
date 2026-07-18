@@ -22,6 +22,9 @@ properties:
   reg:
     maxItems: 1
 
+  iommus:
+    maxItems: 1
+
   allwinner,plane-mapping:
     $ref: /schemas/types.yaml#/definitions/phandle
     description:
@@ -31,6 +34,7 @@ properties:
 required:
   - compatible
   - reg
+  - iommus
   - allwinner,plane-mapping
 
 additionalProperties: false
@@ -40,6 +44,7 @@ examples:
     planes: planes@100000 {
         compatible = "allwinner,sun50i-h616-de33-planes";
         reg = <0x100000 0x180000>;
+        iommus = <&iommu 0>;
         allwinner,plane-mapping = <&display_clocks>;
     };
 
