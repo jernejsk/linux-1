@@ -30,30 +30,30 @@
 #define SUN8I_VI_SCALER_COEFF_COUNT		32
 #define SUN8I_VI_SCALER_SIZE(w, h)		(((h) - 1) << 16 | ((w) - 1))
 
-#define SUN8I_SCALER_VSU_CTRL(base)		((base) + 0x0)
-#define SUN50I_SCALER_VSU_SCALE_MODE(base)		((base) + 0x10)
-#define SUN50I_SCALER_VSU_DIR_THR(base)		((base) + 0x20)
-#define SUN50I_SCALER_VSU_EDGE_THR(base)		((base) + 0x24)
-#define SUN50I_SCALER_VSU_EDSCL_CTRL(base)		((base) + 0x28)
-#define SUN50I_SCALER_VSU_ANGLE_THR(base)		((base) + 0x2c)
-#define SUN8I_SCALER_VSU_OUTSIZE(base)		((base) + 0x40)
-#define SUN50I_SCALER_VSU_GLB_ALPHA(base)	((base) + 0x44)
-#define SUN8I_SCALER_VSU_YINSIZE(base)		((base) + 0x80)
-#define SUN8I_SCALER_VSU_YHSTEP(base)		((base) + 0x88)
-#define SUN8I_SCALER_VSU_YVSTEP(base)		((base) + 0x8c)
-#define SUN8I_SCALER_VSU_YHPHASE(base)		((base) + 0x90)
-#define SUN8I_SCALER_VSU_YVPHASE(base)		((base) + 0x98)
-#define SUN8I_SCALER_VSU_CINSIZE(base)		((base) + 0xc0)
-#define SUN8I_SCALER_VSU_CHSTEP(base)		((base) + 0xc8)
-#define SUN8I_SCALER_VSU_CVSTEP(base)		((base) + 0xcc)
-#define SUN8I_SCALER_VSU_CHPHASE(base)		((base) + 0xd0)
-#define SUN8I_SCALER_VSU_CVPHASE(base)		((base) + 0xd8)
-#define SUN8I_SCALER_VSU_YHCOEFF0(base, i)	((base) + 0x200 + 0x4 * (i))
-#define SUN8I_SCALER_VSU_YHCOEFF1(base, i)	((base) + 0x300 + 0x4 * (i))
-#define SUN8I_SCALER_VSU_YVCOEFF(base, i)	((base) + 0x400 + 0x4 * (i))
-#define SUN8I_SCALER_VSU_CHCOEFF0(base, i)	((base) + 0x600 + 0x4 * (i))
-#define SUN8I_SCALER_VSU_CHCOEFF1(base, i)	((base) + 0x700 + 0x4 * (i))
-#define SUN8I_SCALER_VSU_CVCOEFF(base, i)	((base) + 0x800 + 0x4 * (i))
+#define SUN8I_SCALER_VSU_CTRL			0x0
+#define SUN50I_SCALER_VSU_SCALE_MODE		0x10
+#define SUN50I_SCALER_VSU_DIR_THR		0x20
+#define SUN50I_SCALER_VSU_EDGE_THR		0x24
+#define SUN50I_SCALER_VSU_EDSCL_CTRL		0x28
+#define SUN50I_SCALER_VSU_ANGLE_THR		0x2c
+#define SUN8I_SCALER_VSU_OUTSIZE		0x40
+#define SUN50I_SCALER_VSU_GLB_ALPHA		0x44
+#define SUN8I_SCALER_VSU_YINSIZE		0x80
+#define SUN8I_SCALER_VSU_YHSTEP			0x88
+#define SUN8I_SCALER_VSU_YVSTEP			0x8c
+#define SUN8I_SCALER_VSU_YHPHASE		0x90
+#define SUN8I_SCALER_VSU_YVPHASE		0x98
+#define SUN8I_SCALER_VSU_CINSIZE		0xc0
+#define SUN8I_SCALER_VSU_CHSTEP			0xc8
+#define SUN8I_SCALER_VSU_CVSTEP			0xcc
+#define SUN8I_SCALER_VSU_CHPHASE		0xd0
+#define SUN8I_SCALER_VSU_CVPHASE		0xd8
+#define SUN8I_SCALER_VSU_YHCOEFF0(i)		(0x200 + 0x4 * (i))
+#define SUN8I_SCALER_VSU_YHCOEFF1(i)		(0x300 + 0x4 * (i))
+#define SUN8I_SCALER_VSU_YVCOEFF(i)		(0x400 + 0x4 * (i))
+#define SUN8I_SCALER_VSU_CHCOEFF0(i)		(0x600 + 0x4 * (i))
+#define SUN8I_SCALER_VSU_CHCOEFF1(i)		(0x700 + 0x4 * (i))
+#define SUN8I_SCALER_VSU_CVCOEFF(i)		(0x800 + 0x4 * (i))
 
 #define SUN8I_SCALER_VSU_CTRL_EN		BIT(0)
 #define SUN8I_SCALER_VSU_CTRL_COEFF_RDY		BIT(4)
@@ -74,6 +74,8 @@
 #define SUN50I_SCALER_VSU_ANGLE_OFFSET(x)		((x) & 0xFF)
 
 void sun8i_vi_scaler_enable(struct sun8i_layer *layer, bool enable);
+int sun8i_vi_scaler_init(struct sun8i_layer *layer, struct sun8i_rdma *rdma,
+			 void __iomem *reg_base);
 void sun8i_vi_scaler_setup(struct sun8i_layer *layer,
 			   u32 src_w, u32 src_h, u32 dst_w, u32 dst_h,
 			   u32 hscale, u32 vscale, u32 hphase, u32 vphase,
