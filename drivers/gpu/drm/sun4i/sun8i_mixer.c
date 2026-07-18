@@ -55,6 +55,10 @@ static const struct reg_region sun8i_blender_regions[] = {
 
 static const struct de2_fmt_info de2_formats[] = {
 	{
+		.drm_fmt = DRM_FORMAT_AYUV,
+		.de2_fmt = SUN8I_MIXER_FBFMT_ARGB8888,
+	},
+	{
 		.drm_fmt = DRM_FORMAT_ARGB8888,
 		.de2_fmt = SUN8I_MIXER_FBFMT_ARGB8888,
 	},
