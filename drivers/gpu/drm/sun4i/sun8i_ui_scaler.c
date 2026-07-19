@@ -10,7 +10,18 @@
  */
 
 #include "sun8i_ui_scaler.h"
+#include "sun8i_rdma.h"
 #include "sun8i_vi_scaler.h"
+
+static const struct reg_region sun8i_ui_scaler_regions[] = {
+	{ 0x000, 1 },
+	{ 0x040, 1 },
+	{ 0x080, 1 },
+	{ 0x088, 3 },
+	{ 0x098, 1 },
+	{ 0x200, SUN8I_UI_SCALER_COEFF_COUNT },
+	{ }
+};
 
 static const u32 lan2coefftab16[240] = {
 	0x00004000, 0x00033ffe, 0x00063efc, 0x000a3bfb,
@@ -103,6 +114,17 @@ static u32 sun8i_ui_scaler_base(struct sun8i_layer *layer)
 		       DE2_UI_SCALER_UNIT_SIZE * (layer->channel - offset);
 }
 
+int sun8i_ui_scaler_init(struct sun8i_layer *layer, struct sun8i_rdma *rdma,
+			 void __iomem *reg_base)
+{
+	u32 base = sun8i_ui_scaler_base(layer);
+
+	layer->scaler_rdma = sun8i_rdma_add_unit(rdma, reg_base + base, 0x240,
+						 sun8i_ui_scaler_regions);
+
+	return layer->scaler_rdma ? 0 : -ENOMEM;
+}
+
 static int sun8i_ui_scaler_coef_offset(unsigned int step)
 {
 	unsigned int scale, int_part, float_part;
@@ -129,9 +151,7 @@ static int sun8i_ui_scaler_coef_offset(unsigned int step)
 
 void sun8i_ui_scaler_enable(struct sun8i_layer *layer, bool enable)
 {
-	u32 val, base;
-
-	base = sun8i_ui_scaler_base(layer);
+	u32 val;
 
 	if (enable)
 		val = SUN8I_SCALER_GSU_CTRL_EN |
@@ -139,7 +159,8 @@ void sun8i_ui_scaler_enable(struct sun8i_layer *layer, bool enable)
 	else
 		val = 0;
 
-	regmap_write(layer->regs, SUN8I_SCALER_GSU_CTRL(base), val);
+	sun8i_rdma_write(layer->scaler_rdma,
+			 SUN8I_SCALER_GSU_CTRL, val);
 }
 
 void sun8i_ui_scaler_setup(struct sun8i_layer *layer,
@@ -148,9 +169,6 @@ void sun8i_ui_scaler_setup(struct sun8i_layer *layer,
 {
 	u32 insize, outsize;
 	int offset;
-	u32 base;
-
-	base = sun8i_ui_scaler_base(layer);
 
 	hphase <<= SUN8I_UI_SCALER_PHASE_FRAC - 16;
 	vphase <<= SUN8I_UI_SCALER_PHASE_FRAC - 16;
@@ -160,19 +178,20 @@ void sun8i_ui_scaler_setup(struct sun8i_layer *layer,
 	insize = SUN8I_UI_SCALER_SIZE(src_w, src_h);
 	outsize = SUN8I_UI_SCALER_SIZE(dst_w, dst_h);
 
-	regmap_write(layer->regs,
-		     SUN8I_SCALER_GSU_OUTSIZE(base), outsize);
-	regmap_write(layer->regs,
-		     SUN8I_SCALER_GSU_INSIZE(base), insize);
-	regmap_write(layer->regs,
-		     SUN8I_SCALER_GSU_HSTEP(base), hscale);
-	regmap_write(layer->regs,
-		     SUN8I_SCALER_GSU_VSTEP(base), vscale);
-	regmap_write(layer->regs,
-		     SUN8I_SCALER_GSU_HPHASE(base), hphase);
-	regmap_write(layer->regs,
-		     SUN8I_SCALER_GSU_VPHASE(base), vphase);
+	sun8i_rdma_write(layer->scaler_rdma, SUN8I_SCALER_GSU_OUTSIZE,
+			 outsize);
+	sun8i_rdma_write(layer->scaler_rdma, SUN8I_SCALER_GSU_INSIZE,
+			 insize);
+	sun8i_rdma_write(layer->scaler_rdma, SUN8I_SCALER_GSU_HSTEP,
+			 hscale);
+	sun8i_rdma_write(layer->scaler_rdma, SUN8I_SCALER_GSU_VSTEP,
+			 vscale);
+	sun8i_rdma_write(layer->scaler_rdma, SUN8I_SCALER_GSU_HPHASE,
+			 hphase);
+	sun8i_rdma_write(layer->scaler_rdma, SUN8I_SCALER_GSU_VPHASE,
+			 vphase);
 	offset = sun8i_ui_scaler_coef_offset(hscale);
-	regmap_bulk_write(layer->regs, SUN8I_SCALER_GSU_HCOEFF(base, 0),
+	sun8i_rdma_memcpy(layer->scaler_rdma,
+			  SUN8I_SCALER_GSU_HCOEFF(0),
 			  &lan2coefftab16[offset], SUN8I_UI_SCALER_COEFF_COUNT);
 }
