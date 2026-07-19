@@ -271,6 +271,15 @@ struct sun8i_layer *sun8i_ui_layer_init_one(struct drm_device *drm,
 	if (!layer->layer_rdma)
 		return ERR_PTR(-ENOMEM);
 
+	if (layer->cfg->scaler_type[phy_index] != SUN8I_SCALER_NONE) {
+		if (layer->cfg->de_type == SUN8I_MIXER_DE33)
+			ret = sun8i_vi_scaler_init(layer, rdma, reg_base);
+		else
+			ret = sun8i_ui_scaler_init(layer, rdma, reg_base);
+		if (ret)
+			return ERR_PTR(ret);
+	}
+
 	/* possible crtcs are set later */
 	ret = drm_universal_plane_init(drm, &layer->plane, 0,
 				       &sun8i_ui_layer_funcs,
