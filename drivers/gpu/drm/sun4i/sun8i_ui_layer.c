@@ -265,15 +265,17 @@ struct sun8i_layer *sun8i_ui_layer_init_one(struct drm_device *drm,
 
 	ch_base = sun8i_channel_base(layer);
 	layer->layer_rdma = sun8i_rdma_add_unit(rdma, reg_base + ch_base,
+						(layer->cfg->de_type == SUN8I_MIXER_DE33 ?
+						 0x100000 : 0) + ch_base,
 						0x100, ui_regions);
 	if (!layer->layer_rdma)
 		return ERR_PTR(-ENOMEM);
 
 	if (layer->cfg->scaler_type[phy_index] != SUN8I_SCALER_NONE) {
 		if (layer->cfg->de_type == SUN8I_MIXER_DE33)
-			ret = sun8i_vi_scaler_init(layer, rdma, reg_base);
+			ret = sun8i_vi_scaler_init(layer, rdma, reg_base, 0x100000);
 		else
-			ret = sun8i_ui_scaler_init(layer, rdma, reg_base);
+			ret = sun8i_ui_scaler_init(layer, rdma, reg_base, 0);
 		if (ret)
 			return ERR_PTR(ret);
 	}

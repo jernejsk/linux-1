@@ -42,7 +42,7 @@ static const u32 ccsc_base[][2] = {
 };
 
 int sun8i_csc_init(struct sun8i_layer *layer, struct sun8i_rdma *rdma,
-		   void __iomem *reg_base)
+		   void __iomem *reg_base, u32 reg_offset_base)
 {
 	const struct reg_region *regions;
 	u32 base, size;
@@ -61,8 +61,8 @@ int sun8i_csc_init(struct sun8i_layer *layer, struct sun8i_rdma *rdma,
 		size = 0x40;
 	}
 
-	layer->csc_rdma = sun8i_rdma_add_unit(rdma, reg_base + base, size,
-					      regions);
+	layer->csc_rdma = sun8i_rdma_add_unit(rdma, reg_base + base,
+					      reg_offset_base + base, size, regions);
 
 	return layer->csc_rdma ? 0 : -ENOMEM;
 }

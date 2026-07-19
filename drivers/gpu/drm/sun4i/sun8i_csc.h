@@ -32,6 +32,6 @@ struct sun8i_rdma;
 void sun8i_csc_config(struct sun8i_layer *layer,
 		      struct drm_plane_state *state);
 int sun8i_csc_init(struct sun8i_layer *layer, struct sun8i_rdma *rdma,
-		   void __iomem *reg_base);
+		   void __iomem *reg_base, u32 reg_offset_base);
 
 #endif

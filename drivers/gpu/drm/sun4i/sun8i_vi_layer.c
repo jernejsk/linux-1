@@ -440,23 +440,30 @@ struct sun8i_layer *sun8i_vi_layer_init_one(struct drm_device *drm,
 
 	ch_base = sun8i_channel_base(layer);
 	layer->layer_rdma = sun8i_rdma_add_unit(rdma, reg_base + ch_base,
+						(layer->cfg->de_type == SUN8I_MIXER_DE33 ?
+						 0x100000 : 0) + ch_base,
 						0x100, vi_regions);
 	if (!layer->layer_rdma)
 		return ERR_PTR(-ENOMEM);
 
 	if (layer->cfg->scaler_type[phy_index] != SUN8I_SCALER_NONE) {
-		ret = sun8i_vi_scaler_init(layer, rdma, reg_base);
+		ret = sun8i_vi_scaler_init(layer, rdma, reg_base,
+					   layer->cfg->de_type == SUN8I_MIXER_DE33 ?
+					   0x100000 : 0);
 		if (ret)
 			return ERR_PTR(ret);
 	}
 
-	ret = sun8i_csc_init(layer, rdma, reg_base);
+	ret = sun8i_csc_init(layer, rdma, reg_base,
+			     layer->cfg->de_type == SUN8I_MIXER_DE33 ?
+			     0x100000 : 0);
 	if (ret)
 		return ERR_PTR(ret);
 
 	if (layer->cfg->de2_fcc_alpha) {
 		layer->fcc_rdma = sun8i_rdma_add_unit(rdma, reg_base + SUN8I_MIXER_FCC,
-						      0x94, fcc_regions);
+						      SUN8I_MIXER_FCC, 0x94,
+						      fcc_regions);
 		if (!layer->fcc_rdma)
 			return ERR_PTR(-ENOMEM);
 	}

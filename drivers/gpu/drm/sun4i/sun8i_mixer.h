@@ -44,23 +44,22 @@
 
 #define SUN8I_MIXER_FCC				0xaa000
 
-#define SUN8I_MIXER_BLEND_PIPE_CTL(base)	((base) + 0)
-#define SUN8I_MIXER_BLEND_ATTR_FCOLOR(base, x)	((base) + 0x4 + 0x10 * (x))
-#define SUN8I_MIXER_BLEND_ATTR_INSIZE(base, x)	((base) + 0x8 + 0x10 * (x))
-#define SUN8I_MIXER_BLEND_ATTR_COORD(base, x)	((base) + 0xc + 0x10 * (x))
-#define SUN8I_MIXER_BLEND_ROUTE(base)		((base) + 0x80)
-#define SUN8I_MIXER_BLEND_PREMULTIPLY(base)	((base) + 0x84)
-#define SUN8I_MIXER_BLEND_BKCOLOR(base)		((base) + 0x88)
-#define SUN8I_MIXER_BLEND_OUTSIZE(base)		((base) + 0x8c)
-#define SUN8I_MIXER_BLEND_MODE(base, x)		((base) + 0x90 + 0x04 * (x))
-#define SUN8I_MIXER_BLEND_CK_CTL(base)		((base) + 0xb0)
-#define SUN8I_MIXER_BLEND_CK_CFG(base)		((base) + 0xb4)
-#define SUN8I_MIXER_BLEND_CK_MAX(base, x)	((base) + 0xc0 + 0x04 * (x))
-#define SUN8I_MIXER_BLEND_CK_MIN(base, x)	((base) + 0xe0 + 0x04 * (x))
-#define SUN8I_MIXER_BLEND_OUTCTL(base)		((base) + 0xfc)
-#define SUN50I_MIXER_BLEND_CSC_CTL(base)	((base) + 0x100)
-#define SUN50I_MIXER_BLEND_CSC_COEFF(base, layer, x) \
-	((base) + 0x110 + (layer) * 0x30 +  (x) * 4)
+#define SUN8I_MIXER_BLEND_PIPE_CTL		0x0
+#define SUN8I_MIXER_BLEND_ATTR_FCOLOR(x)	(0x4 + 0x10 * (x))
+#define SUN8I_MIXER_BLEND_ATTR_INSIZE(x)	(0x8 + 0x10 * (x))
+#define SUN8I_MIXER_BLEND_ATTR_COORD(x)		(0xc + 0x10 * (x))
+#define SUN8I_MIXER_BLEND_ROUTE			0x80
+#define SUN8I_MIXER_BLEND_PREMULTIPLY		0x84
+#define SUN8I_MIXER_BLEND_BKCOLOR		0x88
+#define SUN8I_MIXER_BLEND_OUTSIZE		0x8c
+#define SUN8I_MIXER_BLEND_MODE(x)		(0x90 + 0x04 * (x))
+#define SUN8I_MIXER_BLEND_CK_CTL		0xb0
+#define SUN8I_MIXER_BLEND_CK_CFG		0xb4
+#define SUN8I_MIXER_BLEND_CK_MAX(x)		(0xc0 + 0x04 * (x))
+#define SUN8I_MIXER_BLEND_CK_MIN(x)		(0xe0 + 0x04 * (x))
+#define SUN8I_MIXER_BLEND_OUTCTL		0xfc
+#define SUN50I_MIXER_BLEND_CSC_CTL		0x100
+#define SUN50I_MIXER_BLEND_CSC_COEFF(layer, x)	(0x110 + (layer) * 0x30 + (x) * 4)
 
 #define SUN8I_MIXER_BLEND_PIPE_CTL_EN_MSK	GENMASK(12, 8)
 #define SUN8I_MIXER_BLEND_PIPE_CTL_EN(pipe)	BIT(8 + pipe)
@@ -233,6 +232,9 @@ struct sun8i_mixer {
 	struct device			*planes_dev;
 
 	struct sun8i_rdma		*rdma;
+	struct sun8i_rdma_unit		*global_rdma;
+	struct sun8i_rdma_unit		*blender_rdma;
+	u32				global_size;
 	void __iomem			*base;
 	void __iomem			*top;
 };
