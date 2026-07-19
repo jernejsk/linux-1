@@ -22,6 +22,18 @@ struct sunxi_engine;
  */
 struct sunxi_engine_ops {
 	/**
+	 * @sync:
+	 *
+	 * This callback synchronizes with any pending register update
+	 * mechanism of the engine, so another update source (like the
+	 * writeback register queue) can be triggered without racing
+	 * with it.
+	 *
+	 * This function is optional.
+	 */
+	void (*sync)(struct sunxi_engine *engine);
+
+	/**
 	 * @atomic_begin:
 	 *
 	 * This callback allows to prepare our engine for an atomic
@@ -143,6 +155,19 @@ struct sunxi_engine {
 
 	struct list_head		list;
 };
+
+/**
+ * sunxi_engine_commit() - commit all changes of the engine
+ * @engine:	pointer to the engine
+ * @crtc:	pointer to crtc the engine is associated with
+ * @state:	atomic state
+ */
+static inline void
+sunxi_engine_sync(struct sunxi_engine *engine)
+{
+	if (engine->ops && engine->ops->sync)
+		engine->ops->sync(engine);
+}
 
 /**
  * sunxi_engine_commit() - commit all changes of the engine
