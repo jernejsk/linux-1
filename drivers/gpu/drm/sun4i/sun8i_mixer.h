@@ -228,7 +228,6 @@ struct sun8i_mixer {
 	struct clk			*bus_clk;
 	struct clk			*mod_clk;
 
-	struct regmap			*top_regs;
 	struct device			*planes_dev;
 
 	struct sun8i_rdma		*rdma;
