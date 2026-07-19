@@ -248,7 +248,6 @@ struct sun8i_layer {
 	int				index;
 	int				channel;
 	int				overlay;
-	struct regmap			*regs;
 	const struct sun8i_layer_cfg	*cfg;
 	struct sun8i_rdma_unit		*layer_rdma;
 	struct sun8i_rdma_unit		*fcc_rdma;
