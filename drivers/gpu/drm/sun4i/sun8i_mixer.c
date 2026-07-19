@@ -471,22 +471,6 @@ static const struct sunxi_engine_ops sun50i_engine_ops = {
 	.mode_set	= sun8i_mixer_mode_set,
 };
 
-static const struct regmap_config sun8i_mixer_regmap_config = {
-	.name		= "display",
-	.reg_bits	= 32,
-	.val_bits	= 32,
-	.reg_stride	= 4,
-	.max_register	= 0xffffc, /* guessed */
-};
-
-static const struct regmap_config sun8i_top_regmap_config = {
-	.name		= "top",
-	.reg_bits	= 32,
-	.val_bits	= 32,
-	.reg_stride	= 4,
-	.max_register	= 0x3c,
-};
-
 static int sun8i_mixer_of_get_id(struct device_node *node)
 {
 	struct device_node *ep, *remote;
@@ -647,24 +631,10 @@ static int sun8i_mixer_bind(struct device *dev, struct device *master,
 	if (IS_ERR(mixer->base))
 		return PTR_ERR(mixer->base);
 
-	mixer->engine.regs = devm_regmap_init_mmio(dev, mixer->base,
-						   &sun8i_mixer_regmap_config);
-	if (IS_ERR(mixer->engine.regs)) {
-		dev_err(dev, "Couldn't create the mixer regmap\n");
-		return PTR_ERR(mixer->engine.regs);
-	}
-
 	if (mixer->cfg->de_type == SUN8I_MIXER_DE33) {
 		mixer->top = devm_platform_ioremap_resource_byname(pdev, "top");
 		if (IS_ERR(mixer->top))
 			return PTR_ERR(mixer->top);
-
-		mixer->top_regs = devm_regmap_init_mmio(dev, mixer->top,
-							&sun8i_top_regmap_config);
-		if (IS_ERR(mixer->top_regs)) {
-			dev_err(dev, "Couldn't create the top regmap\n");
-			return PTR_ERR(mixer->top_regs);
-		}
 	}
 
 	mixer->reset = devm_reset_control_get(dev, NULL);
