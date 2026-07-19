@@ -29,7 +29,6 @@ struct sun50i_planes_quirks {
 };
 
 struct sun50i_planes {
-	struct regmap				*regs;
 	struct regmap				*mapping;
 	const struct sun50i_planes_quirks	*quirks;
 	void __iomem				*base;
