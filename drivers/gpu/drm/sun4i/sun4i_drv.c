@@ -210,7 +210,8 @@ static bool sun4i_drv_node_is_tcon_top(struct device_node *node)
 
 static bool sun4i_drv_node_is_writeback(struct device_node *node)
 {
-	return of_device_is_compatible(node, "allwinner,sun50i-h6-de3-wb");
+	return of_device_is_compatible(node, "allwinner,sun50i-h6-de3-wb") ||
+	       of_device_is_compatible(node, "allwinner,sun50i-h616-de33-wb");
 }
 
 /*
@@ -419,6 +420,15 @@ static int sun4i_drv_probe(struct platform_device *pdev)
 
 		for_each_compatible_node(wb, NULL,
 					 "allwinner,sun50i-h6-de3-wb") {
+			if (of_device_is_available(wb)) {
+				component_match_add(&pdev->dev, &match,
+						    component_compare_of, wb);
+				count++;
+			}
+		}
+
+		for_each_compatible_node(wb, NULL,
+					 "allwinner,sun50i-h616-de33-wb") {
 			if (of_device_is_available(wb)) {
 				component_match_add(&pdev->dev, &match,
 						    component_compare_of, wb);
