@@ -42,7 +42,7 @@ static const u32 ccsc_base[][2] = {
 };
 
 int sun8i_csc_init(struct sun8i_layer *layer, struct sun8i_rdma *rdma,
-		   void __iomem *reg_base)
+		   void __iomem *reg_base, u32 reg_offset_base)
 {
 	const struct reg_region *regions;
 	u32 base, size;
@@ -61,8 +61,8 @@ int sun8i_csc_init(struct sun8i_layer *layer, struct sun8i_rdma *rdma,
 		size = 0x40;
 	}
 
-	layer->csc_rdma = sun8i_rdma_add_unit(rdma, reg_base + base, size,
-					      regions);
+	layer->csc_rdma = sun8i_rdma_add_unit(rdma, reg_base + base,
+					      reg_offset_base + base, size, regions);
 
 	return layer->csc_rdma ? 0 : -ENOMEM;
 }
@@ -168,7 +168,8 @@ static const u32 identity_de3[12] = {
 
 static void sun8i_de3_ccsc_set_identity(struct regmap *map, int layer)
 {
-	u32 addr = SUN50I_MIXER_BLEND_CSC_COEFF(DE3_BLD_BASE, layer, 0);
+	u32 addr = DE3_BLD_BASE +
+		   SUN50I_MIXER_BLEND_CSC_COEFF(layer, 0);
 
 	regmap_bulk_write(map, addr, identity_de3, ARRAY_SIZE(identity_de3));
 }

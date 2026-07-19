@@ -868,11 +868,12 @@ static u32 sun8i_vi_scaler_base(struct sun8i_layer *layer)
 }
 
 int sun8i_vi_scaler_init(struct sun8i_layer *layer, struct sun8i_rdma *rdma,
-			 void __iomem *reg_base)
+			 void __iomem *reg_base, u32 reg_offset_base)
 {
 	u32 base = sun8i_vi_scaler_base(layer);
 
-	layer->scaler_rdma = sun8i_rdma_add_unit(rdma, reg_base + base, 0x880,
+	layer->scaler_rdma = sun8i_rdma_add_unit(rdma, reg_base + base,
+						 reg_offset_base + base, 0x880,
 						 sun8i_vi_scaler_regions);
 
 	return layer->scaler_rdma ? 0 : -ENOMEM;
