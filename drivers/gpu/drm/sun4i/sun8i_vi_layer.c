@@ -430,7 +430,6 @@ static const struct reg_region fcc_regions[] = {
 
 struct sun8i_layer *sun8i_vi_layer_init_one(struct drm_device *drm,
 					    enum drm_plane_type type,
-					    struct regmap *regs,
 					    int index, int phy_index,
 					    int plane_cnt,
 					    const struct sun8i_layer_cfg *cfg,
@@ -453,7 +452,6 @@ struct sun8i_layer *sun8i_vi_layer_init_one(struct drm_device *drm,
 	layer->index = index;
 	layer->channel = phy_index;
 	layer->overlay = 0;
-	layer->regs = regs;
 	layer->cfg = cfg;
 
 	ch_base = sun8i_channel_base(layer);
