@@ -94,13 +94,13 @@ sun50i_planes_setup(struct device *dev, struct drm_device *drm,
 			type = DRM_PLANE_TYPE_OVERLAY;
 
 		if (phy_ch < UI_PLANE_OFFSET)
-			layer = sun8i_vi_layer_init_one(drm, type, planes->regs,
-							i, phy_ch, map->num_ch,
+			layer = sun8i_vi_layer_init_one(drm, type, i, phy_ch,
+							map->num_ch,
 							&quirks->cfg, rdma,
 							planes->base);
 		else
-			layer = sun8i_ui_layer_init_one(drm, type, planes->regs,
-							i, phy_ch, map->num_ch,
+			layer = sun8i_ui_layer_init_one(drm, type, i, phy_ch,
+							map->num_ch,
 							&quirks->cfg, rdma,
 							planes->base);
 
@@ -148,14 +148,6 @@ static void sun50i_planes_init_mapping(struct sun50i_planes *planes)
 	}
 }
 
-static const struct regmap_config sun50i_planes_regmap_config = {
-	.name		= "planes",
-	.reg_bits	= 32,
-	.val_bits	= 32,
-	.reg_stride	= 4,
-	.max_register	= 0x17fffc,
-};
-
 static int sun50i_planes_probe(struct platform_device *pdev)
 {
 	struct platform_device *clk_pdev;
@@ -194,11 +186,6 @@ static int sun50i_planes_probe(struct platform_device *pdev)
 	planes->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(planes->base))
 		return PTR_ERR(planes->base);
-
-	planes->regs = devm_regmap_init_mmio(dev, planes->base,
-					     &sun50i_planes_regmap_config);
-	if (IS_ERR(planes->regs))
-		return PTR_ERR(planes->regs);
 
 	sun50i_planes_init_mapping(planes);
 
