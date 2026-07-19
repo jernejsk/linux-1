@@ -1012,7 +1012,9 @@ void sun8i_vi_scaler_setup(struct sun8i_layer *layer,
 	if (layer->cfg->de_type >= SUN8I_MIXER_DE3) {
 		u32 val;
 
-		if (format->hsub == 1 && format->vsub == 1)
+		if ((format->hsub == 1 && format->vsub == 1) ||
+		    (format->num_planes == 1 && format->hsub == 2 &&
+		     format->vsub == 1))
 			val = SUN50I_SCALER_VSU_SCALE_MODE_UI;
 		else if (type == SUN8I_SCALER_VI_ED &&
 			 hscale > SUN8I_VI_SCALER_SCALE_UNIT &&
