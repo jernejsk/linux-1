@@ -166,19 +166,21 @@ static const u32 identity_de3[12] = {
 	0x00000000, 0x00000000, 0x00020000, 0x00000000,
 };
 
-static void sun8i_de3_ccsc_set_identity(struct regmap *map, int layer)
+static void sun8i_de3_ccsc_set_identity(void __iomem *base, int layer)
 {
-	u32 addr = SUN50I_MIXER_BLEND_CSC_COEFF(DE3_BLD_BASE, layer, 0);
+	u32 addr = DE3_BLD_BASE +
+		   SUN50I_MIXER_BLEND_CSC_COEFF(layer, 0);
 
-	regmap_bulk_write(map, addr, identity_de3, ARRAY_SIZE(identity_de3));
+	__iowrite32_copy(base + addr, identity_de3,
+			 ARRAY_SIZE(identity_de3));
 }
 
-void sun8i_de3_ccsc_init(struct regmap *map)
+void sun8i_de3_ccsc_init(void __iomem *base)
 {
 	int i;
 
 	for (i = 0; i < 4; i++)
-		sun8i_de3_ccsc_set_identity(map, i);
+		sun8i_de3_ccsc_set_identity(base, i);
 }
 
 static void sun8i_csc_setup(struct sun8i_rdma_unit *rdma,

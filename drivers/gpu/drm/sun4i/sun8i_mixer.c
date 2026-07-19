@@ -472,22 +472,6 @@ static const struct sunxi_engine_ops sun50i_engine_ops = {
 	.mode_set	= sun8i_mixer_mode_set,
 };
 
-static const struct regmap_config sun8i_mixer_regmap_config = {
-	.name		= "display",
-	.reg_bits	= 32,
-	.val_bits	= 32,
-	.reg_stride	= 4,
-	.max_register	= 0xffffc, /* guessed */
-};
-
-static const struct regmap_config sun8i_top_regmap_config = {
-	.name		= "top",
-	.reg_bits	= 32,
-	.val_bits	= 32,
-	.reg_stride	= 4,
-	.max_register	= 0x3c,
-};
-
 static int sun8i_mixer_of_get_id(struct device_node *node)
 {
 	struct device_node *ep, *remote;
@@ -571,7 +555,7 @@ static int sun8i_mixer_init(struct sun8i_mixer *mixer)
 	 * time doesn't have negative effects.
 	 */
 	if (mixer->cfg->de_type == SUN8I_MIXER_DE3) {
-		sun8i_de3_ccsc_init(mixer->engine.regs);
+		sun8i_de3_ccsc_init(mixer->base);
 		sun8i_rdma_write(mixer->blender_rdma,
 				 SUN50I_MIXER_BLEND_CSC_CTL,
 				 SUN50I_MIXER_BLEND_CSC_CTL_EN(0) |
@@ -650,24 +634,10 @@ static int sun8i_mixer_bind(struct device *dev, struct device *master,
 	if (IS_ERR(mixer->base))
 		return PTR_ERR(mixer->base);
 
-	mixer->engine.regs = devm_regmap_init_mmio(dev, mixer->base,
-						   &sun8i_mixer_regmap_config);
-	if (IS_ERR(mixer->engine.regs)) {
-		dev_err(dev, "Couldn't create the mixer regmap\n");
-		return PTR_ERR(mixer->engine.regs);
-	}
-
 	if (mixer->cfg->de_type == SUN8I_MIXER_DE33) {
 		mixer->top = devm_platform_ioremap_resource_byname(pdev, "top");
 		if (IS_ERR(mixer->top))
 			return PTR_ERR(mixer->top);
-
-		mixer->top_regs = devm_regmap_init_mmio(dev, mixer->top,
-							&sun8i_top_regmap_config);
-		if (IS_ERR(mixer->top_regs)) {
-			dev_err(dev, "Couldn't create the top regmap\n");
-			return PTR_ERR(mixer->top_regs);
-		}
 	}
 
 	mixer->reset = devm_reset_control_get(dev, NULL);
@@ -757,29 +727,29 @@ static int sun8i_mixer_bind(struct device *dev, struct device *master,
 	/* Reset registers and disable unused sub-engines */
 	if (mixer->cfg->de_type == SUN8I_MIXER_DE3) {
 		for (i = 0; i < DE3_MIXER_UNIT_SIZE; i += 4)
-			regmap_write(mixer->engine.regs, i, 0);
+			writel(0, mixer->base + i);
 
-		regmap_write(mixer->engine.regs, SUN50I_MIXER_FCE_EN, 0);
-		regmap_write(mixer->engine.regs, SUN50I_MIXER_PEAK_EN, 0);
-		regmap_write(mixer->engine.regs, SUN50I_MIXER_LCTI_EN, 0);
-		regmap_write(mixer->engine.regs, SUN50I_MIXER_BLS_EN, 0);
-		regmap_write(mixer->engine.regs, SUN50I_MIXER_FCC_EN, 0);
-		regmap_write(mixer->engine.regs, SUN50I_MIXER_DNS_EN, 0);
-		regmap_write(mixer->engine.regs, SUN50I_MIXER_DRC_EN, 0);
-		regmap_write(mixer->engine.regs, SUN50I_MIXER_FMT_EN, 0);
-		regmap_write(mixer->engine.regs, SUN50I_MIXER_CDC0_EN, 0);
-		regmap_write(mixer->engine.regs, SUN50I_MIXER_CDC1_EN, 0);
+		writel(0, mixer->base + SUN50I_MIXER_FCE_EN);
+		writel(0, mixer->base + SUN50I_MIXER_PEAK_EN);
+		writel(0, mixer->base + SUN50I_MIXER_LCTI_EN);
+		writel(0, mixer->base + SUN50I_MIXER_BLS_EN);
+		writel(0, mixer->base + SUN50I_MIXER_FCC_EN);
+		writel(0, mixer->base + SUN50I_MIXER_DNS_EN);
+		writel(0, mixer->base + SUN50I_MIXER_DRC_EN);
+		writel(0, mixer->base + SUN50I_MIXER_FMT_EN);
+		writel(0, mixer->base + SUN50I_MIXER_CDC0_EN);
+		writel(0, mixer->base + SUN50I_MIXER_CDC1_EN);
 	} else if (mixer->cfg->de_type == SUN8I_MIXER_DE2) {
 		for (i = 0; i < DE2_MIXER_UNIT_SIZE; i += 4)
-			regmap_write(mixer->engine.regs, i, 0);
+			writel(0, mixer->base + i);
 
-		regmap_write(mixer->engine.regs, SUN8I_MIXER_FCE_EN, 0);
-		regmap_write(mixer->engine.regs, SUN8I_MIXER_BWS_EN, 0);
-		regmap_write(mixer->engine.regs, SUN8I_MIXER_LTI_EN, 0);
-		regmap_write(mixer->engine.regs, SUN8I_MIXER_PEAK_EN, 0);
-		regmap_write(mixer->engine.regs, SUN8I_MIXER_ASE_EN, 0);
-		regmap_write(mixer->engine.regs, SUN8I_MIXER_FCC, 0);
-		regmap_write(mixer->engine.regs, SUN8I_MIXER_DCSC_EN, 0);
+		writel(0, mixer->base + SUN8I_MIXER_FCE_EN);
+		writel(0, mixer->base + SUN8I_MIXER_BWS_EN);
+		writel(0, mixer->base + SUN8I_MIXER_LTI_EN);
+		writel(0, mixer->base + SUN8I_MIXER_PEAK_EN);
+		writel(0, mixer->base + SUN8I_MIXER_ASE_EN);
+		writel(0, mixer->base + SUN8I_MIXER_FCC);
+		writel(0, mixer->base + SUN8I_MIXER_DCSC_EN);
 	}
 
 	ret = sun8i_mixer_init(mixer);
