@@ -8,12 +8,61 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 
+#include <drm/drm_atomic_state_helper.h>
 #include <drm/drm_modeset_helper_vtables.h>
 #include <drm/drm_encoder.h>
 #include <drm/drm_of.h>
 
+#include <uapi/linux/media-bus-format.h>
+
 #include "sun8i_dw_hdmi.h"
 #include "sun8i_tcon_top.h"
+
+#define bridge_to_sun8i_dw_hdmi(x) \
+	container_of(x, struct sun8i_dw_hdmi, bridge)
+
+static int sun8i_hdmi_enc_attach(struct drm_bridge *bridge,
+				 struct drm_encoder *encoder,
+				 enum drm_bridge_attach_flags flags)
+{
+	struct sun8i_dw_hdmi *hdmi = bridge_to_sun8i_dw_hdmi(bridge);
+
+	return drm_bridge_attach(encoder, hdmi->next_bridge,
+				 &hdmi->bridge, flags);
+}
+
+static u32 *
+sun8i_hdmi_enc_get_input_bus_fmts(struct drm_bridge *bridge,
+				  struct drm_bridge_state *bridge_state,
+				  struct drm_crtc_state *crtc_state,
+				  struct drm_connector_state *conn_state,
+				  u32 output_fmt,
+				  unsigned int *num_input_fmts)
+{
+	u32 *input_fmt;
+
+	*num_input_fmts = 0;
+
+	if (output_fmt != MEDIA_BUS_FMT_RGB888_1X24)
+		return NULL;
+
+	input_fmt = kmalloc_obj(*input_fmt);
+	if (!input_fmt)
+		return NULL;
+
+	*num_input_fmts = 1;
+	*input_fmt = output_fmt;
+
+	return input_fmt;
+}
+
+static const struct drm_bridge_funcs sun8i_hdmi_enc_bridge_funcs = {
+	.attach = sun8i_hdmi_enc_attach,
+	.atomic_get_input_bus_fmts = sun8i_hdmi_enc_get_input_bus_fmts,
+	.atomic_duplicate_state = drm_atomic_helper_bridge_duplicate_state,
+	.atomic_destroy_state = drm_atomic_helper_bridge_destroy_state,
+	.atomic_reset = drm_atomic_helper_bridge_reset,
+};
 
 static void sun8i_dw_hdmi_encoder_mode_set(struct drm_encoder *encoder,
 					   struct drm_display_mode *mode,
@@ -112,9 +161,14 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
 	if (!pdev->dev.of_node)
 		return -ENODEV;
 
-	hdmi = devm_kzalloc(&pdev->dev, sizeof(*hdmi), GFP_KERNEL);
-	if (!hdmi)
-		return -ENOMEM;
+	hdmi = devm_drm_bridge_alloc(&pdev->dev, struct sun8i_dw_hdmi,
+				     bridge, &sun8i_hdmi_enc_bridge_funcs);
+	if (IS_ERR(hdmi))
+		return PTR_ERR(hdmi);
+
+	ret = devm_drm_bridge_add(&pdev->dev, &hdmi->bridge);
+	if (ret)
+		return ret;
 
 	plat_data = &hdmi->plat_data;
 	hdmi->dev = &pdev->dev;
@@ -184,31 +238,47 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
 	if (ret)
 		goto err_disable_clk_tmds;
 
-	drm_encoder_helper_add(encoder, &sun8i_dw_hdmi_encoder_helper_funcs);
-	drm_encoder_init(drm, encoder, &sun8i_dw_hdmi_encoder_funcs,
-			 DRM_MODE_ENCODER_TMDS, NULL);
-
 	plat_data->mode_valid = hdmi->quirks->mode_valid;
 	plat_data->use_drm_infoframe = hdmi->quirks->use_drm_infoframe;
 	sun8i_hdmi_phy_set_ops(hdmi->phy, plat_data);
 
 	platform_set_drvdata(pdev, hdmi);
 
-	hdmi->hdmi = dw_hdmi_bind(pdev, encoder, plat_data);
-
-	/*
-	 * If dw_hdmi_bind() fails we'll never call dw_hdmi_unbind(),
-	 * which would have called the encoder cleanup.  Do it manually.
-	 */
+	hdmi->hdmi = dw_hdmi_probe(pdev, plat_data);
 	if (IS_ERR(hdmi->hdmi)) {
 		ret = PTR_ERR(hdmi->hdmi);
-		goto cleanup_encoder;
+		goto err_deinit_phy;
 	}
+
+	/* dw_hdmi_probe() registered a bridge for our own OF node. */
+	hdmi->next_bridge = of_drm_find_bridge(dev->of_node);
+	if (!hdmi->next_bridge) {
+		ret = -ENODEV;
+		goto err_remove_dw_hdmi;
+	}
+
+	drm_encoder_helper_add(encoder, &sun8i_dw_hdmi_encoder_helper_funcs);
+	ret = drm_simple_encoder_init(drm, encoder, DRM_MODE_ENCODER_TMDS);
+	if (ret)
+		goto err_remove_dw_hdmi;
+
+	/*
+	 * Attach our bridge in front of the dw-hdmi one, so display
+	 * engine constraints participate in bus format negotiation.
+	 * dw-hdmi still creates the connector.
+	 */
+	ret = drm_bridge_attach(encoder, &hdmi->bridge, NULL, 0);
+	if (ret)
+		goto cleanup_encoder;
 
 	return 0;
 
 cleanup_encoder:
 	drm_encoder_cleanup(encoder);
+err_remove_dw_hdmi:
+	dw_hdmi_remove(hdmi->hdmi);
+err_deinit_phy:
+	sun8i_hdmi_phy_deinit(hdmi->phy);
 err_disable_clk_tmds:
 	clk_disable_unprepare(hdmi->clk_tmds);
 err_assert_ctrl_reset:
@@ -224,7 +294,7 @@ static void sun8i_dw_hdmi_unbind(struct device *dev, struct device *master,
 {
 	struct sun8i_dw_hdmi *hdmi = dev_get_drvdata(dev);
 
-	dw_hdmi_unbind(hdmi->hdmi);
+	dw_hdmi_remove(hdmi->hdmi);
 	sun8i_hdmi_phy_deinit(hdmi->phy);
 	clk_disable_unprepare(hdmi->clk_tmds);
 	reset_control_assert(hdmi->rst_ctrl);
