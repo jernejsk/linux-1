@@ -37,6 +37,8 @@
 #include <drm/drm_vblank.h>
 #include <drm/drm_writeback.h>
 
+#include <uapi/linux/media-bus-format.h>
+
 #include "sun4i_crtc.h"
 #include "sunxi_engine.h"
 
@@ -222,6 +224,15 @@ static const u32 sun50i_wb_rgb2yuv[2][12] = {
 	},
 };
 
+/* Limited-range BT.709 YCbCr to full-range RGB */
+static const u32 sun50i_wb_yuv2rgb[12] = {
+	0x0002542a, 0x00000000, 0x000395e2, 0x00000000,
+	0x0002542a, 0xffff92d2, 0xfffeef27, 0x00000000,
+	0x0002542a, 0x0004398c, 0x00000000, 0x00000000,
+};
+
+static const u32 sun50i_wb_yuv2rgb_d[3] = { 0x40, 0x200, 0x200 };
+
 static struct sun50i_wb *conn_to_wb(struct drm_connector *conn)
 {
 	struct drm_writeback_connector *wb_conn =
@@ -391,29 +402,43 @@ static void sun50i_wb_set_scaler(struct sun50i_wb *wb, u32 in_w, u32 in_h,
 	sun50i_wb_write(wb, WB_BYPASS, control);
 }
 
-static void sun50i_wb_set_csc(struct sun50i_wb *wb,
+static void sun50i_wb_set_csc(struct sun50i_wb *wb, u32 in_format,
 			      const struct drm_format_info *format,
 			      u32 width, u32 height)
 {
 	enum drm_color_encoding encoding;
-	const u32 *coeff;
+	const u32 *coeff = NULL;
+	const u32 *d = NULL;
 	unsigned int i;
 
 	if (!wb->cfg->has_rcq)
 		return;
 
-	if (!format->is_yuv) {
+	if (in_format == MEDIA_BUS_FMT_RGB888_1X24) {
+		if (format->is_yuv) {
+			encoding = width <= 736 && height <= 576 ?
+				   DRM_COLOR_YCBCR_BT601 :
+				   DRM_COLOR_YCBCR_BT709;
+			coeff = sun50i_wb_rgb2yuv[encoding];
+		}
+	} else if (!format->is_yuv) {
+		/* The blender YUV output is always BT.709 limited range. */
+		coeff = sun50i_wb_yuv2rgb;
+		d = sun50i_wb_yuv2rgb_d;
+	}
+
+	/*
+	 * YUV capture of a YUV blender output is stored verbatim, in
+	 * the blender output encoding.
+	 */
+	if (!coeff) {
 		sun50i_wb_write(wb, WB_CSC_CTL, 0);
 		return;
 	}
 
-	encoding = width <= 736 && height <= 576 ?
-		   DRM_COLOR_YCBCR_BT601 : DRM_COLOR_YCBCR_BT709;
-	coeff = sun50i_wb_rgb2yuv[encoding];
-
 	sun50i_wb_write(wb, WB_CSC_CTL, 1);
 	for (i = 0; i < 3; i++)
-		sun50i_wb_write(wb, WB_CSC_D(i), 0);
+		sun50i_wb_write(wb, WB_CSC_D(i), d ? d[i] : 0);
 	for (i = 0; i < 12; i++)
 		sun50i_wb_write(wb, WB_CSC_COEFF(i), coeff[i]);
 }
@@ -474,6 +499,15 @@ static int sun50i_wb_encoder_atomic_check(struct drm_encoder *encoder,
 
 	if (!conn_state->writeback_job)
 		return 0;
+
+	/*
+	 * Writeback without a programmable CSC captures raw blender
+	 * output, which is only meaningful when the engine outputs RGB.
+	 */
+	if (!wb->cfg->has_rcq &&
+	    drm_crtc_state_to_sun4i_crtc_state(crtc_state)->format !=
+	    MEDIA_BUS_FMT_RGB888_1X24)
+		return -EINVAL;
 
 	fb = conn_state->writeback_job->fb;
 	if (sun50i_wb_format(fb->format->format) == U32_MAX)
@@ -658,7 +692,8 @@ static void sun50i_wb_atomic_commit(struct drm_connector *conn,
 		sun50i_wb_write(wb, WB_SFTM, 0x20);
 
 	sun50i_wb_set_scaler(wb, w, h, out_w, out_h, fb->format);
-	sun50i_wb_set_csc(wb, fb->format, out_w, out_h);
+	sun50i_wb_set_csc(wb, drm_crtc_to_sun4i_crtc(crtc)->engine->format,
+			  fb->format, out_w, out_h);
 	if (wb->cfg->has_rcq)
 		sun50i_wb_write(wb, WB_START,
 				WB_GCTRL_AUTO_GATE | WB_GCTRL_START);
