@@ -118,13 +118,25 @@ sun8i_dw_hdmi_encoder_atomic_mode_set(struct drm_encoder *encoder,
 		drm_crtc_state_to_sun4i_crtc_state(crtc_state);
 	struct sun8i_dw_hdmi *hdmi = encoder_to_sun8i_dw_hdmi(encoder);
 	struct drm_display_mode *mode = &crtc_state->adjusted_mode;
-	int div = 1;
+	unsigned long rate = mode->crtc_clock * 1000UL;
 
-	/* YUV 4:2:0 is transferred at half the pixel rate. */
-	if (scrtc_state->format == MEDIA_BUS_FMT_UYYVYY8_0_5X24)
-		div = 2;
+	/*
+	 * The TMDS character rate is derived from the pixel clock: deep
+	 * color multiplies it (10-bit: 5/4), and YUV 4:2:0 halves it
+	 * again since two horizontal samples share one TMDS period.
+	 */
+	switch (scrtc_state->format) {
+	case MEDIA_BUS_FMT_UYYVYY10_0_5X30:
+		rate = rate * 5 / 4 / 2;
+		break;
+	case MEDIA_BUS_FMT_UYYVYY8_0_5X24:
+		rate = rate / 2;
+		break;
+	default:
+		break;
+	}
 
-	clk_set_rate(hdmi->clk_tmds, mode->crtc_clock * 1000 / div);
+	clk_set_rate(hdmi->clk_tmds, rate);
 }
 static const struct drm_encoder_funcs sun8i_dw_hdmi_encoder_funcs = {
 	.destroy = drm_encoder_cleanup,

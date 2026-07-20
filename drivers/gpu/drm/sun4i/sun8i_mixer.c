@@ -482,7 +482,8 @@ static bool sun8i_mixer_format_valid(struct sunxi_engine *engine, u32 format)
 	struct sun8i_mixer *mixer = engine_to_sun8i_mixer(engine);
 
 	if (mixer->cfg->has_formatter &&
-	    format == MEDIA_BUS_FMT_UYYVYY8_0_5X24)
+	    (format == MEDIA_BUS_FMT_UYYVYY8_0_5X24 ||
+	     format == MEDIA_BUS_FMT_UYYVYY10_0_5X30))
 		return true;
 
 	return format == MEDIA_BUS_FMT_RGB888_1X24;
