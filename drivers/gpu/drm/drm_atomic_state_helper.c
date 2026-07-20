@@ -487,7 +487,22 @@ void
 __drm_atomic_helper_connector_state_init(struct drm_connector_state *conn_state,
 					 struct drm_connector *connector)
 {
+	struct drm_property *prop = connector->max_bpc_property;
+
 	conn_state->connector = connector;
+
+	/*
+	 * drm_connector_attach_max_bpc_property() only initializes
+	 * max_bpc/max_requested_bpc on the connector's state at the time
+	 * it is called. drm_mode_config_reset() unconditionally replaces
+	 * every connector's state afterwards, which would otherwise leave
+	 * max_requested_bpc at its zeroed default and permanently prevent
+	 * bridges from ever negotiating above the property's minimum.
+	 */
+	if (prop) {
+		conn_state->max_bpc = prop->values[1];
+		conn_state->max_requested_bpc = prop->values[1];
+	}
 }
 EXPORT_SYMBOL(__drm_atomic_helper_connector_state_init);
 
