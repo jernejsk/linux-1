@@ -6,6 +6,8 @@
 #ifndef _SUNXI_ENGINE_H_
 #define _SUNXI_ENGINE_H_
 
+#include <drm/drm_color_mgmt.h>
+
 struct drm_plane;
 struct drm_crtc;
 struct drm_device;
@@ -143,6 +145,9 @@ struct sunxi_engine_ops {
  * @node:	the of device node of the engine
  * @regs:	the regmap of the engine
  * @id:		the id of the engine (-1 if not used)
+ * @format:	the output media bus format of the engine
+ * @encoding:	the output YCbCr encoding of the engine, meaningless
+ *	when @format is RGB
  * @list:	engine list management
  */
 struct sunxi_engine {
@@ -152,6 +157,8 @@ struct sunxi_engine {
 	struct regmap			*regs;
 
 	int id;
+	u32 format;
+	enum drm_color_encoding encoding;
 
 	struct list_head		list;
 };

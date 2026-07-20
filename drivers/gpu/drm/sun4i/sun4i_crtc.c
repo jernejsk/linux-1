@@ -13,6 +13,8 @@
 #include <linux/of_irq.h>
 #include <linux/regmap.h>
 
+#include <uapi/linux/media-bus-format.h>
+
 #include <video/videomode.h>
 
 #include <drm/drm_atomic.h>
@@ -175,9 +177,19 @@ static void sun4i_crtc_atomic_enable(struct drm_crtc *crtc,
 
 static void sun4i_crtc_mode_set_nofb(struct drm_crtc *crtc)
 {
+	struct sun4i_crtc_state *scrtc_state =
+		drm_crtc_state_to_sun4i_crtc_state(crtc->state);
 	struct drm_display_mode *mode = &crtc->state->adjusted_mode;
 	struct drm_encoder *encoder = sun4i_crtc_get_encoder(crtc);
 	struct sun4i_crtc *scrtc = drm_crtc_to_sun4i_crtc(crtc);
+
+	/*
+	 * The negotiated output format and encoding are stable for the
+	 * lifetime of the mode, so they can be latched into the engine
+	 * here, before TCON, engine and plane updates are committed.
+	 */
+	scrtc->engine->format = scrtc_state->format;
+	scrtc->engine->encoding = scrtc_state->encoding;
 
 	sun4i_tcon_mode_set(scrtc->tcon, encoder, mode);
 	sunxi_engine_mode_set(scrtc->engine, mode);
@@ -212,12 +224,55 @@ static void sun4i_crtc_disable_vblank(struct drm_crtc *crtc)
 	sun4i_tcon_enable_vblank(scrtc->tcon, false);
 }
 
+static void sun4i_crtc_destroy_state(struct drm_crtc *crtc,
+				     struct drm_crtc_state *state)
+{
+	__drm_atomic_helper_crtc_destroy_state(state);
+	kfree(drm_crtc_state_to_sun4i_crtc_state(state));
+}
+
+static void sun4i_crtc_reset(struct drm_crtc *crtc)
+{
+	struct sun4i_crtc_state *state;
+
+	if (crtc->state) {
+		sun4i_crtc_destroy_state(crtc, crtc->state);
+		crtc->state = NULL;
+	}
+
+	state = kzalloc_obj(*state);
+	if (!state)
+		return;
+
+	state->format = MEDIA_BUS_FMT_RGB888_1X24;
+	state->encoding = DRM_COLOR_YCBCR_BT709;
+	__drm_atomic_helper_crtc_reset(crtc, &state->base);
+}
+
+static struct drm_crtc_state *
+sun4i_crtc_duplicate_state(struct drm_crtc *crtc)
+{
+	struct sun4i_crtc_state *current_state =
+		drm_crtc_state_to_sun4i_crtc_state(crtc->state);
+	struct sun4i_crtc_state *state;
+
+	state = kzalloc_obj(*state);
+	if (!state)
+		return NULL;
+
+	__drm_atomic_helper_crtc_duplicate_state(crtc, &state->base);
+	state->format = current_state->format;
+	state->encoding = current_state->encoding;
+
+	return &state->base;
+}
+
 static const struct drm_crtc_funcs sun4i_crtc_funcs = {
-	.atomic_destroy_state	= drm_atomic_helper_crtc_destroy_state,
-	.atomic_duplicate_state	= drm_atomic_helper_crtc_duplicate_state,
+	.atomic_destroy_state	= sun4i_crtc_destroy_state,
+	.atomic_duplicate_state	= sun4i_crtc_duplicate_state,
 	.destroy		= drm_crtc_cleanup,
 	.page_flip		= drm_atomic_helper_page_flip,
-	.reset			= drm_atomic_helper_crtc_reset,
+	.reset			= sun4i_crtc_reset,
 	.set_config		= drm_atomic_helper_set_config,
 	.enable_vblank		= sun4i_crtc_enable_vblank,
 	.disable_vblank		= sun4i_crtc_disable_vblank,
