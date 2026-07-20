@@ -27,6 +27,8 @@
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_vblank.h>
 
+#include <uapi/linux/media-bus-format.h>
+
 #include "sun4i_drv.h"
 #include "sun50i_planes.h"
 #include "sun8i_csc.h"
@@ -510,6 +512,7 @@ static const struct sunxi_engine_ops sun50i_de3_engine_ops = {
 	.commit		  = sun8i_mixer_commit,
 	.layers_init	  = sun8i_layers_init,
 	.mode_set	  = sun8i_mixer_mode_set,
+	.format_valid	  = sun8i_mixer_format_valid,
 };
 
 static int sun8i_mixer_of_get_id(struct device_node *node)
@@ -634,6 +637,9 @@ static int sun8i_mixer_bind(struct device *dev, struct device *master,
 		return -ENOMEM;
 	dev_set_drvdata(dev, mixer);
 	mixer->engine.node = dev->of_node;
+	/* default output format, supported by all mixers */
+	mixer->engine.format = MEDIA_BUS_FMT_RGB888_1X24;
+	mixer->engine.encoding = DRM_COLOR_YCBCR_BT709;
 
 	/*
 	 * This assume we have the same DMA constraints for all our the
