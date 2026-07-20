@@ -21,6 +21,7 @@
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
 
+#include "sun8i_csc.h"
 #include "sun8i_mixer.h"
 #include "sun8i_rdma.h"
 #include "sun8i_ui_layer.h"
@@ -201,6 +202,8 @@ static void sun8i_ui_layer_atomic_update(struct drm_plane *plane,
 
 	sun8i_ui_layer_update_attributes(layer, plane);
 	sun8i_ui_layer_update_coord(layer, plane);
+	if (layer->cfg->de_type >= SUN8I_MIXER_DE3)
+		sun8i_csc_config(layer, new_state);
 	sun8i_ui_layer_update_buffer(layer, plane);
 }
 
@@ -288,6 +291,15 @@ struct sun8i_layer *sun8i_ui_layer_init_one(struct drm_device *drm,
 			ret = sun8i_vi_scaler_init(layer, rdma, reg_base, 0x100000);
 		else
 			ret = sun8i_ui_scaler_init(layer, rdma, reg_base, 0);
+		if (ret)
+			return ERR_PTR(ret);
+	}
+
+	/* UI channels need CSC for YUV output support. */
+	if (layer->cfg->de_type >= SUN8I_MIXER_DE3) {
+		ret = sun8i_csc_init(layer, rdma, reg_base,
+				     layer->cfg->de_type == SUN8I_MIXER_DE33 ?
+				     0x100000 : 0);
 		if (ret)
 			return ERR_PTR(ret);
 	}

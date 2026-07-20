@@ -67,6 +67,8 @@
 
 /* colors are always in AARRGGBB format */
 #define SUN8I_MIXER_BLEND_COLOR_BLACK		0xff000000
+/* black in AAYYCBCR format for YUV output */
+#define SUN8I_MIXER_BLEND_COLOR_BLACK_YUV	0xff108080
 /* The following numbers are some still unknown magic numbers */
 #define SUN8I_MIXER_BLEND_MODE_DEF		0x03010301
 
