@@ -987,8 +987,10 @@ static void sun50i_iommu_report_fault(struct sun50i_iommu *iommu,
 				      unsigned master, phys_addr_t iova,
 				      unsigned prot)
 {
-	dev_err(iommu->dev, "Page fault for %pad (master %d, dir %s)\n",
-		&iova, master, (prot == IOMMU_FAULT_WRITE) ? "wr" : "rd");
+	dev_err_ratelimited(iommu->dev,
+			    "Page fault for %pad (master %d, dir %s)\n",
+			    &iova, master,
+			    (prot == IOMMU_FAULT_WRITE) ? "wr" : "rd");
 
 	if (iommu->domain)
 		report_iommu_fault(iommu->domain, iommu->dev, iova, prot);
