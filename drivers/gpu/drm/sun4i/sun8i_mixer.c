@@ -28,6 +28,7 @@
 #include <uapi/linux/media-bus-format.h>
 
 #include "sun4i_drv.h"
+#include "sun50i_fmt.h"
 #include "sun50i_planes.h"
 #include "sun8i_mixer.h"
 #include "sun8i_rdma.h"
@@ -470,6 +471,10 @@ static void sun8i_mixer_mode_set(struct sunxi_engine *engine,
 			 SUN8I_MIXER_BLEND_BKCOLOR, val);
 	sun8i_rdma_write(mixer->blender_rdma,
 			 SUN8I_MIXER_BLEND_ATTR_FCOLOR(0), val);
+
+	if (mixer->cfg->has_formatter)
+		sun50i_fmt_setup(mixer, mode->hdisplay, mode->vdisplay,
+				 engine->format);
 }
 
 static const struct sunxi_engine_ops sun8i_engine_ops = {
@@ -581,6 +586,9 @@ static int sun8i_mixer_init(struct sun8i_mixer *mixer)
 				 SUN50I_MIXER_BLEND_CSC_CTL_EN(1) |
 				 SUN50I_MIXER_BLEND_CSC_CTL_EN(2) |
 				 SUN50I_MIXER_BLEND_CSC_CTL_EN(3));
+
+	if (mixer->cfg->has_formatter)
+		return sun50i_fmt_init(mixer);
 
 	return 0;
 }
@@ -1020,11 +1028,13 @@ static const struct sun8i_mixer_cfg sun50i_h6_mixer0_cfg = {
 	.mod_rate	= 600000000,
 	.ui_num		= 3,
 	.vi_num		= 1,
+	.has_formatter	= 1,
 };
 
 static const struct sun8i_mixer_cfg sun50i_h616_mixer0_cfg = {
 	.de_type	= SUN8I_MIXER_DE33,
 	.mod_rate	= 600000000,
+	.has_formatter	= 1,
 };
 
 static const struct of_device_id sun8i_mixer_of_table[] = {

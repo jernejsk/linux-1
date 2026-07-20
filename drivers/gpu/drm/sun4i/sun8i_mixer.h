@@ -212,6 +212,8 @@ struct sun8i_layer_cfg {
  * @mod_rate: module clock rate that needs to be set in order to have
  *	a functional block.
  * @map: channel map for DE variants processing YUV separately (DE33)
+ * @has_formatter: mixer has the formatter block, needed for YUV and
+ *	10-bit output
  */
 
 struct sun8i_mixer_cfg {
@@ -220,6 +222,7 @@ struct sun8i_mixer_cfg {
 	int			ui_num;
 	unsigned int		de_type;
 	unsigned long		mod_rate;
+	unsigned int		has_formatter : 1;
 };
 
 struct sun8i_mixer {
@@ -237,6 +240,7 @@ struct sun8i_mixer {
 	struct sun8i_rdma		*rdma;
 	struct sun8i_rdma_unit		*global_rdma;
 	struct sun8i_rdma_unit		*blender_rdma;
+	struct sun8i_rdma_unit		*fmt_rdma;
 	u32				global_size;
 	void __iomem			*base;
 	void __iomem			*top;
