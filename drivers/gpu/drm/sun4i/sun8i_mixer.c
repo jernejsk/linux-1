@@ -477,10 +477,22 @@ static void sun8i_mixer_mode_set(struct sunxi_engine *engine,
 				 engine->format);
 }
 
+static bool sun8i_mixer_format_valid(struct sunxi_engine *engine, u32 format)
+{
+	struct sun8i_mixer *mixer = engine_to_sun8i_mixer(engine);
+
+	if (mixer->cfg->has_formatter &&
+	    format == MEDIA_BUS_FMT_UYYVYY8_0_5X24)
+		return true;
+
+	return format == MEDIA_BUS_FMT_RGB888_1X24;
+}
+
 static const struct sunxi_engine_ops sun8i_engine_ops = {
 	.commit		= sun8i_mixer_commit,
 	.layers_init	= sun8i_layers_init,
 	.mode_set	= sun8i_mixer_mode_set,
+	.format_valid	= sun8i_mixer_format_valid,
 };
 
 static void sun8i_mixer_sync(struct sunxi_engine *engine)
@@ -495,6 +507,7 @@ static const struct sunxi_engine_ops sun50i_engine_ops = {
 	.commit		= sun8i_mixer_commit,
 	.layers_init	= sun50i_layers_init,
 	.mode_set	= sun8i_mixer_mode_set,
+	.format_valid	= sun8i_mixer_format_valid,
 };
 
 static int sun8i_mixer_of_get_id(struct device_node *node)

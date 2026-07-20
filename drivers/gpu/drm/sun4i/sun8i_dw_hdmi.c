@@ -18,6 +18,7 @@
 #include "sun4i_crtc.h"
 #include "sun8i_dw_hdmi.h"
 #include "sun8i_tcon_top.h"
+#include "sunxi_engine.h"
 
 #define bridge_to_sun8i_dw_hdmi(x) \
 	container_of(x, struct sun8i_dw_hdmi, bridge)
@@ -81,11 +82,12 @@ sun8i_hdmi_enc_get_input_bus_fmts(struct drm_bridge *bridge,
 				  u32 output_fmt,
 				  unsigned int *num_input_fmts)
 {
+	struct sun4i_crtc *scrtc = drm_crtc_to_sun4i_crtc(crtc_state->crtc);
 	u32 *input_fmt;
 
 	*num_input_fmts = 0;
 
-	if (output_fmt != MEDIA_BUS_FMT_RGB888_1X24)
+	if (!sunxi_engine_format_valid(scrtc->engine, output_fmt))
 		return NULL;
 
 	input_fmt = kmalloc_obj(*input_fmt);
@@ -107,13 +109,22 @@ static const struct drm_bridge_funcs sun8i_hdmi_enc_bridge_funcs = {
 	.atomic_reset = drm_atomic_helper_bridge_reset,
 };
 
-static void sun8i_dw_hdmi_encoder_mode_set(struct drm_encoder *encoder,
-					   struct drm_display_mode *mode,
-					   struct drm_display_mode *adj_mode)
+static void
+sun8i_dw_hdmi_encoder_atomic_mode_set(struct drm_encoder *encoder,
+				      struct drm_crtc_state *crtc_state,
+				      struct drm_connector_state *conn_state)
 {
+	struct sun4i_crtc_state *scrtc_state =
+		drm_crtc_state_to_sun4i_crtc_state(crtc_state);
 	struct sun8i_dw_hdmi *hdmi = encoder_to_sun8i_dw_hdmi(encoder);
+	struct drm_display_mode *mode = &crtc_state->adjusted_mode;
+	int div = 1;
 
-	clk_set_rate(hdmi->clk_tmds, mode->crtc_clock * 1000);
+	/* YUV 4:2:0 is transferred at half the pixel rate. */
+	if (scrtc_state->format == MEDIA_BUS_FMT_UYYVYY8_0_5X24)
+		div = 2;
+
+	clk_set_rate(hdmi->clk_tmds, mode->crtc_clock * 1000 / div);
 }
 static const struct drm_encoder_funcs sun8i_dw_hdmi_encoder_funcs = {
 	.destroy = drm_encoder_cleanup,
@@ -121,7 +132,7 @@ static const struct drm_encoder_funcs sun8i_dw_hdmi_encoder_funcs = {
 
 static const struct drm_encoder_helper_funcs
 sun8i_dw_hdmi_encoder_helper_funcs = {
-	.mode_set = sun8i_dw_hdmi_encoder_mode_set,
+	.atomic_mode_set = sun8i_dw_hdmi_encoder_atomic_mode_set,
 };
 
 static enum drm_mode_status
@@ -283,6 +294,7 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
 
 	plat_data->mode_valid = hdmi->quirks->mode_valid;
 	plat_data->use_drm_infoframe = hdmi->quirks->use_drm_infoframe;
+	plat_data->ycbcr_420_allowed = hdmi->quirks->ycbcr_420_allowed;
 	sun8i_hdmi_phy_set_ops(hdmi->phy, plat_data);
 
 	platform_set_drvdata(pdev, hdmi);
@@ -366,6 +378,7 @@ static const struct sun8i_dw_hdmi_quirks sun8i_a83t_quirks = {
 static const struct sun8i_dw_hdmi_quirks sun50i_h6_quirks = {
 	.mode_valid = sun8i_dw_hdmi_mode_valid_h6,
 	.use_drm_infoframe = true,
+	.ycbcr_420_allowed = true,
 };
 
 static const struct of_device_id sun8i_dw_hdmi_dt_ids[] = {

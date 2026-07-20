@@ -7,6 +7,7 @@
 #define _SUNXI_ENGINE_H_
 
 #include <drm/drm_color_mgmt.h>
+#include <uapi/linux/media-bus-format.h>
 
 struct drm_plane;
 struct drm_crtc;
@@ -137,6 +138,17 @@ struct sunxi_engine_ops {
 	 */
 	void (*mode_set)(struct sunxi_engine *engine,
 			 const struct drm_display_mode *mode);
+
+	/**
+	 * @format_valid:
+	 *
+	 * This callback checks if the engine supports given output
+	 * media bus format. It is used for bridge format negotiation.
+	 *
+	 * This function is optional. When it is not implemented, only
+	 * MEDIA_BUS_FMT_RGB888_1X24 is considered supported.
+	 */
+	bool (*format_valid)(struct sunxi_engine *engine, u32 format);
 };
 
 /**
@@ -249,5 +261,19 @@ sunxi_engine_mode_set(struct sunxi_engine *engine,
 {
 	if (engine->ops && engine->ops->mode_set)
 		engine->ops->mode_set(engine, mode);
+}
+
+/**
+ * sunxi_engine_format_valid - Check if engine supports output format
+ * @engine:	pointer to the engine
+ * @format:	output media bus format
+ */
+static inline bool
+sunxi_engine_format_valid(struct sunxi_engine *engine, u32 format)
+{
+	if (engine->ops && engine->ops->format_valid)
+		return engine->ops->format_valid(engine, format);
+
+	return format == MEDIA_BUS_FMT_RGB888_1X24;
 }
 #endif /* _SUNXI_ENGINE_H_ */

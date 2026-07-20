@@ -176,6 +176,7 @@ struct sun8i_dw_hdmi_quirks {
 					   const struct drm_display_info *info,
 					   const struct drm_display_mode *mode);
 	unsigned int use_drm_infoframe : 1;
+	unsigned int ycbcr_420_allowed : 1;
 };
 
 struct sun8i_dw_hdmi {
