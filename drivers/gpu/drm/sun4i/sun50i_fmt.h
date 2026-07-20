@@ -21,11 +21,20 @@
 #define SUN50I_FMT_LMT_C0	0x24
 #define SUN50I_FMT_LMT_C1	0x28
 
-#define SUN50I_FMT_LIMIT(low, high)	(((high) << 16) | (low))
-
 #define SUN50I_FMT_CS_YUV444RGB	0
 #define SUN50I_FMT_CS_YUV422	1
 #define SUN50I_FMT_CS_YUV420	2
+
+/*
+ * Clamp values for the RGB/YUV444 bypass case and the YUV422/YUV420
+ * subsampling case, taken verbatim from the vendor driver. They are
+ * the same for 8-bit and 10-bit output, so the formatter clearly
+ * clamps in some fixed internal precision rather than the output
+ * width.
+ */
+#define SUN50I_FMT_LIMIT_BYPASS	0x0fff0000
+#define SUN50I_FMT_LIMIT_Y	0x0eb00100
+#define SUN50I_FMT_LIMIT_C	0x0f000100
 
 int sun50i_fmt_init(struct sun8i_mixer *mixer);
 void sun50i_fmt_setup(struct sun8i_mixer *mixer, u16 width,
