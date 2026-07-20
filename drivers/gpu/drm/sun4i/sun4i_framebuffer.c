@@ -16,6 +16,66 @@
 #include "sun4i_drv.h"
 #include "sun4i_framebuffer.h"
 
+static int sun4i_de_check_writebacks(struct drm_device *dev,
+				     struct drm_atomic_commit *state)
+{
+	struct drm_connector_state *new_conn_state;
+	struct drm_connector *connector;
+	int ret, i;
+
+	/*
+	 * A writeback connector's atomic_check() runs during mode_fixup(),
+	 * alongside the display connector sharing its CRTC. If the display
+	 * connector negotiates a new output format in the same commit, the
+	 * writeback connector may be checked before or after that happens,
+	 * depending on iteration order. Re-run it now that mode_fixup() has
+	 * finished and the CRTC state's format is guaranteed final.
+	 */
+	for_each_new_connector_in_state(state, connector, new_conn_state, i) {
+		const struct drm_encoder_helper_funcs *funcs;
+		struct drm_crtc_state *new_crtc_state;
+		struct drm_encoder *encoder;
+
+		if (connector->connector_type != DRM_MODE_CONNECTOR_WRITEBACK ||
+		    !new_conn_state->crtc)
+			continue;
+
+		encoder = new_conn_state->best_encoder;
+		if (!encoder)
+			continue;
+
+		funcs = encoder->helper_private;
+		if (!funcs || !funcs->atomic_check)
+			continue;
+
+		new_crtc_state = drm_atomic_get_new_crtc_state(state,
+							       new_conn_state->crtc);
+
+		ret = funcs->atomic_check(encoder, new_crtc_state,
+					  new_conn_state);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+static int sun4i_de_atomic_check(struct drm_device *dev,
+				 struct drm_atomic_commit *state)
+{
+	int ret;
+
+	ret = drm_atomic_helper_check_modeset(dev, state);
+	if (ret)
+		return ret;
+
+	ret = sun4i_de_check_writebacks(dev, state);
+	if (ret)
+		return ret;
+
+	return drm_atomic_helper_check_planes(dev, state);
+}
+
 static const struct drm_framebuffer_funcs sun4i_fb_funcs = {
 	.destroy	= drm_gem_fb_destroy,
 	.create_handle	= drm_gem_fb_create_handle,
@@ -53,7 +113,7 @@ sun4i_fb_create(struct drm_device *dev, struct drm_file *file,
 }
 
 static const struct drm_mode_config_funcs sun4i_de_mode_config_funcs = {
-	.atomic_check		= drm_atomic_helper_check,
+	.atomic_check		= sun4i_de_atomic_check,
 	.atomic_commit		= drm_atomic_helper_commit,
 	.fb_create		= sun4i_fb_create,
 };
