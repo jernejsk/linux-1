@@ -611,6 +611,7 @@ static void sun4i_tcon1_mode_set(struct sun4i_tcon *tcon,
 	 */
 	switch (tcon->crtc->engine->format) {
 	case MEDIA_BUS_FMT_UYYVYY8_0_5X24:
+	case MEDIA_BUS_FMT_UYYVYY10_0_5X30:
 		div = 2;
 		break;
 	default:
