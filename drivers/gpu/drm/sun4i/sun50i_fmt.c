@@ -18,42 +18,47 @@ static u32 sun50i_fmt_get_colorspace(u32 format)
 {
 	switch (format) {
 	case MEDIA_BUS_FMT_UYYVYY8_0_5X24:
+	case MEDIA_BUS_FMT_UYYVYY10_0_5X30:
 		return SUN50I_FMT_CS_YUV420;
 	default:
 		return SUN50I_FMT_CS_YUV444RGB;
 	}
 }
 
+static bool sun50i_fmt_is_10bit(u32 format)
+{
+	return format == MEDIA_BUS_FMT_UYYVYY10_0_5X30;
+}
+
 void sun50i_fmt_setup(struct sun8i_mixer *mixer, u16 width,
 		      u16 height, u32 format)
 {
-	u32 colorspace, limit[3];
-	bool bypass;
-
-	colorspace = sun50i_fmt_get_colorspace(format);
-	bypass = colorspace == SUN50I_FMT_CS_YUV444RGB;
+	u32 colorspace = sun50i_fmt_get_colorspace(format);
+	bool bypass = colorspace == SUN50I_FMT_CS_YUV444RGB;
 
 	sun8i_rdma_write(mixer->fmt_rdma, SUN50I_FMT_SIZE,
 			 SUN8I_MIXER_SIZE(width, height));
 	sun8i_rdma_write(mixer->fmt_rdma, SUN50I_FMT_SWAP, 0);
-	/* bit depth compensation is needed for 10-bit output only */
-	sun8i_rdma_write(mixer->fmt_rdma, SUN50I_FMT_DEPTH, 0);
+	sun8i_rdma_write(mixer->fmt_rdma, SUN50I_FMT_DEPTH,
+			 sun50i_fmt_is_10bit(format));
 	sun8i_rdma_write(mixer->fmt_rdma, SUN50I_FMT_FORMAT, colorspace);
 	sun8i_rdma_write(mixer->fmt_rdma, SUN50I_FMT_COEF, 0);
 
 	if (bypass) {
-		limit[0] = SUN50I_FMT_LIMIT(0, 1021);
-		limit[1] = SUN50I_FMT_LIMIT(0, 1021);
-		limit[2] = SUN50I_FMT_LIMIT(0, 1021);
+		sun8i_rdma_write(mixer->fmt_rdma, SUN50I_FMT_LMT_Y,
+				 SUN50I_FMT_LIMIT_BYPASS);
+		sun8i_rdma_write(mixer->fmt_rdma, SUN50I_FMT_LMT_C0,
+				 SUN50I_FMT_LIMIT_BYPASS);
+		sun8i_rdma_write(mixer->fmt_rdma, SUN50I_FMT_LMT_C1,
+				 SUN50I_FMT_LIMIT_BYPASS);
 	} else {
-		limit[0] = SUN50I_FMT_LIMIT(64, 940);
-		limit[1] = SUN50I_FMT_LIMIT(64, 960);
-		limit[2] = SUN50I_FMT_LIMIT(64, 960);
+		sun8i_rdma_write(mixer->fmt_rdma, SUN50I_FMT_LMT_Y,
+				 SUN50I_FMT_LIMIT_Y);
+		sun8i_rdma_write(mixer->fmt_rdma, SUN50I_FMT_LMT_C0,
+				 SUN50I_FMT_LIMIT_C);
+		sun8i_rdma_write(mixer->fmt_rdma, SUN50I_FMT_LMT_C1,
+				 SUN50I_FMT_LIMIT_C);
 	}
-
-	sun8i_rdma_write(mixer->fmt_rdma, SUN50I_FMT_LMT_Y, limit[0]);
-	sun8i_rdma_write(mixer->fmt_rdma, SUN50I_FMT_LMT_C0, limit[1]);
-	sun8i_rdma_write(mixer->fmt_rdma, SUN50I_FMT_LMT_C1, limit[2]);
 
 	sun8i_rdma_write(mixer->fmt_rdma, SUN50I_FMT_CTRL, !bypass);
 }
