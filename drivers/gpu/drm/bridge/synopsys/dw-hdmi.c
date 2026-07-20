@@ -2323,6 +2323,14 @@ static int dw_hdmi_setup(struct dw_hdmi *hdmi,
 	hdmi->hdmi_data.hdcp_enable = 0;
 	hdmi->hdmi_data.video_mode.mdataenablepolarity = true;
 
+	/*
+	 * Mute the sink for the duration of the mode change, so it does
+	 * not attempt to lock onto transitional, not yet fully configured
+	 * timings. Some sinks otherwise fail to detect the new mode at
+	 * all until the cable is unplugged and reconnected.
+	 */
+	hdmi_writeb(hdmi, HDMI_FC_GCP_SET_AVMUTE, HDMI_FC_GCP);
+
 	/* HDMI Initialization Step B.1 */
 	hdmi_av_composer(hdmi, &connector->display_info, mode);
 
@@ -2330,8 +2338,10 @@ static int dw_hdmi_setup(struct dw_hdmi *hdmi,
 	ret = hdmi->phy.ops->init(hdmi, hdmi->phy.data,
 				  &connector->display_info,
 				  &hdmi->previous_mode);
-	if (ret)
+	if (ret) {
+		hdmi_writeb(hdmi, HDMI_FC_GCP_CLEAR_AVMUTE, HDMI_FC_GCP);
 		return ret;
+	}
 	hdmi->phy.enabled = true;
 
 	/* HDMI Initialization Step B.3 */
@@ -2361,6 +2371,13 @@ static int dw_hdmi_setup(struct dw_hdmi *hdmi,
 	hdmi_video_csc(hdmi);
 	hdmi_video_sample(hdmi);
 	hdmi_tx_hdcp_config(hdmi);
+
+	/*
+	 * Give the sink time to lock onto the now fully configured timing
+	 * before unmuting.
+	 */
+	msleep(100);
+	hdmi_writeb(hdmi, HDMI_FC_GCP_CLEAR_AVMUTE, HDMI_FC_GCP);
 
 	dw_hdmi_clear_overflow(hdmi);
 
