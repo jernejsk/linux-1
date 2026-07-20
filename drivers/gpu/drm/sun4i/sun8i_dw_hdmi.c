@@ -313,6 +313,7 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
 	 * output is never negotiated in practice.
 	 */
 	plat_data->ycbcr444_alt_vmap = true;
+	plat_data->phy_max_tmds_msm_ctrl_quirk = true;
 	sun8i_hdmi_phy_set_ops(hdmi->phy, plat_data);
 
 	platform_set_drvdata(pdev, hdmi);

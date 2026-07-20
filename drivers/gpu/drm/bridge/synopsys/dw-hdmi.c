@@ -1642,6 +1642,17 @@ static int hdmi_phy_configure_dwc_hdmi_3d_tx(struct dw_hdmi *hdmi,
 	dw_hdmi_phy_i2c_write(hdmi, HDMI_3D_TX_PHY_MSM_CTRL_CKO_SEL_FB_CLK,
 			      HDMI_3D_TX_PHY_MSM_CTRL);
 
+	/*
+	 * At 594 MHz, the highest TMDS rate this PHY supports, some
+	 * instances need the clock select re-asserted together with the
+	 * override bit for it to actually latch.
+	 */
+	if (pdata->phy_max_tmds_msm_ctrl_quirk && mtmdsclock == 594000000UL)
+		dw_hdmi_phy_i2c_write(hdmi,
+				      HDMI_3D_TX_PHY_MSM_CTRL_OVERRIDE |
+				      HDMI_3D_TX_PHY_MSM_CTRL_CKO_SEL_FB_CLK,
+				      HDMI_3D_TX_PHY_MSM_CTRL);
+
 	dw_hdmi_phy_i2c_write(hdmi, phy_config->term, HDMI_3D_TX_PHY_TXTERM);
 	dw_hdmi_phy_i2c_write(hdmi, phy_config->sym_ctr,
 			      HDMI_3D_TX_PHY_CKSYMTXCTRL);
