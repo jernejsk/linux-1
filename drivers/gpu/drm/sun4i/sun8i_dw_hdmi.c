@@ -15,6 +15,7 @@
 
 #include <uapi/linux/media-bus-format.h>
 
+#include "sun4i_crtc.h"
 #include "sun8i_dw_hdmi.h"
 #include "sun8i_tcon_top.h"
 
@@ -29,6 +30,19 @@ static int sun8i_hdmi_enc_attach(struct drm_bridge *bridge,
 
 	return drm_bridge_attach(encoder, hdmi->next_bridge,
 				 &hdmi->bridge, flags);
+}
+
+static int sun8i_hdmi_enc_atomic_check(struct drm_bridge *bridge,
+				       struct drm_bridge_state *bridge_state,
+				       struct drm_crtc_state *crtc_state,
+				       struct drm_connector_state *conn_state)
+{
+	struct sun4i_crtc_state *scrtc_state =
+		drm_crtc_state_to_sun4i_crtc_state(crtc_state);
+
+	scrtc_state->format = bridge_state->output_bus_cfg.format;
+
+	return 0;
 }
 
 static u32 *
@@ -58,6 +72,7 @@ sun8i_hdmi_enc_get_input_bus_fmts(struct drm_bridge *bridge,
 
 static const struct drm_bridge_funcs sun8i_hdmi_enc_bridge_funcs = {
 	.attach = sun8i_hdmi_enc_attach,
+	.atomic_check = sun8i_hdmi_enc_atomic_check,
 	.atomic_get_input_bus_fmts = sun8i_hdmi_enc_get_input_bus_fmts,
 	.atomic_duplicate_state = drm_atomic_helper_bridge_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_bridge_destroy_state,
