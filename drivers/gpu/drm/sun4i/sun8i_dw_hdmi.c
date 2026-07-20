@@ -40,6 +40,34 @@ static int sun8i_hdmi_enc_atomic_check(struct drm_bridge *bridge,
 	struct sun4i_crtc_state *scrtc_state =
 		drm_crtc_state_to_sun4i_crtc_state(crtc_state);
 
+	switch (conn_state->colorspace) {
+	case DRM_MODE_COLORIMETRY_SMPTE_170M_YCC:
+	case DRM_MODE_COLORIMETRY_XVYCC_601:
+	case DRM_MODE_COLORIMETRY_SYCC_601:
+	case DRM_MODE_COLORIMETRY_OPYCC_601:
+	case DRM_MODE_COLORIMETRY_BT601_YCC:
+		scrtc_state->encoding = DRM_COLOR_YCBCR_BT601;
+		break;
+
+	default:
+	case DRM_MODE_COLORIMETRY_NO_DATA:
+	case DRM_MODE_COLORIMETRY_BT709_YCC:
+	case DRM_MODE_COLORIMETRY_XVYCC_709:
+	case DRM_MODE_COLORIMETRY_RGB_WIDE_FIXED:
+	case DRM_MODE_COLORIMETRY_RGB_WIDE_FLOAT:
+	case DRM_MODE_COLORIMETRY_OPRGB:
+		scrtc_state->encoding = DRM_COLOR_YCBCR_BT709;
+		break;
+
+	case DRM_MODE_COLORIMETRY_BT2020_CYCC:
+	case DRM_MODE_COLORIMETRY_BT2020_YCC:
+	case DRM_MODE_COLORIMETRY_BT2020_RGB:
+	case DRM_MODE_COLORIMETRY_DCI_P3_RGB_D65:
+	case DRM_MODE_COLORIMETRY_DCI_P3_RGB_THEATER:
+		scrtc_state->encoding = DRM_COLOR_YCBCR_BT2020;
+		break;
+	}
+
 	scrtc_state->format = bridge_state->output_bus_cfg.format;
 
 	return 0;
