@@ -179,6 +179,14 @@ static int sun8i_ui_layer_atomic_check(struct drm_plane *plane,
 }
 
 
+static void sun8i_ui_layer_atomic_disable(struct drm_plane *plane,
+					  struct drm_atomic_commit *state)
+{
+	struct sun8i_layer *layer = plane_to_sun8i_layer(plane);
+
+	sun8i_ui_layer_disable(layer);
+}
+
 static void sun8i_ui_layer_atomic_update(struct drm_plane *plane,
 					 struct drm_atomic_commit *state)
 {
@@ -199,6 +207,7 @@ static void sun8i_ui_layer_atomic_update(struct drm_plane *plane,
 static const struct drm_plane_helper_funcs sun8i_ui_layer_helper_funcs = {
 	.atomic_check	= sun8i_ui_layer_atomic_check,
 	.atomic_update	= sun8i_ui_layer_atomic_update,
+	.atomic_disable	= sun8i_ui_layer_atomic_disable,
 };
 
 static const struct drm_plane_funcs sun8i_ui_layer_funcs = {
