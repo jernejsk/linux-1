@@ -459,6 +459,17 @@ static void sun8i_mixer_mode_set(struct sunxi_engine *engine,
 
 	DRM_DEBUG_DRIVER("Switching display mixer interlaced mode %s\n",
 			 interlaced ? "on" : "off");
+
+	/* Background and bottom plane fill color must match output format. */
+	if (engine->format == MEDIA_BUS_FMT_RGB888_1X24)
+		val = SUN8I_MIXER_BLEND_COLOR_BLACK;
+	else
+		val = SUN8I_MIXER_BLEND_COLOR_BLACK_YUV;
+
+	sun8i_rdma_write(mixer->blender_rdma,
+			 SUN8I_MIXER_BLEND_BKCOLOR, val);
+	sun8i_rdma_write(mixer->blender_rdma,
+			 SUN8I_MIXER_BLEND_ATTR_FCOLOR(0), val);
 }
 
 static const struct sunxi_engine_ops sun8i_engine_ops = {

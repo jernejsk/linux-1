@@ -3,14 +3,19 @@
  * Copyright (C) Jernej Skrabec <jernej.skrabec@siol.net>
  */
 
+#include <drm/drm_crtc.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_plane.h>
 #include <drm/drm_print.h>
 
+#include <uapi/linux/media-bus-format.h>
+
+#include "sun4i_crtc.h"
 #include "sun8i_csc.h"
 #include "sun8i_mixer.h"
 #include "sun8i_rdma.h"
+#include "sunxi_engine.h"
 
 static const struct reg_region sun8i_csc_regions[] = {
 	{ 0x00, 1 },
@@ -31,8 +36,9 @@ static const struct reg_region sun8i_de33_csc_regions[] = {
 
 enum sun8i_csc_mode {
 	SUN8I_CSC_MODE_OFF,
-	SUN8I_CSC_MODE_YUV2RGB,
-	SUN8I_CSC_MODE_YVU2RGB,
+	SUN8I_CSC_MODE_RGB,
+	SUN8I_CSC_MODE_YUV,
+	SUN8I_CSC_MODE_YVU,
 };
 
 static const u32 ccsc_base[][2] = {
@@ -160,6 +166,162 @@ static const u32 yuv2rgb_de3[2][3][12] = {
 	},
 };
 
+static const u32 rgb2yuv_de3[3][12] = {
+	[DRM_COLOR_YCBCR_BT601] = {
+		0x0000837A, 0x0001021D, 0x00003221, 0x00000040,
+		0xFFFFB41C, 0xFFFF6B03, 0x0000E0E1, 0x00000200,
+		0x0000E0E1, 0xFFFF43B1, 0xFFFFDB6E, 0x00000200,
+	},
+	[DRM_COLOR_YCBCR_BT709] = {
+		0x00005D7C, 0x00013A7C, 0x00001FBF, 0x00000040,
+		0xFFFFCC78, 0xFFFF52A7, 0x0000E0E1, 0x00000200,
+		0x0000E0E1, 0xFFFF33BE, 0xFFFFEB61, 0x00000200,
+	},
+	[DRM_COLOR_YCBCR_BT2020] = {
+		0x00007384, 0x00012A21, 0x00001A13, 0x00000040,
+		0xFFFFC133, 0xFFFF5DEC, 0x0000E0E1, 0x00000200,
+		0x0000E0E1, 0xFFFF3135, 0xFFFFEDEA, 0x00000200,
+	},
+};
+
+/* always convert to limited mode */
+static const u32 yuv2yuv_de3[2][3][3][12] = {
+	[DRM_COLOR_YCBCR_LIMITED_RANGE] = {
+		[DRM_COLOR_YCBCR_BT601] = {
+			[DRM_COLOR_YCBCR_BT601] = {
+				0x00020000, 0x00000000, 0x00000000, 0x00000000,
+				0x00000000, 0x00020000, 0x00000000, 0x00000000,
+				0x00000000, 0x00000000, 0x00020000, 0x00000000,
+			},
+			[DRM_COLOR_YCBCR_BT709] = {
+				0x00020000, 0xFFFFC4D7, 0xFFFF9589, 0xFFC00040,
+				0x00000000, 0x0002098B, 0x00003AAF, 0xFE000200,
+				0x00000000, 0x0000266D, 0x00020CF8, 0xFE000200,
+			},
+			[DRM_COLOR_YCBCR_BT2020] = {
+				0x00020000, 0xFFFFBFCE, 0xFFFFC5FF, 0xFFC00040,
+				0x00000000, 0x00020521, 0x00001F89, 0xFE000200,
+				0x00000000, 0x00002C87, 0x00020F07, 0xFE000200,
+			},
+		},
+		[DRM_COLOR_YCBCR_BT709] = {
+			[DRM_COLOR_YCBCR_BT601] = {
+				0x00020000, 0x000032D9, 0x00006226, 0xFFC00040,
+				0x00000000, 0x0001FACE, 0xFFFFC759, 0xFE000200,
+				0x00000000, 0xFFFFDAE7, 0x0001F780, 0xFE000200,
+			},
+			[DRM_COLOR_YCBCR_BT709] = {
+				0x00020000, 0x00000000, 0x00000000, 0x00000000,
+				0x00000000, 0x00020000, 0x00000000, 0x00000000,
+				0x00000000, 0x00000000, 0x00020000, 0x00000000,
+			},
+			[DRM_COLOR_YCBCR_BT2020] = {
+				0x00020000, 0xFFFFF782, 0x00003036, 0xFFC00040,
+				0x00000000, 0x0001FD99, 0xFFFFE5CA, 0xFE000200,
+				0x00000000, 0x000005E4, 0x0002015A, 0xFE000200,
+			},
+		},
+		[DRM_COLOR_YCBCR_BT2020] = {
+			[DRM_COLOR_YCBCR_BT601] = {
+				0x00020000, 0x00003B03, 0x000034D2, 0xFFC00040,
+				0x00000000, 0x0001FD8C, 0xFFFFE183, 0xFE000200,
+				0x00000000, 0xFFFFD4F3, 0x0001F3FA, 0xFE000200,
+			},
+			[DRM_COLOR_YCBCR_BT709] = {
+				0x00020000, 0x00000916, 0xFFFFD061, 0xFFC00040,
+				0x00000000, 0x0002021C, 0x00001A40, 0xFE000200,
+				0x00000000, 0xFFFFFA19, 0x0001FE5A, 0xFE000200,
+			},
+			[DRM_COLOR_YCBCR_BT2020] = {
+				0x00020000, 0x00000000, 0x00000000, 0x00000000,
+				0x00000000, 0x00020000, 0x00000000, 0x00000000,
+				0x00000000, 0x00000000, 0x00020000, 0x00000000,
+			},
+		},
+	},
+	[DRM_COLOR_YCBCR_FULL_RANGE] = {
+		[DRM_COLOR_YCBCR_BT601] = {
+			[DRM_COLOR_YCBCR_BT601] = {
+				0x0001B7B8, 0x00000000, 0x00000000, 0x00000040,
+				0x00000000, 0x0001C1C2, 0x00000000, 0xFE000200,
+				0x00000000, 0x00000000, 0x0001C1C2, 0xFE000200,
+			},
+			[DRM_COLOR_YCBCR_BT709] = {
+				0x0001B7B8, 0xFFFFCC08, 0xFFFFA27B, 0x00000040,
+				0x00000000, 0x0001CA24, 0x0000338D, 0xFE000200,
+				0x00000000, 0x000021C1, 0x0001CD26, 0xFE000200,
+			},
+			[DRM_COLOR_YCBCR_BT2020] = {
+				0x0001B7B8, 0xFFFFC79C, 0xFFFFCD0C, 0x00000040,
+				0x00000000, 0x0001C643, 0x00001BB4, 0xFE000200,
+				0x00000000, 0x0000271D, 0x0001CEF5, 0xFE000200,
+			},
+		},
+		[DRM_COLOR_YCBCR_BT709] = {
+			[DRM_COLOR_YCBCR_BT601] = {
+				0x0001B7B8, 0x00002CAB, 0x00005638, 0x00000040,
+				0x00000000, 0x0001BD32, 0xFFFFCE3C, 0xFE000200,
+				0x00000000, 0xFFFFDF6A, 0x0001BA4A, 0xFE000200,
+			},
+			[DRM_COLOR_YCBCR_BT709] = {
+				0x0001B7B8, 0x00000000, 0x00000000, 0x00000040,
+				0x00000000, 0x0001C1C2, 0x00000000, 0xFE000200,
+				0x00000000, 0x00000000, 0x0001C1C2, 0xFE000200,
+			},
+			[DRM_COLOR_YCBCR_BT2020] = {
+				0x0001B7B8, 0xFFFFF88A, 0x00002A5A, 0x00000040,
+				0x00000000, 0x0001BFA5, 0xFFFFE8FA, 0xFE000200,
+				0x00000000, 0x0000052D, 0x0001C2F1, 0xFE000200,
+			},
+		},
+		[DRM_COLOR_YCBCR_BT2020] = {
+			[DRM_COLOR_YCBCR_BT601] = {
+				0x0001B7B8, 0x000033D6, 0x00002E66, 0x00000040,
+				0x00000000, 0x0001BF9A, 0xFFFFE538, 0xFE000200,
+				0x00000000, 0xFFFFDA2F, 0x0001B732, 0xFE000200,
+			},
+			[DRM_COLOR_YCBCR_BT709] = {
+				0x0001B7B8, 0x000007FB, 0xFFFFD62B, 0x00000040,
+				0x00000000, 0x0001C39D, 0x0000170F, 0xFE000200,
+				0x00000000, 0xFFFFFAD1, 0x0001C04F, 0xFE000200,
+			},
+			[DRM_COLOR_YCBCR_BT2020] = {
+				0x0001B7B8, 0x00000000, 0x00000000, 0x00000040,
+				0x00000000, 0x0001C1C2, 0x00000000, 0xFE000200,
+				0x00000000, 0x00000000, 0x0001C1C2, 0xFE000200,
+			},
+		},
+	},
+};
+
+/*
+ * Get conversion table for the channel CSC unit, based on the plane
+ * format, the plane's own encoding/range and the engine output format
+ * and encoding. NULL means that no conversion is needed.
+ */
+static const u32 *sun8i_csc_get_de3_table(enum sun8i_csc_mode mode,
+					  enum drm_color_encoding encoding,
+					  enum drm_color_range range,
+					  u32 out_format,
+					  enum drm_color_encoding out_encoding)
+{
+	if (out_format != MEDIA_BUS_FMT_RGB888_1X24) {
+		if (mode == SUN8I_CSC_MODE_RGB)
+			return rgb2yuv_de3[out_encoding];
+
+		if (range == DRM_COLOR_YCBCR_LIMITED_RANGE &&
+		    encoding == out_encoding)
+			return NULL;
+
+		return yuv2yuv_de3[range][encoding][out_encoding];
+	}
+
+	if (mode == SUN8I_CSC_MODE_RGB)
+		return NULL;
+
+	return yuv2rgb_de3[range][encoding];
+}
+
 static void sun8i_csc_setup(struct sun8i_rdma_unit *rdma,
 			    enum sun8i_csc_mode mode,
 			    enum drm_color_encoding encoding,
@@ -173,14 +335,15 @@ static void sun8i_csc_setup(struct sun8i_rdma_unit *rdma,
 
 	switch (mode) {
 	case SUN8I_CSC_MODE_OFF:
+	case SUN8I_CSC_MODE_RGB:
 		val = 0;
 		break;
-	case SUN8I_CSC_MODE_YUV2RGB:
+	case SUN8I_CSC_MODE_YUV:
 		val = SUN8I_CSC_CTRL_EN;
 		base_reg = SUN8I_CSC_COEFF(0, 0);
 		sun8i_rdma_memcpy(rdma, base_reg, table, 12);
 		break;
-	case SUN8I_CSC_MODE_YVU2RGB:
+	case SUN8I_CSC_MODE_YVU:
 		val = SUN8I_CSC_CTRL_EN;
 		for (i = 0; i < 12; i++) {
 			if ((i & 3) == 1)
@@ -203,23 +366,31 @@ static void sun8i_csc_setup(struct sun8i_rdma_unit *rdma,
 
 static void sun8i_de3_ccsc_setup(struct sun8i_rdma_unit *rdma,
 				 enum sun8i_csc_mode mode,
-				 enum drm_color_encoding encoding,
-				 enum drm_color_range range)
+				 struct drm_plane_state *state,
+				 u32 out_format,
+				 enum drm_color_encoding out_encoding)
 {
 	const u32 *table;
 	u32 addr;
 	int i;
 
-	table = yuv2rgb_de3[range][encoding];
+	if (mode == SUN8I_CSC_MODE_OFF)
+		return;
 
-	switch (mode) {
-	case SUN8I_CSC_MODE_OFF:
-		/* nothing to do */
-		break;
-	case SUN8I_CSC_MODE_YUV2RGB:
-		sun8i_rdma_memcpy(rdma, 0, table, 12);
-		break;
-	case SUN8I_CSC_MODE_YVU2RGB:
+	table = sun8i_csc_get_de3_table(mode, state->color_encoding,
+					state->color_range, out_format,
+					out_encoding);
+
+	/*
+	 * The blender CSC units are always enabled, so the identity
+	 * table must be programmed when no conversion is needed.
+	 * Otherwise coefficients from a previously used format would
+	 * still apply.
+	 */
+	if (!table)
+		table = yuv2yuv_de3[DRM_COLOR_YCBCR_LIMITED_RANGE][out_encoding][out_encoding];
+
+	if (mode == SUN8I_CSC_MODE_YVU) {
 		for (i = 0; i < 12; i++) {
 			if ((i & 3) == 1)
 				addr = (i + 1) * sizeof(u32);
@@ -229,10 +400,8 @@ static void sun8i_de3_ccsc_setup(struct sun8i_rdma_unit *rdma,
 				addr = i * sizeof(u32);
 			sun8i_rdma_write(rdma, addr, table[i]);
 		}
-		break;
-	default:
-		DRM_WARN("Wrong CSC mode specified.\n");
-		return;
+	} else {
+		sun8i_rdma_memcpy(rdma, 0, table, 12);
 	}
 }
 
@@ -260,27 +429,33 @@ static void sun8i_de33_convert_table(const u32 *src, u32 *dst)
 
 static void sun8i_de33_ccsc_setup(struct sun8i_rdma_unit *rdma,
 				  enum sun8i_csc_mode mode,
-				  enum drm_color_encoding encoding,
-				  enum drm_color_range range)
+				  struct drm_plane_state *state,
+				  u32 out_format,
+				  enum drm_color_encoding out_encoding)
 {
-	u32 addr, val, csc[15];
+	u32 addr, csc[15];
 	const u32 *table;
 	int i;
 
-	table = yuv2rgb_de3[range][encoding];
+	if (mode == SUN8I_CSC_MODE_OFF)
+		return;
 
-	switch (mode) {
-	case SUN8I_CSC_MODE_OFF:
-		val = 0;
-		break;
-	case SUN8I_CSC_MODE_YUV2RGB:
-		val = SUN8I_CSC_CTRL_EN;
-		sun8i_de33_convert_table(table, csc);
-		sun8i_rdma_memcpy(rdma, SUN50I_CSC_COEFF(0, 0), csc, 15);
-		break;
-	case SUN8I_CSC_MODE_YVU2RGB:
-		val = SUN8I_CSC_CTRL_EN;
-		sun8i_de33_convert_table(table, csc);
+	table = sun8i_csc_get_de3_table(mode, state->color_encoding,
+					state->color_range, out_format,
+					out_encoding);
+	if (!table) {
+		/* YVU still needs the CSC unit to swap chroma channels. */
+		if (mode != SUN8I_CSC_MODE_YVU) {
+			sun8i_rdma_write(rdma, SUN8I_CSC_CTRL(0), 0);
+			return;
+		}
+
+		table = yuv2yuv_de3[DRM_COLOR_YCBCR_LIMITED_RANGE][out_encoding][out_encoding];
+	}
+
+	sun8i_de33_convert_table(table, csc);
+
+	if (mode == SUN8I_CSC_MODE_YVU) {
 		for (i = 0; i < 15; i++) {
 			addr = SUN50I_CSC_COEFF(0, i);
 			if (i > 3) {
@@ -291,14 +466,11 @@ static void sun8i_de33_ccsc_setup(struct sun8i_rdma_unit *rdma,
 			}
 			sun8i_rdma_write(rdma, addr, csc[i]);
 		}
-		break;
-	default:
-		val = 0;
-		DRM_WARN("Wrong CSC mode specified.\n");
-		return;
+	} else {
+		sun8i_rdma_memcpy(rdma, SUN50I_CSC_COEFF(0, 0), csc, 15);
 	}
 
-	sun8i_rdma_write(rdma, SUN8I_CSC_CTRL(0), val);
+	sun8i_rdma_write(rdma, SUN8I_CSC_CTRL(0), SUN8I_CSC_CTRL_EN);
 }
 
 static u32 sun8i_csc_get_mode(struct drm_plane_state *state)
@@ -310,33 +482,40 @@ static u32 sun8i_csc_get_mode(struct drm_plane_state *state)
 
 	format = state->fb->format;
 	if (!format->is_yuv)
-		return SUN8I_CSC_MODE_OFF;
+		return SUN8I_CSC_MODE_RGB;
 
 	switch (format->format) {
 	case DRM_FORMAT_YVU411:
 	case DRM_FORMAT_YVU420:
 	case DRM_FORMAT_YVU422:
 	case DRM_FORMAT_YVU444:
-		return SUN8I_CSC_MODE_YVU2RGB;
+		return SUN8I_CSC_MODE_YVU;
 	default:
-		return SUN8I_CSC_MODE_YUV2RGB;
+		return SUN8I_CSC_MODE_YUV;
 	}
 }
 
 void sun8i_csc_config(struct sun8i_layer *layer,
 		      struct drm_plane_state *state)
 {
+	u32 out_format = MEDIA_BUS_FMT_RGB888_1X24;
+	enum drm_color_encoding out_encoding = DRM_COLOR_YCBCR_BT709;
 	u32 mode = sun8i_csc_get_mode(state);
 
+	if (mode != SUN8I_CSC_MODE_OFF) {
+		struct sun4i_crtc *scrtc = drm_crtc_to_sun4i_crtc(state->crtc);
+
+		out_format = scrtc->engine->format;
+		out_encoding = scrtc->engine->encoding;
+	}
+
 	if (layer->cfg->de_type == SUN8I_MIXER_DE3) {
-		sun8i_de3_ccsc_setup(layer->csc_rdma,
-				     mode, state->color_encoding,
-				     state->color_range);
+		sun8i_de3_ccsc_setup(layer->csc_rdma, mode, state, out_format,
+				     out_encoding);
 		return;
 	} else if (layer->cfg->de_type == SUN8I_MIXER_DE33) {
-		sun8i_de33_ccsc_setup(layer->csc_rdma,
-				      mode, state->color_encoding,
-				      state->color_range);
+		sun8i_de33_ccsc_setup(layer->csc_rdma, mode, state, out_format,
+				      out_encoding);
 		return;
 	}
 
