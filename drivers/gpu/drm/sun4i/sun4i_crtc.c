@@ -131,10 +131,19 @@ static void sun4i_crtc_atomic_flush(struct drm_crtc *crtc,
 static void sun4i_crtc_atomic_disable(struct drm_crtc *crtc,
 				      struct drm_atomic_commit *state)
 {
+	struct drm_crtc_state *old_state = drm_atomic_get_old_crtc_state(state,
+									 crtc);
 	struct drm_encoder *encoder = sun4i_crtc_get_encoder(crtc);
 	struct sun4i_crtc *scrtc = drm_crtc_to_sun4i_crtc(crtc);
 
 	DRM_DEBUG_DRIVER("Disabling the CRTC\n");
+
+	/*
+	 * Planes are only committed on active CRTCs, so they must be
+	 * disabled here. Otherwise the engine would keep scanning out
+	 * stale buffer addresses when the CRTC is enabled again.
+	 */
+	drm_atomic_helper_disable_planes_on_crtc(old_state, false);
 
 	drm_crtc_vblank_off(crtc);
 
