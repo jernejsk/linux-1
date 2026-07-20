@@ -1804,7 +1804,10 @@ static void hdmi_config_AVI(struct dw_hdmi *hdmi,
 		frame.colorspace = HDMI_COLORSPACE_RGB;
 
 	/* Set up colorimetry */
-	if (!hdmi_bus_fmt_is_rgb(hdmi->hdmi_data.enc_out_bus_format)) {
+	if (connector->colorspace_property &&
+	    connector->state->colorspace != DRM_MODE_COLORIMETRY_DEFAULT) {
+		drm_hdmi_avi_infoframe_colorimetry(&frame, connector->state);
+	} else if (!hdmi_bus_fmt_is_rgb(hdmi->hdmi_data.enc_out_bus_format)) {
 		switch (hdmi->hdmi_data.enc_out_encoding) {
 		case V4L2_YCBCR_ENC_601:
 			if (hdmi->hdmi_data.enc_in_encoding == V4L2_YCBCR_ENC_XV601)
@@ -2608,8 +2611,12 @@ static int dw_hdmi_connector_create(struct dw_hdmi *hdmi)
 
 	drm_connector_attach_max_bpc_property(connector, 8, 16);
 
-	if (hdmi->version >= 0x200a && hdmi->plat_data->use_drm_infoframe)
+	if (hdmi->version >= 0x200a && hdmi->plat_data->use_drm_infoframe) {
 		drm_connector_attach_hdr_output_metadata_property(connector);
+
+		if (!drm_mode_create_hdmi_colorspace_property(connector, 0))
+			drm_connector_attach_colorspace_property(connector);
+	}
 
 	drm_connector_attach_encoder(connector, hdmi->bridge.encoder);
 
