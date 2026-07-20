@@ -149,6 +149,15 @@ struct dw_hdmi_plat_data {
 	bool ycbcr444_alt_vmap;
 
 	/*
+	 * Some controller instances need an extra HDMI_3D_TX_PHY_MSM_CTRL
+	 * write at the highest supported TMDS rate (594 MHz), on top of
+	 * the one hdmi_phy_configure_dwc_hdmi_3d_tx() already does for
+	 * every rate. Leave this unset unless verified against the
+	 * specific instance.
+	 */
+	bool phy_max_tmds_msm_ctrl_quirk;
+
+	/*
 	 * Private data passed to all the .mode_valid() and .configure_phy()
 	 * callback functions.
 	 */
