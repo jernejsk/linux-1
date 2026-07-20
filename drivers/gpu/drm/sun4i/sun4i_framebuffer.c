@@ -13,8 +13,10 @@
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 
+#include "sun4i_crtc.h"
 #include "sun4i_drv.h"
 #include "sun4i_framebuffer.h"
+#include "sunxi_engine.h"
 
 static int sun4i_de_atomic_check(struct drm_device *dev,
 				 struct drm_atomic_commit *state)
@@ -74,9 +76,32 @@ static const struct drm_mode_config_funcs sun4i_de_mode_config_funcs = {
 	.fb_create		= sun4i_fb_create,
 };
 
+static bool
+sun4i_de_crtc_needs_scanout_wait(struct drm_atomic_commit *state,
+				 struct drm_crtc *crtc)
+{
+	struct drm_plane_state *old_plane_state;
+	struct drm_plane_state *new_plane_state;
+	struct drm_plane *plane;
+	int i;
+
+	for_each_oldnew_plane_in_state(state, plane, old_plane_state,
+				       new_plane_state, i) {
+		if (old_plane_state->crtc == crtc && old_plane_state->fb &&
+		    (new_plane_state->crtc != crtc ||
+		     new_plane_state->fb != old_plane_state->fb))
+			return true;
+	}
+
+	return false;
+}
+
 static void sun4i_de_atomic_commit_tail(struct drm_atomic_commit *state)
 {
+	struct drm_crtc_state *new_crtc_state;
 	struct drm_device *dev = state->dev;
+	struct drm_crtc *crtc;
+	int i;
 
 	drm_atomic_helper_commit_modeset_disables(dev, state);
 	drm_atomic_helper_commit_crtc_enable(dev, state);
@@ -95,6 +120,16 @@ static void sun4i_de_atomic_commit_tail(struct drm_atomic_commit *state)
 	 * scans out from them for one more frame.
 	 */
 	drm_atomic_helper_wait_for_vblanks(dev, state);
+	for_each_new_crtc_in_state(state, crtc, new_crtc_state, i) {
+		struct sun4i_crtc *scrtc;
+
+		if (!new_crtc_state->active ||
+		    !sun4i_de_crtc_needs_scanout_wait(state, crtc))
+			continue;
+
+		scrtc = drm_crtc_to_sun4i_crtc(crtc);
+		sunxi_engine_wait_for_scanout(scrtc->engine, crtc);
+	}
 	drm_atomic_helper_cleanup_planes(dev, state);
 }
 

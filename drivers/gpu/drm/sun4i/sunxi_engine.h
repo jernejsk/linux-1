@@ -34,6 +34,17 @@ struct sunxi_engine_ops {
 	void (*sync)(struct sunxi_engine *engine);
 
 	/**
+	 * @wait_for_scanout:
+	 *
+	 * This callback waits until the engine no longer accesses scanout
+	 * buffers replaced by the current atomic update.
+	 *
+	 * This function is optional.
+	 */
+	void (*wait_for_scanout)(struct sunxi_engine *engine,
+				 struct drm_crtc *crtc);
+
+	/**
 	 * @atomic_begin:
 	 *
 	 * This callback allows to prepare our engine for an atomic
@@ -167,6 +178,14 @@ sunxi_engine_sync(struct sunxi_engine *engine)
 {
 	if (engine->ops && engine->ops->sync)
 		engine->ops->sync(engine);
+}
+
+static inline void
+sunxi_engine_wait_for_scanout(struct sunxi_engine *engine,
+			      struct drm_crtc *crtc)
+{
+	if (engine->ops && engine->ops->wait_for_scanout)
+		engine->ops->wait_for_scanout(engine, crtc);
 }
 
 /**

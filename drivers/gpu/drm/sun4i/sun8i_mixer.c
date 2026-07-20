@@ -9,6 +9,7 @@
 
 #include <linux/component.h>
 #include <linux/dma-mapping.h>
+#include <linux/iopoll.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
@@ -24,6 +25,7 @@
 #include <drm/drm_gem_dma_helper.h>
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
+#include <drm/drm_vblank.h>
 
 #include "sun4i_drv.h"
 #include "sun50i_planes.h"
@@ -473,11 +475,41 @@ static void sun8i_mixer_sync(struct sunxi_engine *engine)
 	sun8i_rdma_sync(mixer->rdma);
 }
 
+static void sun8i_mixer_wait_for_scanout(struct sunxi_engine *engine,
+					 struct drm_crtc *crtc)
+{
+	struct sun8i_mixer *mixer = engine_to_sun8i_mixer(engine);
+	u32 val;
+	int ret;
+
+	ret = readl_poll_timeout(mixer->base + SUN8I_MIXER_GLOBAL_DBUFF,
+				 val,
+				 !(val & SUN8I_MIXER_GLOBAL_DBUFF_ENABLE),
+				 10, 50000);
+	if (ret)
+		pr_warn("sun8i-mixer %pOF: double buffer sync timed out\n",
+			mixer->engine.node);
+
+	/*
+	 * DE3 clears DBUFF when the new registers are latched, but DMA
+	 * requests for the old frame can remain in flight until the next
+	 * vblank.
+	 */
+	drm_crtc_wait_one_vblank(crtc);
+}
+
 static const struct sunxi_engine_ops sun50i_engine_ops = {
 	.sync		= sun8i_mixer_sync,
 	.commit		= sun8i_mixer_commit,
 	.layers_init	= sun50i_layers_init,
 	.mode_set	= sun8i_mixer_mode_set,
+};
+
+static const struct sunxi_engine_ops sun50i_de3_engine_ops = {
+	.wait_for_scanout = sun8i_mixer_wait_for_scanout,
+	.commit		  = sun8i_mixer_commit,
+	.layers_init	  = sun8i_layers_init,
+	.mode_set	  = sun8i_mixer_mode_set,
 };
 
 static int sun8i_mixer_of_get_id(struct device_node *node)
@@ -635,6 +667,8 @@ static int sun8i_mixer_bind(struct device *dev, struct device *master,
 
 	if (mixer->cfg->de_type == SUN8I_MIXER_DE33)
 		mixer->engine.ops = &sun50i_engine_ops;
+	else if (mixer->cfg->de_type == SUN8I_MIXER_DE3)
+		mixer->engine.ops = &sun50i_de3_engine_ops;
 	else
 		mixer->engine.ops = &sun8i_engine_ops;
 
