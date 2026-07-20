@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/allwinner,sun50i-h616-deinterlace.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Allwinner H616 DI300 Deinterlace
+
+maintainers:
+  - Jernej Skrabec <jernej.skrabec@siol.net>
+
+description: |-
+  The Allwinner H616 and later has a DI300 deinterlace core used for
+  deinterlacing interlaced video content. Unlike the older H3 block, it
+  takes up to three temporally adjacent input frames per pass and is
+  wired up behind the SoC's system IOMMU.
+
+properties:
+  compatible:
+    const: allwinner,sun50i-h616-deinterlace
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+
+  clocks:
+    items:
+      - description: Deinterlace bus clock
+      - description: Deinterlace module clock
+
+  clock-names:
+    items:
+      - const: bus
+      - const: mod
+
+  resets:
+    maxItems: 1
+
+  iommus:
+    maxItems: 1
+
+required:
+  - compatible
+  - reg
+  - interrupts
+  - clocks
+  - clock-names
+  - resets
+  - iommus
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+    #include <dt-bindings/clock/sun50i-h616-ccu.h>
+    #include <dt-bindings/reset/sun50i-h616-ccu.h>
+
+    deinterlace: deinterlace@1420000 {
+        compatible = "allwinner,sun50i-h616-deinterlace";
+        reg = <0x01420000 0x40000>;
+        clocks = <&ccu CLK_BUS_DEINTERLACE>,
+                 <&ccu CLK_DEINTERLACE>;
+        clock-names = "bus", "mod";
+        resets = <&ccu RST_BUS_DEINTERLACE>;
+        interrupts = <GIC_SPI 89 IRQ_TYPE_LEVEL_HIGH>;
+        iommus = <&iommu 1>;
+    };
+
+...
