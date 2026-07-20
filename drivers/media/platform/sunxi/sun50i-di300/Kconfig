@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config VIDEO_SUN50I_DI300
+	tristate "Allwinner DI300 deinterlace driver"
+	depends on V4L_MEM2MEM_DRIVERS
+	depends on VIDEO_DEV
+	depends on ARCH_SUNXI || COMPILE_TEST
+	depends on COMMON_CLK && OF
+	depends on PM
+	select VIDEOBUF2_DMA_CONTIG
+	select V4L2_MEM2MEM_DEV
+	help
+	   Support for the Allwinner DI300 deinterlace unit found on
+	   H616 and later SoCs.
+
+	   To compile this driver as a module choose m here.
