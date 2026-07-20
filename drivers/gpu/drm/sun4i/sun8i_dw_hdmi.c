@@ -307,6 +307,12 @@ static int sun8i_dw_hdmi_bind(struct device *dev, struct device *master,
 	plat_data->mode_valid = hdmi->quirks->mode_valid;
 	plat_data->use_drm_infoframe = hdmi->quirks->use_drm_infoframe;
 	plat_data->ycbcr_420_allowed = hdmi->quirks->ycbcr_420_allowed;
+	/*
+	 * The controller shares the same distinct video mapping code for
+	 * packed YUV 4:4:4 across all sun8i variants, even where YUV
+	 * output is never negotiated in practice.
+	 */
+	plat_data->ycbcr444_alt_vmap = true;
 	sun8i_hdmi_phy_set_ops(hdmi->phy, plat_data);
 
 	platform_set_drvdata(pdev, hdmi);

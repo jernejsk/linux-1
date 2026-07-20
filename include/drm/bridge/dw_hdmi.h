@@ -139,6 +139,16 @@ struct dw_hdmi_plat_data {
 	bool ycbcr_420_allowed;
 
 	/*
+	 * Some controller instances use a distinct HDMI_TX_INVID0 video
+	 * mapping code for packed YUV 4:4:4 input, instead of sharing the
+	 * code used for subsampled YUV 4:2:0 at the same color depth.
+	 * Leave this unset unless verified against the specific instance,
+	 * since sharing the code is the long-standing default behavior
+	 * other platforms may depend on.
+	 */
+	bool ycbcr444_alt_vmap;
+
+	/*
 	 * Private data passed to all the .mode_valid() and .configure_phy()
 	 * callback functions.
 	 */
