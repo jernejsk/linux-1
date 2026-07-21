@@ -8,6 +8,8 @@
 #ifndef _SUN50I_DI300_H_
 #define _SUN50I_DI300_H_
 
+#include <media/media-device.h>
+#include <media/media-request.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-mem2mem.h>
@@ -235,6 +237,14 @@ struct deinterlace_ctx {
 	int			aborting;
 
 	struct v4l2_ctrl_handler hdl;
+
+	/*
+	 * Request bound to the in-flight job's OUTPUT buffer, if any, and
+	 * whether FMD is actually active for that job (has_fmd && req).
+	 * Set in device_run(), consumed and cleared in the IRQ handler.
+	 */
+	struct media_request	*req;
+	bool			fmd_active;
 };
 
 struct deinterlace_dev {
@@ -242,6 +252,7 @@ struct deinterlace_dev {
 	struct video_device	vfd;
 	struct device		*dev;
 	struct v4l2_m2m_dev	*m2m_dev;
+	struct media_device	mdev;
 
 	/* Device file mutex */
 	struct mutex		dev_mutex;
