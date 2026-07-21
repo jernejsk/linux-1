@@ -12,7 +12,10 @@
  * both deinterlaced fields of the middle frame in a single hardware
  * run, unlike the older sun8i-di block which needs one run per output
  * field. Only the plain motion-adaptive DIT path is implemented here;
- * film-mode detection and temporal noise reduction are not used.
+ * temporal noise reduction is not used. Film mode detection (FMD), on
+ * SoCs that have it, is enabled with its raw per-field statistics
+ * exposed read-only via a control; see the comment above the FMD
+ * register block in sun50i-di300.h for what is and isn't implemented.
  */
 
 #include <linux/clk.h>
@@ -299,9 +302,31 @@ static void deinterlace_device_run(void *priv)
 	deinterlace_write(dev, DEINTERLACE_DIT_CROP_V, reg);
 	deinterlace_write(dev, DEINTERLACE_MD_CROP_V, reg);
 
+	if (dev->has_fmd) {
+		reg = (ctx->src_fmt.width - 1) << 16;
+		deinterlace_write(dev, DEINTERLACE_FMD_CROP_H, reg);
+		reg = (ctx->src_fmt.height - 1) << 16;
+		deinterlace_write(dev, DEINTERLACE_FMD_CROP_V, reg);
+
+		/*
+		 * Row thresholds scale with frame area relative to the
+		 * vendor's 720x480 reference, verbatim from
+		 * di_dev_apply_fixed_para(). Fixed to the 8x8 block size
+		 * selected by leaving FMD_GLB at its DEINTERLACE_FMD_GLB
+		 * default of 0.
+		 */
+		reg = 3 * ctx->src_fmt.width * ctx->src_fmt.height / (720 * 480);
+		reg |= (2 * ctx->src_fmt.width * ctx->src_fmt.height /
+			(720 * 480)) << 8;
+		reg |= DEINTERLACE_FMD_ROW_TH_EXIT_VIDEO(60);
+		deinterlace_write(dev, DEINTERLACE_FMD_ROW_TH, reg);
+	}
+
 	reg = DEINTERLACE_FUNC_EN_DIT;
 	if (motion)
 		reg |= DEINTERLACE_FUNC_EN_MD;
+	if (dev->has_fmd)
+		reg |= DEINTERLACE_FUNC_EN_FMD;
 	deinterlace_write(dev, DEINTERLACE_FUNC_EN, reg);
 
 	reg = DEINTERLACE_DIT_SETTING_DIAG_INTP_EN;
@@ -364,6 +389,27 @@ static irqreturn_t deinterlace_irq(int irq, void *data)
 
 	state = ctx->aborting ? VB2_BUF_STATE_ERROR : VB2_BUF_STATE_DONE;
 
+	if (dev->has_fmd) {
+		ctx->fmd_stats[0] = deinterlace_read(dev, DEINTERLACE_FMD_FID12) &
+				     DEINTERLACE_FMD_HIST_CNT_MASK;
+		ctx->fmd_stats[1] = deinterlace_read(dev, DEINTERLACE_FMD_FID23) &
+				     DEINTERLACE_FMD_HIST_CNT_MASK;
+		ctx->fmd_stats[2] = deinterlace_read(dev, DEINTERLACE_FMD_FOD_FID30) &
+				     DEINTERLACE_FMD_HIST_CNT_MASK;
+		ctx->fmd_stats[3] = deinterlace_read(dev, DEINTERLACE_FMD_FOD_FID32) &
+				     DEINTERLACE_FMD_HIST_CNT_MASK;
+		ctx->fmd_stats[4] = deinterlace_read(dev, DEINTERLACE_FMD_FOD_FID10) &
+				     DEINTERLACE_FMD_HIST_CNT_MASK;
+		ctx->fmd_stats[5] = deinterlace_read(dev, DEINTERLACE_FMD_FOD_FID12) &
+				     DEINTERLACE_FMD_HIST_CNT_MASK;
+		ctx->fmd_stats[6] = deinterlace_read(dev, DEINTERLACE_FMD_FRD02) &
+				     DEINTERLACE_FMD_HIST_CNT_MASK;
+		ctx->fmd_stats[7] = deinterlace_read(dev, DEINTERLACE_FMD_FRD13) &
+				     DEINTERLACE_FMD_HIST_CNT_MASK;
+		ctx->fmd_stats[8] = deinterlace_read(dev, DEINTERLACE_FMD_FIELD_HIST0);
+		ctx->fmd_stats[9] = deinterlace_read(dev, DEINTERLACE_FMD_FIELD_HIST1);
+	}
+
 	dst0 = ctx->dst0;
 	dst1 = ctx->dst1;
 	v4l2_m2m_dst_buf_remove_by_buf(ctx->fh.m2m_ctx, dst0);
@@ -384,6 +430,10 @@ static irqreturn_t deinterlace_irq(int irq, void *data)
 
 static void deinterlace_init(struct deinterlace_dev *dev)
 {
+	u32 vsn = deinterlace_read(dev, DEINTERLACE_FUNC_VSN);
+
+	dev->has_fmd = DEINTERLACE_FUNC_VSN_FMD_EXIST(vsn) != 0;
+
 	deinterlace_write(dev, DEINTERLACE_MD_PARA, DEINTERLACE_MD_PARA_DEFAULT);
 
 	deinterlace_write(dev, DEINTERLACE_DIT_CHR_PARA0,
@@ -396,6 +446,28 @@ static void deinterlace_init(struct deinterlace_dev *dev)
 			  DEINTERLACE_DIT_INTER_PARA_DEFAULT);
 	deinterlace_write(dev, DEINTERLACE_DIT_DEMO_H, 0);
 	deinterlace_write(dev, DEINTERLACE_DIT_DEMO_V, 0);
+
+	if (dev->has_fmd) {
+		deinterlace_write(dev, DEINTERLACE_FMD_DIFF_TH0,
+				  DEINTERLACE_FMD_DIFF_TH0_DEFAULT);
+		deinterlace_write(dev, DEINTERLACE_FMD_DIFF_TH1,
+				  DEINTERLACE_FMD_DIFF_TH1_DEFAULT);
+		deinterlace_write(dev, DEINTERLACE_FMD_DIFF_TH2,
+				  DEINTERLACE_FMD_DIFF_TH2_DEFAULT);
+		deinterlace_write(dev, DEINTERLACE_FMD_FEAT_TH0,
+				  DEINTERLACE_FMD_FEAT_TH0_DEFAULT);
+		deinterlace_write(dev, DEINTERLACE_FMD_FEAT_TH1,
+				  DEINTERLACE_FMD_FEAT_TH1_DEFAULT);
+		deinterlace_write(dev, DEINTERLACE_FMD_FEAT_TH2,
+				  DEINTERLACE_FMD_FEAT_TH2_DEFAULT);
+		deinterlace_write(dev, DEINTERLACE_FMD_MOT_TH,
+				  DEINTERLACE_FMD_MOT_TH_DEFAULT);
+		deinterlace_write(dev, DEINTERLACE_FMD_TEXT_TH,
+				  DEINTERLACE_FMD_TEXT_TH_DEFAULT);
+		deinterlace_write(dev, DEINTERLACE_FMD_BLK_TH,
+				  DEINTERLACE_FMD_BLK_TH_DEFAULT);
+		deinterlace_write(dev, DEINTERLACE_FMD_GLB, 0);
+	}
 }
 
 static inline struct deinterlace_ctx *deinterlace_file2ctx(struct file *file)
@@ -817,6 +889,42 @@ static int deinterlace_queue_init(void *priv, struct vb2_queue *src_vq,
 	return 0;
 }
 
+/* driver-private, order: FID12, FID23, FOD_FID30/32/10/12, FRD02/13, FIELD_HIST0/1 */
+#define V4L2_CID_SUNXI_DI300_FMD_STATS	(V4L2_CID_USER_BASE + 0x1100)
+
+static int deinterlace_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
+{
+	struct deinterlace_ctx *ctx =
+		container_of(ctrl->handler, struct deinterlace_ctx, hdl);
+
+	switch (ctrl->id) {
+	case V4L2_CID_SUNXI_DI300_FMD_STATS:
+		memcpy(ctrl->p_new.p_u32, ctx->fmd_stats, sizeof(ctx->fmd_stats));
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static const struct v4l2_ctrl_ops deinterlace_ctrl_ops = {
+	.g_volatile_ctrl = deinterlace_g_volatile_ctrl,
+};
+
+static const struct v4l2_ctrl_config deinterlace_fmd_stats_ctrl = {
+	.ops	= &deinterlace_ctrl_ops,
+	.id	= V4L2_CID_SUNXI_DI300_FMD_STATS,
+	.name	= "FMD Raw Statistics",
+	.type	= V4L2_CTRL_TYPE_U32,
+	.flags	= V4L2_CTRL_FLAG_READ_ONLY | V4L2_CTRL_FLAG_VOLATILE,
+	.min	= 0,
+	.max	= DEINTERLACE_FMD_HIST_CNT_MASK,
+	.step	= 1,
+	.def	= 0,
+	.dims	= { DEINTERLACE_FMD_STATS_COUNT },
+};
+
 static int deinterlace_open(struct file *file)
 {
 	struct deinterlace_dev *dev = video_drvdata(file);
@@ -847,10 +955,24 @@ static int deinterlace_open(struct file *file)
 	v4l2_fh_init(&ctx->fh, video_devdata(file));
 	ctx->dev = dev;
 
+	if (dev->has_fmd) {
+		v4l2_ctrl_handler_init(&ctx->hdl, 1);
+		v4l2_ctrl_new_custom(&ctx->hdl, &deinterlace_fmd_stats_ctrl, NULL);
+		if (ctx->hdl.error) {
+			ret = ctx->hdl.error;
+			v4l2_ctrl_handler_free(&ctx->hdl);
+			v4l2_fh_exit(&ctx->fh);
+			goto err_free;
+		}
+		ctx->fh.ctrl_handler = &ctx->hdl;
+	}
+
 	ctx->fh.m2m_ctx = v4l2_m2m_ctx_init(dev->m2m_dev, ctx,
 					    &deinterlace_queue_init);
 	if (IS_ERR(ctx->fh.m2m_ctx)) {
 		ret = PTR_ERR(ctx->fh.m2m_ctx);
+		v4l2_ctrl_handler_free(&ctx->hdl);
+		v4l2_fh_exit(&ctx->fh);
 		goto err_free;
 	}
 
@@ -876,6 +998,7 @@ static int deinterlace_release(struct file *file)
 
 	v4l2_fh_del(&ctx->fh, file);
 	v4l2_fh_exit(&ctx->fh);
+	v4l2_ctrl_handler_free(&ctx->hdl);
 	v4l2_m2m_ctx_release(ctx->fh.m2m_ctx);
 
 	kfree(ctx);
@@ -1000,8 +1123,25 @@ static int deinterlace_probe(struct platform_device *pdev)
 
 	pm_runtime_enable(dev->dev);
 
+	/*
+	 * Probe dev->has_fmd once up front, so it is stable by the time
+	 * the first open() decides whether to expose the FMD stats
+	 * control: has_fmd is otherwise only set on runtime resume, which
+	 * doesn't happen until the first client streams.
+	 */
+	ret = pm_runtime_resume_and_get(dev->dev);
+	if (ret < 0) {
+		dev_err(dev->dev, "Failed to enable module\n");
+
+		goto err_m2m;
+	}
+	pm_runtime_put(dev->dev);
+
 	return 0;
 
+err_m2m:
+	pm_runtime_disable(dev->dev);
+	v4l2_m2m_release(dev->m2m_dev);
 err_video:
 	video_unregister_device(&dev->vfd);
 err_v4l2:
