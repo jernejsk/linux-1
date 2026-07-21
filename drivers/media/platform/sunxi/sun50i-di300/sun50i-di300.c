@@ -716,6 +716,9 @@ static const struct v4l2_ioctl_ops deinterlace_ioctl_ops = {
 
 	.vidioc_streamon		= v4l2_m2m_ioctl_streamon,
 	.vidioc_streamoff		= v4l2_m2m_ioctl_streamoff,
+
+	.vidioc_subscribe_event		= v4l2_ctrl_subscribe_event,
+	.vidioc_unsubscribe_event	= v4l2_event_unsubscribe,
 };
 
 static int deinterlace_queue_setup(struct vb2_queue *vq, unsigned int *nbuffers,
