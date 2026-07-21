@@ -8,6 +8,8 @@
 #ifndef _SUN50I_DI300_H_
 #define _SUN50I_DI300_H_
 
+#include <media/media-device.h>
+#include <media/media-request.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-event.h>
@@ -134,6 +136,20 @@
 
 #define DEINTERLACE_DIT_INTER_PARA		0x1b4
 #define DEINTERLACE_DIT_INTER_PARA_DEFAULT		0x22000000
+/*
+ * Per-output-slot override: when set, that slot's output is a direct
+ * field weave (combining two real fields verbatim) instead of the
+ * motion-adaptive blend DIT_SETTING otherwise configures -- cheaper
+ * and more accurate than motion interpolation, but only correct when
+ * userspace's cadence detection built on the FMD stats has confirmed
+ * the source is genuinely telecined film content. Chroma weave is
+ * deliberately never enabled here, matching the vendor reference
+ * driver's own "for safety" comment.
+ */
+#define DEINTERLACE_DIT_INTER_PARA_FIELD_WEAVE_F1	BIT(0)
+#define DEINTERLACE_DIT_INTER_PARA_FIELD_WEAVE_PHASE_F1(v)	(((v) & 3) << 4)
+#define DEINTERLACE_DIT_INTER_PARA_FIELD_WEAVE_F2	BIT(16)
+#define DEINTERLACE_DIT_INTER_PARA_FIELD_WEAVE_PHASE_F2(v)	(((v) & 3) << 20)
 
 #define DEINTERLACE_DIT_CROP_H			0x1c0
 #define DEINTERLACE_DIT_CROP_V			0x1c4
@@ -246,6 +262,20 @@ struct deinterlace_ctx {
 	 */
 	bool			fmd_enabled;
 	bool			fmd_active;
+
+	/*
+	 * Per-job field-weave decision, unlike FMD_ENABLE/FMD_STATS above:
+	 * this genuinely is per-job input (which of dst0/dst1 should be a
+	 * direct field weave, and at what phase, based on userspace's
+	 * cadence classification of the *previous* job's stats), so it is
+	 * bound to a request the way stateless codec controls are.
+	 * Request completion here needs no special handling for buffer
+	 * retention like the stats control did: the value is applied and
+	 * the request completed synchronously in device_run(), before the
+	 * job runs, not read back after.
+	 */
+	struct v4l2_ctrl	*weave_ctrl;
+	struct media_request	*req;
 };
 
 struct deinterlace_dev {
@@ -253,6 +283,7 @@ struct deinterlace_dev {
 	struct video_device	vfd;
 	struct device		*dev;
 	struct v4l2_m2m_dev	*m2m_dev;
+	struct media_device	mdev;
 
 	/* Device file mutex */
 	struct mutex		dev_mutex;
