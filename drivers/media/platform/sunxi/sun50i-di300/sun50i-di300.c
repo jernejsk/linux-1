@@ -179,14 +179,35 @@ static void deinterlace_device_run(void *priv)
 	struct deinterlace_ctx *ctx = priv;
 	struct deinterlace_dev *dev = ctx->dev;
 	struct vb2_v4l2_buffer *src, *dst0, *dst1;
+	struct v4l2_m2m_buffer *b;
 	dma_addr_t next, curr, prev, out0, out1;
 	unsigned int hwfmt = deinterlace_hw_format(ctx->src_fmt.pixelformat);
 	unsigned int i, reg;
 	bool motion;
 
 	src = v4l2_m2m_next_src_buf(ctx->fh.m2m_ctx);
-	dst0 = v4l2_m2m_next_dst_buf(ctx->fh.m2m_ctx);
-	dst1 = v4l2_m2m_last_dst_buf(ctx->fh.m2m_ctx);
+
+	/*
+	 * Pick the two buffers actually at the front of the ready
+	 * queue. v4l2_m2m_last_dst_buf() returns the tail of the whole
+	 * ready list, which is only the "second" buffer when exactly
+	 * two are queued; with more buffers queued (the normal case for
+	 * any real client) it names a buffer this job never touches,
+	 * while the IRQ handler's two dst_buf_remove() calls always pop
+	 * from the front and would complete a stale, never-written one.
+	 */
+	dst0 = NULL;
+	dst1 = NULL;
+	v4l2_m2m_for_each_dst_buf(ctx->fh.m2m_ctx, b) {
+		if (!dst0) {
+			dst0 = &b->vb;
+		} else if (!dst1) {
+			dst1 = &b->vb;
+			break;
+		}
+	}
+	ctx->dst0 = dst0;
+	ctx->dst1 = dst1;
 
 	v4l2_m2m_buf_copy_metadata(src, dst0);
 
@@ -196,7 +217,15 @@ static void deinterlace_device_run(void *priv)
 	prev = ctx->prev[1] ?
 		vb2_dma_contig_plane_dma_addr(&ctx->prev[1]->vb2_buf, 0) : curr;
 
-	motion = ctx->prev[0] && ctx->prev[1];
+	/*
+	 * A single real temporal neighbour (prev[0]) is enough to turn
+	 * motion mode on: the missing prev[1] slot then just duplicates
+	 * curr, which reads as "no motion" between those two and leaves
+	 * the genuine next-vs-curr comparison to drive the spatial/
+	 * temporal blend. Requiring both slots real only delays real
+	 * motion-adaptive output by an extra frame at stream start.
+	 */
+	motion = ctx->prev[0] != NULL;
 
 	deinterlace_write(dev, DEINTERLACE_SIZE,
 			  DEINTERLACE_SIZE_WIDTH(ctx->src_fmt.width) |
@@ -335,9 +364,11 @@ static irqreturn_t deinterlace_irq(int irq, void *data)
 
 	state = ctx->aborting ? VB2_BUF_STATE_ERROR : VB2_BUF_STATE_DONE;
 
-	dst0 = v4l2_m2m_dst_buf_remove(ctx->fh.m2m_ctx);
+	dst0 = ctx->dst0;
+	dst1 = ctx->dst1;
+	v4l2_m2m_dst_buf_remove_by_buf(ctx->fh.m2m_ctx, dst0);
 	v4l2_m2m_buf_done(dst0, state);
-	dst1 = v4l2_m2m_dst_buf_remove(ctx->fh.m2m_ctx);
+	v4l2_m2m_dst_buf_remove_by_buf(ctx->fh.m2m_ctx, dst1);
 	v4l2_m2m_buf_done(dst1, state);
 
 	src = v4l2_m2m_src_buf_remove(ctx->fh.m2m_ctx);

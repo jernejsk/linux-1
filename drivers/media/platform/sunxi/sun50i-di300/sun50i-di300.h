@@ -156,6 +156,10 @@ struct deinterlace_ctx {
 	/* prev[0]: one frame back, prev[1]: two frames back */
 	struct vb2_v4l2_buffer	*prev[2];
 
+	/* destination buffers picked for the in-flight job */
+	struct vb2_v4l2_buffer	*dst0;
+	struct vb2_v4l2_buffer	*dst1;
+
 	unsigned int		first_field;
 
 	int			aborting;
