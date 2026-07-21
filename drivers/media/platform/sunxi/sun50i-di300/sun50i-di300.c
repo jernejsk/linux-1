@@ -390,24 +390,24 @@ static irqreturn_t deinterlace_irq(int irq, void *data)
 	state = ctx->aborting ? VB2_BUF_STATE_ERROR : VB2_BUF_STATE_DONE;
 
 	if (dev->has_fmd) {
-		ctx->fmd_stats[0] = deinterlace_read(dev, DEINTERLACE_FMD_FID12) &
-				     DEINTERLACE_FMD_HIST_CNT_MASK;
-		ctx->fmd_stats[1] = deinterlace_read(dev, DEINTERLACE_FMD_FID23) &
-				     DEINTERLACE_FMD_HIST_CNT_MASK;
-		ctx->fmd_stats[2] = deinterlace_read(dev, DEINTERLACE_FMD_FOD_FID30) &
-				     DEINTERLACE_FMD_HIST_CNT_MASK;
-		ctx->fmd_stats[3] = deinterlace_read(dev, DEINTERLACE_FMD_FOD_FID32) &
-				     DEINTERLACE_FMD_HIST_CNT_MASK;
-		ctx->fmd_stats[4] = deinterlace_read(dev, DEINTERLACE_FMD_FOD_FID10) &
-				     DEINTERLACE_FMD_HIST_CNT_MASK;
-		ctx->fmd_stats[5] = deinterlace_read(dev, DEINTERLACE_FMD_FOD_FID12) &
-				     DEINTERLACE_FMD_HIST_CNT_MASK;
-		ctx->fmd_stats[6] = deinterlace_read(dev, DEINTERLACE_FMD_FRD02) &
-				     DEINTERLACE_FMD_HIST_CNT_MASK;
-		ctx->fmd_stats[7] = deinterlace_read(dev, DEINTERLACE_FMD_FRD13) &
-				     DEINTERLACE_FMD_HIST_CNT_MASK;
-		ctx->fmd_stats[8] = deinterlace_read(dev, DEINTERLACE_FMD_FIELD_HIST0);
-		ctx->fmd_stats[9] = deinterlace_read(dev, DEINTERLACE_FMD_FIELD_HIST1);
+		dev->fmd_stats[0] = deinterlace_read(dev, DEINTERLACE_FMD_FID12) &
+				    DEINTERLACE_FMD_HIST_CNT_MASK;
+		dev->fmd_stats[1] = deinterlace_read(dev, DEINTERLACE_FMD_FID23) &
+				    DEINTERLACE_FMD_HIST_CNT_MASK;
+		dev->fmd_stats[2] = deinterlace_read(dev, DEINTERLACE_FMD_FOD_FID30) &
+				    DEINTERLACE_FMD_HIST_CNT_MASK;
+		dev->fmd_stats[3] = deinterlace_read(dev, DEINTERLACE_FMD_FOD_FID32) &
+				    DEINTERLACE_FMD_HIST_CNT_MASK;
+		dev->fmd_stats[4] = deinterlace_read(dev, DEINTERLACE_FMD_FOD_FID10) &
+				    DEINTERLACE_FMD_HIST_CNT_MASK;
+		dev->fmd_stats[5] = deinterlace_read(dev, DEINTERLACE_FMD_FOD_FID12) &
+				    DEINTERLACE_FMD_HIST_CNT_MASK;
+		dev->fmd_stats[6] = deinterlace_read(dev, DEINTERLACE_FMD_FRD02) &
+				    DEINTERLACE_FMD_HIST_CNT_MASK;
+		dev->fmd_stats[7] = deinterlace_read(dev, DEINTERLACE_FMD_FRD13) &
+				    DEINTERLACE_FMD_HIST_CNT_MASK;
+		dev->fmd_stats[8] = deinterlace_read(dev, DEINTERLACE_FMD_FIELD_HIST0);
+		dev->fmd_stats[9] = deinterlace_read(dev, DEINTERLACE_FMD_FIELD_HIST1);
 	}
 
 	dst0 = ctx->dst0;
@@ -899,7 +899,8 @@ static int deinterlace_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 
 	switch (ctrl->id) {
 	case V4L2_CID_SUNXI_DI300_FMD_STATS:
-		memcpy(ctrl->p_new.p_u32, ctx->fmd_stats, sizeof(ctx->fmd_stats));
+		memcpy(ctrl->p_new.p_u32, ctx->dev->fmd_stats,
+		       sizeof(ctx->dev->fmd_stats));
 		break;
 	default:
 		return -EINVAL;
