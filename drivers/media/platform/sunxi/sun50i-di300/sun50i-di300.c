@@ -193,6 +193,20 @@ static void deinterlace_device_run(void *priv)
 	ctx->fmd_active = dev->has_fmd && ctx->fmd_enabled;
 
 	/*
+	 * Apply this job's field-weave decision, if userspace attached a
+	 * request to the OUTPUT buffer carrying one. Complete it right
+	 * away: unlike the stats control, nothing here needs to wait for
+	 * the buffer's eventual release, since this is an input applied
+	 * before the job runs, not output read back after.
+	 */
+	ctx->req = src->vb2_buf.req_obj.req;
+	if (ctx->req) {
+		v4l2_ctrl_request_setup(ctx->req, &ctx->hdl);
+		v4l2_ctrl_request_complete(ctx->req, &ctx->hdl);
+		ctx->req = NULL;
+	}
+
+	/*
 	 * Pick the two buffers actually at the front of the ready
 	 * queue. v4l2_m2m_last_dst_buf() returns the tail of the whole
 	 * ready list, which is only the "second" buffer when exactly
@@ -339,6 +353,24 @@ static void deinterlace_device_run(void *priv)
 		       DEINTERLACE_DIT_SETTING_MOTION_BLEND_CHROMA;
 	deinterlace_write(dev, DEINTERLACE_DIT_SETTING, reg);
 
+	reg = DEINTERLACE_DIT_INTER_PARA_DEFAULT;
+	if (ctx->fmd_active && ctx->weave_ctrl) {
+		unsigned int phase0, phase1;
+
+		v4l2_ctrl_lock(ctx->weave_ctrl);
+		phase0 = ctx->weave_ctrl->p_cur.p_u32[0];
+		phase1 = ctx->weave_ctrl->p_cur.p_u32[1];
+		v4l2_ctrl_unlock(ctx->weave_ctrl);
+
+		if (phase0 < 3)
+			reg |= DEINTERLACE_DIT_INTER_PARA_FIELD_WEAVE_F1 |
+			       DEINTERLACE_DIT_INTER_PARA_FIELD_WEAVE_PHASE_F1(phase0);
+		if (phase1 < 3)
+			reg |= DEINTERLACE_DIT_INTER_PARA_FIELD_WEAVE_F2 |
+			       DEINTERLACE_DIT_INTER_PARA_FIELD_WEAVE_PHASE_F2(phase1);
+	}
+	deinterlace_write(dev, DEINTERLACE_DIT_INTER_PARA, reg);
+
 	reg = DEINTERLACE_DMA_CTL_C | DEINTERLACE_DMA_CTL_P |
 	      DEINTERLACE_DMA_CTL_DI | DEINTERLACE_DMA_CTL_W0 |
 	      DEINTERLACE_DMA_CTL_W1 | DEINTERLACE_DMA_CTL_MCLK_GATE;
@@ -444,8 +476,7 @@ static void deinterlace_init(struct deinterlace_dev *dev)
 			  DEINTERLACE_DIT_CHR_PARA1_DEFAULT);
 	deinterlace_write(dev, DEINTERLACE_DIT_INTRA_PARA,
 			  DEINTERLACE_DIT_INTRA_PARA_DEFAULT);
-	deinterlace_write(dev, DEINTERLACE_DIT_INTER_PARA,
-			  DEINTERLACE_DIT_INTER_PARA_DEFAULT);
+	/* DEINTERLACE_DIT_INTER_PARA is written every job in device_run() */
 	deinterlace_write(dev, DEINTERLACE_DIT_DEMO_H, 0);
 	deinterlace_write(dev, DEINTERLACE_DIT_DEMO_V, 0);
 
@@ -751,6 +782,23 @@ static void deinterlace_buf_queue(struct vb2_buffer *vb)
 	v4l2_m2m_buf_queue(ctx->fh.m2m_ctx, vbuf);
 }
 
+static int deinterlace_buf_out_validate(struct vb2_buffer *vb)
+{
+	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
+	struct deinterlace_ctx *ctx = vb2_get_drv_priv(vb->vb2_queue);
+
+	vbuf->field = ctx->src_fmt.field;
+
+	return 0;
+}
+
+static void deinterlace_buf_request_complete(struct vb2_buffer *vb)
+{
+	struct deinterlace_ctx *ctx = vb2_get_drv_priv(vb->vb2_queue);
+
+	v4l2_ctrl_request_complete(vb->req_obj.req, &ctx->hdl);
+}
+
 static void deinterlace_queue_cleanup(struct vb2_queue *vq, u32 state)
 {
 	struct deinterlace_ctx *ctx = vb2_get_drv_priv(vq);
@@ -851,6 +899,8 @@ static const struct vb2_ops deinterlace_qops = {
 	.queue_setup		= deinterlace_queue_setup,
 	.buf_prepare		= deinterlace_buf_prepare,
 	.buf_queue		= deinterlace_buf_queue,
+	.buf_out_validate	= deinterlace_buf_out_validate,
+	.buf_request_complete	= deinterlace_buf_request_complete,
 	.start_streaming	= deinterlace_start_streaming,
 	.stop_streaming		= deinterlace_stop_streaming,
 };
@@ -870,6 +920,7 @@ static int deinterlace_queue_init(void *priv, struct vb2_queue *src_vq,
 	src_vq->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_COPY;
 	src_vq->lock = &ctx->dev->dev_mutex;
 	src_vq->dev = ctx->dev->dev;
+	src_vq->supports_requests = true;
 
 	ret = vb2_queue_init(src_vq);
 	if (ret)
@@ -972,6 +1023,29 @@ static const struct v4l2_ctrl_config deinterlace_fmd_enable_ctrl = {
 	.def	= 0,
 };
 
+/*
+ * Per-job field-weave decision: [0] for the job's first output
+ * (dst0), [1] for its second (dst1). 0-2 select a weave phase for
+ * that output (direct field combine instead of motion-adaptive
+ * blend); 3 disables weave for that output, falling back to whatever
+ * DIT_SETTING already configures. Bound to a request the way
+ * stateless codec controls are -- see the comment on ctx->weave_ctrl.
+ */
+#define V4L2_CID_SUNXI_DI300_FMD_WEAVE	(V4L2_CID_USER_BASE + 0x1102)
+#define DEINTERLACE_FMD_WEAVE_COUNT	2
+#define DEINTERLACE_FMD_WEAVE_DISABLED	3
+
+static const struct v4l2_ctrl_config deinterlace_fmd_weave_ctrl = {
+	.id	= V4L2_CID_SUNXI_DI300_FMD_WEAVE,
+	.name	= "FMD Field Weave",
+	.type	= V4L2_CTRL_TYPE_U32,
+	.min	= 0,
+	.max	= DEINTERLACE_FMD_WEAVE_DISABLED,
+	.step	= 1,
+	.def	= DEINTERLACE_FMD_WEAVE_DISABLED,
+	.dims	= { DEINTERLACE_FMD_WEAVE_COUNT },
+};
+
 static int deinterlace_open(struct file *file)
 {
 	struct deinterlace_dev *dev = video_drvdata(file);
@@ -1003,9 +1077,12 @@ static int deinterlace_open(struct file *file)
 	ctx->dev = dev;
 
 	if (dev->has_fmd) {
-		v4l2_ctrl_handler_init(&ctx->hdl, 2);
+		v4l2_ctrl_handler_init(&ctx->hdl, 3);
 		v4l2_ctrl_new_custom(&ctx->hdl, &deinterlace_fmd_stats_ctrl, NULL);
 		v4l2_ctrl_new_custom(&ctx->hdl, &deinterlace_fmd_enable_ctrl, NULL);
+		ctx->weave_ctrl = v4l2_ctrl_new_custom(&ctx->hdl,
+						      &deinterlace_fmd_weave_ctrl,
+						      NULL);
 		if (ctx->hdl.error) {
 			ret = ctx->hdl.error;
 			v4l2_ctrl_handler_free(&ctx->hdl);
@@ -1081,6 +1158,45 @@ static const struct v4l2_m2m_ops deinterlace_m2m_ops = {
 	.job_abort	= deinterlace_job_abort,
 };
 
+static int deinterlace_request_validate(struct media_request *req)
+{
+	struct media_request_object *obj;
+	struct deinterlace_ctx *ctx = NULL;
+	unsigned int count;
+
+	list_for_each_entry(obj, &req->objects, list) {
+		struct vb2_buffer *vb;
+
+		if (vb2_request_object_is_buffer(obj)) {
+			vb = container_of(obj, struct vb2_buffer, req_obj);
+			ctx = vb2_get_drv_priv(vb->vb2_queue);
+
+			break;
+		}
+	}
+
+	if (!ctx)
+		return -ENOENT;
+
+	count = vb2_request_buffer_cnt(req);
+	if (!count) {
+		v4l2_info(&ctx->dev->v4l2_dev,
+			  "No buffer was provided with the request\n");
+		return -ENOENT;
+	} else if (count > 1) {
+		v4l2_info(&ctx->dev->v4l2_dev,
+			  "More than one buffer was provided with the request\n");
+		return -EINVAL;
+	}
+
+	return vb2_request_validate(req);
+}
+
+static const struct media_device_ops deinterlace_media_ops = {
+	.req_validate	= deinterlace_request_validate,
+	.req_queue	= v4l2_m2m_request_queue,
+};
+
 static int deinterlace_probe(struct platform_device *pdev)
 {
 	struct deinterlace_dev *dev;
@@ -1148,23 +1264,46 @@ static int deinterlace_probe(struct platform_device *pdev)
 		 deinterlace_video_device.name);
 	video_set_drvdata(vfd, dev);
 
-	ret = video_register_device(vfd, VFL_TYPE_VIDEO, 0);
-	if (ret) {
-		v4l2_err(&dev->v4l2_dev, "Failed to register video device\n");
-
-		goto err_v4l2;
-	}
-
-	v4l2_info(&dev->v4l2_dev,
-		  "Device registered as /dev/video%d\n", vfd->num);
-
 	dev->m2m_dev = v4l2_m2m_init(&deinterlace_m2m_ops);
 	if (IS_ERR(dev->m2m_dev)) {
 		v4l2_err(&dev->v4l2_dev,
 			 "Failed to initialize V4L2 M2M device\n");
 		ret = PTR_ERR(dev->m2m_dev);
 
+		goto err_v4l2;
+	}
+
+	dev->mdev.dev = &pdev->dev;
+	strscpy(dev->mdev.model, DEINTERLACE_NAME, sizeof(dev->mdev.model));
+	strscpy(dev->mdev.bus_info, "platform:" DEINTERLACE_NAME,
+		sizeof(dev->mdev.bus_info));
+
+	media_device_init(&dev->mdev);
+	dev->mdev.ops = &deinterlace_media_ops;
+	dev->v4l2_dev.mdev = &dev->mdev;
+
+	ret = video_register_device(vfd, VFL_TYPE_VIDEO, 0);
+	if (ret) {
+		v4l2_err(&dev->v4l2_dev, "Failed to register video device\n");
+
+		goto err_media;
+	}
+
+	v4l2_info(&dev->v4l2_dev,
+		  "Device registered as /dev/video%d\n", vfd->num);
+
+	ret = v4l2_m2m_register_media_controller(dev->m2m_dev, vfd,
+						 MEDIA_ENT_F_PROC_VIDEO_COMPOSER);
+	if (ret) {
+		v4l2_err(&dev->v4l2_dev,
+			 "Failed to initialize V4L2 M2M media controller\n");
 		goto err_video;
+	}
+
+	ret = media_device_register(&dev->mdev);
+	if (ret) {
+		v4l2_err(&dev->v4l2_dev, "Failed to register media device\n");
+		goto err_m2m_mc;
 	}
 
 	platform_set_drvdata(pdev, dev);
@@ -1181,17 +1320,22 @@ static int deinterlace_probe(struct platform_device *pdev)
 	if (ret < 0) {
 		dev_err(dev->dev, "Failed to enable module\n");
 
-		goto err_m2m;
+		goto err_mdev;
 	}
 	pm_runtime_put(dev->dev);
 
 	return 0;
 
-err_m2m:
+err_mdev:
 	pm_runtime_disable(dev->dev);
-	v4l2_m2m_release(dev->m2m_dev);
+	media_device_unregister(&dev->mdev);
+err_m2m_mc:
+	v4l2_m2m_unregister_media_controller(dev->m2m_dev);
 err_video:
 	video_unregister_device(&dev->vfd);
+err_media:
+	media_device_cleanup(&dev->mdev);
+	v4l2_m2m_release(dev->m2m_dev);
 err_v4l2:
 	v4l2_device_unregister(&dev->v4l2_dev);
 
@@ -1201,6 +1345,12 @@ err_v4l2:
 static void deinterlace_remove(struct platform_device *pdev)
 {
 	struct deinterlace_dev *dev = platform_get_drvdata(pdev);
+
+	if (media_devnode_is_registered(dev->mdev.devnode)) {
+		media_device_unregister(&dev->mdev);
+		v4l2_m2m_unregister_media_controller(dev->m2m_dev);
+		media_device_cleanup(&dev->mdev);
+	}
 
 	v4l2_m2m_release(dev->m2m_dev);
 	video_unregister_device(&dev->vfd);
