@@ -234,9 +234,7 @@ struct deinterlace_ctx {
 
 	int			aborting;
 
-	/* raw FMD counters latched at the last completed job, if any */
 	struct v4l2_ctrl_handler hdl;
-	u32			fmd_stats[DEINTERLACE_FMD_STATS_COUNT];
 };
 
 struct deinterlace_dev {
@@ -257,6 +255,15 @@ struct deinterlace_dev {
 
 	/* set once at probe from DEINTERLACE_FUNC_VSN, never changes */
 	bool			has_fmd;
+
+	/*
+	 * Raw FMD counters latched at the last completed job, if any.
+	 * Device-level rather than per-ctx: there is only ever one job
+	 * running regardless of which fd's ctx submitted it, and this
+	 * lets any client query them, not just the one holding the fd
+	 * that happened to submit that job.
+	 */
+	u32			fmd_stats[DEINTERLACE_FMD_STATS_COUNT];
 };
 
 #endif
