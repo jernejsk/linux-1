@@ -93,6 +93,29 @@
 	};
 };
 
+&ac200 {
+	ac-ldoin-supply = <&reg_aldo2>;
+	ephy-vcc-supply = <&reg_aldo2>;
+	rtc-vcc-supply = <&reg_aldo2>;
+	tv-vcc-supply = <&reg_aldo2>;
+};
+
+&ac200_codec {
+	status = "okay";
+};
+
+&ac200_pwm_clk {
+	status = "okay";
+};
+
+&ac200_sound {
+	simple-audio-card,widgets = "Microphone", "Onboard Microphone",
+				    "Line", "Line Out";
+	simple-audio-card,routing = "MIC1", "Onboard Microphone",
+				    "Line Out", "LINEOUT";
+	status = "okay";
+};
+
 &cpu0 {
 	cpu-supply = <&reg_dcdca>;
 };
@@ -126,6 +149,14 @@
 	hdmi_out_con: endpoint {
 		remote-endpoint = <&hdmi_con_in>;
 	};
+};
+
+&i2c3 {
+	status = "okay";
+};
+
+&i2s3 {
+	status = "okay";
 };
 
 &mmc0 {
@@ -174,6 +205,10 @@
 	vcc-pc-supply = <&reg_bldo2>;
 	vcc-pd-supply = <&reg_cldo1>;
 	vcc-pg-supply = <&reg_vcc_wifi_io>;
+};
+
+&pwm {
+	status = "okay";
 };
 
 &r_i2c {
