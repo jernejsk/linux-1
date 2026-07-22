@@ -201,6 +201,18 @@ static void sun8i_csc_setup(struct sun8i_rdma_unit *rdma,
 	sun8i_rdma_write(rdma, SUN8I_CSC_CTRL(0), val);
 }
 
+/*
+ * CSC is left enabled at all times for every layer (see sun8i_mixer_init()),
+ * matching the vendor driver. Bypass is therefore implemented as an
+ * identity matrix rather than by disabling the unit, which would need a
+ * read-modify-write of the shared, double-buffered enable register.
+ */
+static const u32 identity_de3[12] = {
+	0x00020000, 0x00000000, 0x00000000, 0x00000000,
+	0x00000000, 0x00020000, 0x00000000, 0x00000000,
+	0x00000000, 0x00000000, 0x00020000, 0x00000000,
+};
+
 static void sun8i_de3_ccsc_setup(struct sun8i_rdma_unit *rdma,
 				 enum sun8i_csc_mode mode,
 				 enum drm_color_encoding encoding,
@@ -214,7 +226,7 @@ static void sun8i_de3_ccsc_setup(struct sun8i_rdma_unit *rdma,
 
 	switch (mode) {
 	case SUN8I_CSC_MODE_OFF:
-		/* nothing to do */
+		sun8i_rdma_memcpy(rdma, 0, identity_de3, 12);
 		break;
 	case SUN8I_CSC_MODE_YUV2RGB:
 		sun8i_rdma_memcpy(rdma, 0, table, 12);
