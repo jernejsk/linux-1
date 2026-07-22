@@ -1,0 +1,200 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/mfd/x-powers,ac200.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: X-Powers AC200 mixed-signal companion IC
+
+maintainers:
+  - Jernej Skrabec <jernej.skrabec@gmail.com>
+
+description:
+  The AC200 contains an audio codec, a CVBS video encoder, a 100Mbps
+  Ethernet PHY, eFuse storage, and an RTC. Its control registers are
+  accessed over I2C or Allwinner's RSB bus.
+
+properties:
+  compatible:
+    const: x-powers,ac200
+
+  reg:
+    maxItems: 1
+
+  clocks:
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+    description:
+      The INTB pin, which is a shared, open drain, level triggered output
+      for the TV encoder, Ethernet PHY and RTC interrupts.
+
+  interrupt-controller: true
+
+  '#interrupt-cells':
+    const: 1
+    description:
+      The interrupt number, see include/dt-bindings/mfd/x-powers,ac200.h
+
+  ac-ldoin-supply:
+    description:
+      The 3.3V supply for the audio codec LDO input.
+
+  ephy-vcc-supply:
+    description:
+      The 3.3V supply for the Ethernet PHY analog front end.
+
+  rtc-vcc-supply:
+    description:
+      The 3.3V supply for the RTC.
+
+  tv-vcc-supply:
+    description:
+      The 3.3V supply for the TV encoder DAC.
+
+  nvmem-cells:
+    maxItems: 1
+
+  nvmem-cell-names:
+    items:
+      - const: bandgap
+
+  ethernet-phy-control:
+    type: object
+    additionalProperties: false
+
+    properties:
+      compatible:
+        const: x-powers,ac200-ephy-ctl
+
+      '#clock-cells':
+        const: 0
+
+      '#reset-cells':
+        const: 0
+
+      nvmem-cells:
+        maxItems: 1
+
+      nvmem-cell-names:
+        items:
+          - const: calibration
+
+      phy-mode:
+        enum:
+          - mii
+          - rmii
+
+      x-powers,phy-address:
+        $ref: /schemas/types.yaml#/definitions/uint32
+        minimum: 0
+        maximum: 31
+        description:
+          Address the PHY answers to on the MDIO bus. Must match the reg
+          of the corresponding ethernet-phy node.
+
+      x-powers,led-active-low:
+        type: boolean
+        description: The LED outputs drive low when active.
+
+      x-powers,link-led:
+        type: boolean
+        description: Enable the link/activity LED output pad.
+
+      x-powers,speed-led:
+        type: boolean
+        description: Enable the speed LED output pad.
+
+      x-powers,duplex-led:
+        type: boolean
+        description: Enable the duplex LED output pad.
+
+    required:
+      - compatible
+      - '#clock-cells'
+      - '#reset-cells'
+      - phy-mode
+      - x-powers,phy-address
+
+    dependencies:
+      nvmem-cells: [ nvmem-cell-names ]
+      nvmem-cell-names: [ nvmem-cells ]
+
+  codec:
+    type: object
+    $ref: /schemas/sound/dai-common.yaml#
+    unevaluatedProperties: false
+
+    properties:
+      compatible:
+        const: x-powers,ac200-codec
+
+      '#sound-dai-cells':
+        const: 0
+
+    required:
+      - compatible
+      - '#sound-dai-cells'
+
+required:
+  - compatible
+  - reg
+  - clocks
+  - ac-ldoin-supply
+  - ephy-vcc-supply
+  - rtc-vcc-supply
+  - tv-vcc-supply
+
+dependencies:
+  interrupt-controller: [ '#interrupt-cells' ]
+  '#interrupt-cells': [ interrupt-controller ]
+  nvmem-cells: [ nvmem-cell-names ]
+  nvmem-cell-names: [ nvmem-cells ]
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/interrupt-controller/irq.h>
+
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        mfd@10 {
+            compatible = "x-powers,ac200";
+            reg = <0x10>;
+            clocks = <&ac200_clk>;
+            ac-ldoin-supply = <&reg_aldo2>;
+            ephy-vcc-supply = <&reg_aldo2>;
+            rtc-vcc-supply = <&reg_aldo2>;
+            tv-vcc-supply = <&reg_aldo2>;
+            interrupt-parent = <&pio>;
+            interrupts = <1 20 IRQ_TYPE_LEVEL_LOW>;
+            interrupt-controller;
+            #interrupt-cells = <1>;
+            nvmem-cells = <&ac200_bg>;
+            nvmem-cell-names = "bandgap";
+
+            ethernet-phy-control {
+                compatible = "x-powers,ac200-ephy-ctl";
+                nvmem-cells = <&ephy_calib>;
+                nvmem-cell-names = "calibration";
+                #clock-cells = <0>;
+                #reset-cells = <0>;
+                phy-mode = "rmii";
+                x-powers,phy-address = <1>;
+                x-powers,link-led;
+                x-powers,speed-led;
+                x-powers,duplex-led;
+            };
+
+            codec {
+                compatible = "x-powers,ac200-codec";
+                #sound-dai-cells = <0>;
+            };
+        };
+    };
+
+...

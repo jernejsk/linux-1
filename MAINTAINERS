@@ -29164,6 +29164,17 @@ F:	drivers/net/wwan/
 F:	include/linux/wwan.h
 F:	include/uapi/linux/wwan.h
 
+X-POWERS AC200 DRIVERS
+M:	Jernej Skrabec <jernej.skrabec@gmail.com>
+L:	linux-sunxi@lists.linux.dev
+S:	Maintained
+F:	Documentation/devicetree/bindings/mfd/x-powers,ac200.yaml
+F:	drivers/mfd/ac200.c
+F:	drivers/net/phy/ac200.c
+F:	drivers/phy/allwinner/ac200-ephy-ctl.c
+F:	include/dt-bindings/mfd/x-powers,ac200.h
+F:	sound/soc/codecs/ac200.c
+
 X-POWERS AXP288 PMIC DRIVERS
 M:	Hans de Goede <hansg@kernel.org>
 S:	Maintained
