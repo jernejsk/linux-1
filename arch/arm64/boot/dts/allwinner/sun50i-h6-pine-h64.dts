@@ -81,6 +81,25 @@
 	};
 };
 
+&ac200 {
+	ac-ldoin-supply = <&reg_aldo2>;
+	ephy-vcc-supply = <&reg_aldo2>;
+	rtc-vcc-supply = <&reg_aldo2>;
+	tv-vcc-supply = <&reg_aldo2>;
+};
+
+&ac200_codec {
+	status = "okay";
+};
+
+&ac200_pwm_clk {
+	status = "okay";
+};
+
+&ac200_sound {
+	status = "okay";
+};
+
 &cpu0 {
 	cpu-supply = <&reg_dcdca>;
 };
@@ -123,6 +142,14 @@
 	};
 };
 
+&i2c3 {
+	status = "okay";
+};
+
+&i2s3 {
+	status = "okay";
+};
+
 &mdio {
 	ext_rgmii_phy: ethernet-phy@1 {
 		compatible = "ethernet-phy-ieee802.3-c22";
@@ -160,6 +187,10 @@
 	vcc-pc-supply = <&reg_bldo2>;
 	vcc-pd-supply = <&reg_cldo1>;
 	vcc-pg-supply = <&reg_aldo1>;
+};
+
+&pwm {
+	status = "okay";
 };
 
 &r_i2c {
