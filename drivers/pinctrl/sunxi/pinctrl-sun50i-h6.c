@@ -97,10 +97,13 @@ static const struct sunxi_desc_pin h6_pins[] = {
 		  SUNXI_FUNCTION(0x2, "i2c3"),		/* SDA */
 		  SUNXI_FUNCTION_IRQ_BANK(0x6, 0, 18)),
 	SUNXI_PIN(SUNXI_PINCTRL_PIN(B, 19),
+		  SUNXI_FUNCTION(0x0, "gpio_in"),
+		  SUNXI_FUNCTION(0x1, "gpio_out"),
 		  SUNXI_FUNCTION(0x2, "pwm1"),
 		  SUNXI_FUNCTION_IRQ_BANK(0x6, 0, 19)),
 	SUNXI_PIN(SUNXI_PINCTRL_PIN(B, 20),
 		  SUNXI_FUNCTION(0x0, "gpio_in"),
+		  SUNXI_FUNCTION(0x1, "gpio_out"),
 		  SUNXI_FUNCTION_IRQ_BANK(0x6, 0, 20)),
 	/* Hole */
 	SUNXI_PIN(SUNXI_PINCTRL_PIN(C, 0),
