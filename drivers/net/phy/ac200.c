@@ -6,8 +6,11 @@
  */
 
 #include <linux/clk.h>
+#include <linux/etherdevice.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/netdevice.h>
+#include <linux/of.h>
 #include <linux/phy.h>
 
 #define AC200_EPHY_ID			0x00441400
@@ -19,8 +22,15 @@
  */
 
 /* page 0 registers */
+#define AC200_EPHY_INT_STATUS		0x10
+#define AC200_EPHY_INT_MASK		0x11
+#define AC200_EPHY_INT_LINK_CHANGE	BIT(15)
+#define AC200_EPHY_INT_WOL		BIT(14)
 #define AC200_EPHY_GLOBAL_CTL		0x13
 #define AC200_EPHY_GLOBAL_CTL_UNKNOWN	BIT(12)
+#define AC200_EPHY_GLOBAL_CTL_WOL_EN	BIT(10)
+#define AC200_EPHY_GLOBAL_CTL_WOL_HOLD	BIT(7)
+#define AC200_EPHY_WOL_MAC(x)		(0x16 + (x))
 #define AC200_EPHY_PAGE_SELECT		0x1f
 
 /* the page number lives in the upper byte of the page select register */
@@ -42,8 +52,12 @@
 /* page 8 registers */
 #define AC200_EPHY_P8_AFE_CTL		0x18
 
+#define AC200_EPHY_INTS			(AC200_EPHY_INT_LINK_CHANGE | \
+					 AC200_EPHY_INT_WOL)
+
 struct ac200_ephy_priv {
 	struct clk *clk;
+	bool wol_irq_enabled;
 };
 
 static int ac200_ephy_read_page(struct phy_device *phydev)
@@ -117,6 +131,176 @@ static int ac200_ephy_config_init(struct phy_device *phydev)
 			    AC200_EPHY_GLOBAL_CTL_UNKNOWN);
 }
 
+static int ac200_ephy_ack_interrupt(struct phy_device *phydev)
+{
+	int ret;
+
+	/* The status bits are write-one-to-clear. */
+	ret = phy_read(phydev, AC200_EPHY_INT_STATUS);
+	if (ret < 0)
+		return ret;
+
+	return phy_write(phydev, AC200_EPHY_INT_STATUS, ret);
+}
+
+static int ac200_ephy_config_intr(struct phy_device *phydev)
+{
+	int ret;
+
+	if (phydev->interrupts == PHY_INTERRUPT_ENABLED) {
+		ret = ac200_ephy_ack_interrupt(phydev);
+		if (ret)
+			return ret;
+
+		ret = phy_set_bits(phydev, AC200_EPHY_INT_MASK,
+				   AC200_EPHY_INT_LINK_CHANGE);
+	} else {
+		ret = phy_clear_bits(phydev, AC200_EPHY_INT_MASK,
+				     AC200_EPHY_INT_LINK_CHANGE);
+		if (ret)
+			return ret;
+
+		ret = ac200_ephy_ack_interrupt(phydev);
+	}
+
+	return ret;
+}
+
+static irqreturn_t ac200_ephy_handle_interrupt(struct phy_device *phydev)
+{
+	int status, enabled;
+
+	enabled = phy_read(phydev, AC200_EPHY_INT_MASK);
+	if (enabled < 0) {
+		phy_error(phydev);
+		return IRQ_NONE;
+	}
+
+	status = phy_read(phydev, AC200_EPHY_INT_STATUS);
+	if (status < 0) {
+		phy_error(phydev);
+		return IRQ_NONE;
+	}
+
+	if (!(status & enabled & AC200_EPHY_INTS))
+		return IRQ_NONE;
+
+	/* Clear every latched event, not just the ones that are unmasked. */
+	if (phy_write(phydev, AC200_EPHY_INT_STATUS, status) < 0) {
+		phy_error(phydev);
+		return IRQ_NONE;
+	}
+
+	if (status & enabled & AC200_EPHY_INT_LINK_CHANGE)
+		phy_trigger_machine(phydev);
+
+	return IRQ_HANDLED;
+}
+
+/*
+ * The interrupt is armed as a wakeup source right away instead of leaving that
+ * to dev_pm_set_wake_irq(). The AC200 hangs off an I2C bus, and arming the
+ * wakeup during the noirq phase would make regmap-irq talk to a controller
+ * that has already been suspended.
+ */
+static int ac200_ephy_set_wake_irq(struct phy_device *phydev, bool enable)
+{
+	struct ac200_ephy_priv *priv = phydev->priv;
+	int ret;
+
+	if (!device_can_wakeup(&phydev->mdio.dev) ||
+	    priv->wol_irq_enabled == enable)
+		return 0;
+
+	if (enable)
+		ret = enable_irq_wake(phydev->irq);
+	else
+		ret = disable_irq_wake(phydev->irq);
+	if (ret)
+		return ret;
+
+	priv->wol_irq_enabled = enable;
+
+	return 0;
+}
+
+static void ac200_ephy_get_wol(struct phy_device *phydev,
+			       struct ethtool_wolinfo *wol)
+{
+	int ret;
+
+	wol->supported = WAKE_MAGIC;
+	wol->wolopts = 0;
+
+	ret = phy_read(phydev, AC200_EPHY_GLOBAL_CTL);
+	if (ret >= 0 && (ret & AC200_EPHY_GLOBAL_CTL_WOL_EN))
+		wol->wolopts = WAKE_MAGIC;
+}
+
+static int ac200_ephy_set_wol(struct phy_device *phydev,
+			      struct ethtool_wolinfo *wol)
+{
+	struct net_device *ndev = phydev->attached_dev;
+	const u8 *mac;
+	int ret, i;
+
+	if (wol->wolopts & ~WAKE_MAGIC)
+		return -EOPNOTSUPP;
+
+	if (!(wol->wolopts & WAKE_MAGIC)) {
+		ret = phy_clear_bits(phydev, AC200_EPHY_INT_MASK,
+				     AC200_EPHY_INT_WOL);
+		if (ret)
+			return ret;
+
+		ret = phy_clear_bits(phydev, AC200_EPHY_GLOBAL_CTL,
+				     AC200_EPHY_GLOBAL_CTL_WOL_EN);
+		if (ret)
+			return ret;
+
+		ret = ac200_ephy_set_wake_irq(phydev, false);
+		if (ret)
+			return ret;
+
+		return device_set_wakeup_enable(&phydev->mdio.dev, false);
+	}
+
+	if (!ndev)
+		return -ENODEV;
+
+	/*
+	 * The magic packet detector has its own copy of the MAC address,
+	 * stored big endian across three registers.
+	 */
+	mac = ndev->dev_addr;
+	for (i = 0; i < 3; i++) {
+		ret = phy_write(phydev, AC200_EPHY_WOL_MAC(i),
+				mac[2 * i] << 8 | mac[2 * i + 1]);
+		if (ret)
+			return ret;
+	}
+
+	ret = ac200_ephy_ack_interrupt(phydev);
+	if (ret)
+		return ret;
+
+	ret = phy_set_bits(phydev, AC200_EPHY_INT_MASK, AC200_EPHY_INT_WOL);
+	if (ret)
+		return ret;
+
+	ret = phy_modify(phydev, AC200_EPHY_GLOBAL_CTL,
+			 AC200_EPHY_GLOBAL_CTL_WOL_HOLD,
+			 AC200_EPHY_GLOBAL_CTL_WOL_EN);
+	if (ret)
+		return ret;
+
+	ret = ac200_ephy_set_wake_irq(phydev, true);
+	if (ret)
+		return ret;
+
+	return device_set_wakeup_enable(&phydev->mdio.dev, true);
+}
+
 static int ac200_ephy_probe(struct phy_device *phydev)
 {
 	struct device *dev = &phydev->mdio.dev;
@@ -132,6 +316,16 @@ static int ac200_ephy_probe(struct phy_device *phydev)
 				     "Failed to request clock\n");
 
 	phydev->priv = priv;
+
+	/*
+	 * The magic packet detector can raise the PHY interrupt, which on this
+	 * chip is routed through the AC200 interrupt controller. Only offer
+	 * Wake-on-LAN if the board actually wired that up and marked the PHY as
+	 * a wakeup source.
+	 */
+	if (of_property_read_bool(dev->of_node, "wakeup-source") &&
+	    phy_interrupt_is_valid(phydev))
+		device_set_wakeup_capable(dev, true);
 
 	return 0;
 }
@@ -176,6 +370,10 @@ static struct phy_driver ac200_ephy_driver[] = {
 		.probe		= ac200_ephy_probe,
 		.read_page	= ac200_ephy_read_page,
 		.write_page	= ac200_ephy_write_page,
+		.config_intr	= ac200_ephy_config_intr,
+		.handle_interrupt = ac200_ephy_handle_interrupt,
+		.get_wol	= ac200_ephy_get_wol,
+		.set_wol	= ac200_ephy_set_wol,
 		.suspend	= ac200_ephy_suspend,
 		.resume		= ac200_ephy_resume,
 	}
