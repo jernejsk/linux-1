@@ -133,6 +133,22 @@ properties:
         maxItems: 1
         description: Cable detection interrupt.
 
+      ports:
+        $ref: /schemas/graph.yaml#/properties/ports
+
+        properties:
+          port@0:
+            $ref: /schemas/graph.yaml#/properties/port
+            description: Input from the display pipeline, carrying CCIR656.
+
+          port@1:
+            $ref: /schemas/graph.yaml#/properties/port
+            description: Output to the composite video connector.
+
+        required:
+          - port@0
+          - port@1
+
     required:
       - compatible
       - interrupts

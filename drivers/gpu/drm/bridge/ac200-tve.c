@@ -4,11 +4,9 @@
  *
  * Copyright (c) 2026 Jernej Skrabec <jernej.skrabec@gmail.com>
  *
- * The encoder normally takes CCIR656 video from the SoC and turns it into
- * composite video. It also contains a standard colour bar generator, which
- * replaces that input, and that is all this driver drives for now: it brings
- * the encoder up and puts the colour bars on the CVBS output, so that the
- * analog side can be tested before the CCIR656 input is wired up.
+ * The encoder takes CCIR656 video from the SoC and turns it into composite
+ * video, so it shows up as a DRM bridge behind the TCON driving that
+ * interface.
  *
  * The register documentation covers the encoder itself, but the clock tree
  * setup and the second register block at 0x4100 are undocumented, so those
@@ -26,14 +24,21 @@
 
 #include <linux/bitfield.h>
 #include <linux/bits.h>
-#include <linux/debugfs.h>
 #include <linux/delay.h>
+#include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
 #include <linux/regmap.h>
+
+#include <drm/drm_atomic_state_helper.h>
+#include <drm/drm_bridge.h>
+#include <drm/drm_atomic_helper.h>
+#include <drm/drm_modes.h>
+#include <drm/drm_of.h>
+#include <drm/drm_probe_helper.h>
 
 /* system registers */
 #define AC200_SYS_PLL_CTL0		0x000c
@@ -115,6 +120,10 @@
 #define AC200_TVE_BLANK_LEVEL		0x4022
 #define AC200_TVE_PLUG_EN		0x4030
 #define AC200_TVE_PLUG_EN_AUTO_DET	BIT(0)
+#define AC200_TVE_PLUG_IRQ_EN		0x4032
+#define AC200_TVE_PLUG_IRQ_EN_AUTO_DET	BIT(0)
+#define AC200_TVE_PLUG_IRQ_STA		0x4034
+#define AC200_TVE_PLUG_IRQ_STA_AUTO_DET	BIT(0)
 #define AC200_TVE_PLUG_STA		0x4038
 #define AC200_TVE_PLUG_STA_MASK		GENMASK(1, 0)
 #define AC200_TVE_PLUG_STA_UNCONNECTED	0
@@ -282,9 +291,6 @@ static const struct reg_sequence ac200_tve_ntsc_regs[] = {
 					  AC200_TVE_MOD1_DAC_CONTROL_54M |
 					  AC200_TVE_MOD1_CORE_DATA_54M |
 					  AC200_TVE_MOD1_CORE_CONTROL_54M },
-	{ AC200_TVE_DAC_CFG1,             AC200_TVE_DAC_CFG1_UNKNOWN |
-					  AC200_TVE_DAC_CFG1_BIT25 |
-					  AC200_TVE_DAC_CFG1_CLK_INVERT },
 		/* luma and chroma path delays, in clocks */
 	{ AC200_TVE_YC_DELAY,             AC200_TVE_YC_DELAY_Y(1) |
 					  AC200_TVE_YC_DELAY_C(4) },
@@ -349,9 +355,6 @@ static const struct reg_sequence ac200_tve_pal_regs[] = {
 					  AC200_TVE_MOD1_DAC_CONTROL_54M |
 					  AC200_TVE_MOD1_CORE_DATA_54M |
 					  AC200_TVE_MOD1_CORE_CONTROL_54M },
-	{ AC200_TVE_DAC_CFG1,             AC200_TVE_DAC_CFG1_UNKNOWN |
-					  AC200_TVE_DAC_CFG1_BIT25 |
-					  AC200_TVE_DAC_CFG1_CLK_INVERT },
 		/* luma and chroma path delays, in clocks */
 	{ AC200_TVE_YC_DELAY,             AC200_TVE_YC_DELAY_Y(1) |
 					  AC200_TVE_YC_DELAY_C(4) },
@@ -486,11 +489,18 @@ static const struct reg_sequence ac200_tve_plug_regs[] = {
 struct ac200_tve {
 	struct device *dev;
 	struct regmap *regmap;
-	struct mutex lock;	/* serialises the state below */
+	struct drm_bridge bridge;
+	struct drm_bridge *next_bridge;
 	enum ac200_tve_mode mode;
-	bool test_pattern;
 	bool enabled;
+	bool detect_valid;
+	int irq;
 };
+
+static inline struct ac200_tve *bridge_to_ac200_tve(struct drm_bridge *bridge)
+{
+	return container_of(bridge, struct ac200_tve, bridge);
+}
 
 static int ac200_tve_calibrate(struct ac200_tve *tve)
 {
@@ -573,9 +583,7 @@ static int ac200_tve_set_mode(struct ac200_tve *tve)
 	 * defaults for the selected standard, so this has to come before the
 	 * per-standard table below.
 	 */
-	ret = regmap_write(tve->regmap, AC200_TVE_MOD0, timing->mod0 |
-			   (tve->test_pattern ?
-			    AC200_TVE_MOD0_COLOR_BAR_MOD : 0));
+	ret = regmap_write(tve->regmap, AC200_TVE_MOD0, timing->mod0);
 	if (ret)
 		return ret;
 
@@ -625,6 +633,7 @@ static int ac200_tve_disable(struct ac200_tve *tve)
 	if (ret)
 		return ret;
 
+	tve->detect_valid |= tve->enabled;
 	tve->enabled = false;
 
 	/* DAC off and switched to the detection regime, then start detecting. */
@@ -634,184 +643,191 @@ static int ac200_tve_disable(struct ac200_tve *tve)
 	if (ret)
 		return ret;
 
+	/*
+	 * The status is a latch rather than a live sample, so it keeps
+	 * reporting whatever the detector last saw until it is cleared.
+	 */
+	ret = regmap_write(tve->regmap, AC200_TVE_PLUG_STA, 0);
+	if (ret)
+		return ret;
+
 	return regmap_write(tve->regmap, AC200_TVE_PLUG_EN,
 			    AC200_TVE_PLUG_EN_AUTO_DET);
 }
 
-static int ac200_tve_enabled_get(void *data, u64 *val)
+static int ac200_tve_bridge_get_modes(struct drm_bridge *bridge,
+				      struct drm_connector *connector)
 {
-	struct ac200_tve *tve = data;
-
-	guard(mutex)(&tve->lock);
-	*val = tve->enabled;
-
-	return 0;
+	return drm_connector_helper_tv_get_modes(connector);
 }
 
-static int ac200_tve_enabled_set(void *data, u64 val)
+static int ac200_tve_bridge_attach(struct drm_bridge *bridge,
+				   struct drm_encoder *encoder,
+				   enum drm_bridge_attach_flags flags)
 {
-	struct ac200_tve *tve = data;
+	struct ac200_tve *tve = bridge_to_ac200_tve(bridge);
 
-	guard(mutex)(&tve->lock);
-	if (!!val == tve->enabled)
-		return 0;
-
-	return val ? ac200_tve_enable(tve) : ac200_tve_disable(tve);
-}
-DEFINE_DEBUGFS_ATTRIBUTE(ac200_tve_enabled_fops, ac200_tve_enabled_get,
-			 ac200_tve_enabled_set, "%llu\n");
-
-static int ac200_tve_pattern_get(void *data, u64 *val)
-{
-	struct ac200_tve *tve = data;
-
-	guard(mutex)(&tve->lock);
-	*val = tve->test_pattern;
-
-	return 0;
-}
-
-static int ac200_tve_pattern_set(void *data, u64 val)
-{
-	struct ac200_tve *tve = data;
-
-	guard(mutex)(&tve->lock);
-	tve->test_pattern = !!val;
-
-	if (!tve->enabled)
-		return 0;
-
-	return regmap_update_bits(tve->regmap, AC200_TVE_MOD0,
-				  AC200_TVE_MOD0_COLOR_BAR_MOD,
-				  tve->test_pattern ?
-				  AC200_TVE_MOD0_COLOR_BAR_MOD : 0);
-}
-DEFINE_DEBUGFS_ATTRIBUTE(ac200_tve_pattern_fops, ac200_tve_pattern_get,
-			 ac200_tve_pattern_set, "%llu\n");
-
-static int ac200_tve_mode_show(struct seq_file *s, void *data)
-{
-	struct ac200_tve *tve = s->private;
-
-	guard(mutex)(&tve->lock);
-	seq_printf(s, "%s\n", ac200_tve_timings[tve->mode].name);
-
-	return 0;
-}
-
-static int ac200_tve_mode_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, ac200_tve_mode_show, inode->i_private);
-}
-
-static ssize_t ac200_tve_mode_write(struct file *file,
-				    const char __user *buf, size_t count,
-				    loff_t *ppos)
-{
-	struct ac200_tve *tve = ((struct seq_file *)file->private_data)->private;
-	enum ac200_tve_mode mode;
-	char name[8];
-	int i, ret;
-
-	if (count >= sizeof(name))
+	if (!(flags & DRM_BRIDGE_ATTACH_NO_CONNECTOR))
 		return -EINVAL;
 
-	if (copy_from_user(name, buf, count))
-		return -EFAULT;
-
-	name[count] = '\0';
-	i = strlen(name);
-	while (i-- > 0 && (name[i] == '\n' || name[i] == ' '))
-		name[i] = '\0';
-
-	for (mode = 0; mode < ARRAY_SIZE(ac200_tve_timings); mode++)
-		if (!strcasecmp(name, ac200_tve_timings[mode].name))
-			break;
-
-	if (mode == ARRAY_SIZE(ac200_tve_timings))
-		return -EINVAL;
-
-	guard(mutex)(&tve->lock);
-	if (mode == tve->mode)
-		return count;
-
-	tve->mode = mode;
-
-	if (tve->enabled) {
-		ret = ac200_tve_disable(tve);
-		if (ret)
-			return ret;
-
-		ret = ac200_tve_enable(tve);
-		if (ret)
-			return ret;
-	}
-
-	return count;
+	return drm_bridge_attach(encoder, tve->next_bridge, bridge, flags);
 }
 
-static const struct file_operations ac200_tve_mode_fops = {
-	.owner		= THIS_MODULE,
-	.open		= ac200_tve_mode_open,
-	.read		= seq_read,
-	.write		= ac200_tve_mode_write,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
-
-static int ac200_tve_plug_show(struct seq_file *s, void *data)
+static enum drm_mode_status
+ac200_tve_bridge_mode_valid(struct drm_bridge *bridge,
+			    const struct drm_display_info *info,
+			    const struct drm_display_mode *mode)
 {
-	static const char * const states[] = {
-		"unconnected", "connected", "reserved", "short to ground",
-	};
-	struct ac200_tve *tve = s->private;
+	/* Only the two interlaced standards the encoder knows about. */
+	if (!(mode->flags & DRM_MODE_FLAG_INTERLACE))
+		return MODE_NO_INTERLACE;
+
+	if (mode->hdisplay != 720)
+		return MODE_BAD_HVALUE;
+
+	if (mode->vdisplay != 480 && mode->vdisplay != 576)
+		return MODE_BAD_VVALUE;
+
+	return MODE_OK;
+}
+
+static int
+ac200_tve_bridge_atomic_check(struct drm_bridge *bridge,
+			      struct drm_bridge_state *bridge_state,
+			      struct drm_crtc_state *crtc_state,
+			      struct drm_connector_state *conn_state)
+{
+	struct drm_display_mode *adj = &crtc_state->adjusted_mode;
+
+	/*
+	 * The encoder wants one whole progressive frame per output field over
+	 * CCIR656 and picks the lines it needs for each field itself, so the
+	 * pipeline runs at the field rate with the full frame height: the
+	 * pixel clock doubles and the interlace flag goes away.
+	 */
+	drm_mode_copy(adj, &crtc_state->mode);
+	adj->flags &= ~DRM_MODE_FLAG_INTERLACE;
+	adj->clock *= 2;
+	drm_mode_set_crtcinfo(adj, 0);
+
+	return 0;
+}
+
+static enum drm_connector_status ac200_tve_plug_status(struct ac200_tve *tve)
+{
 	unsigned int val;
-	int ret;
 
-	guard(mutex)(&tve->lock);
+	if (regmap_read(tve->regmap, AC200_TVE_PLUG_STA, &val))
+		return connector_status_unknown;
+
+	/*
+	 * Only the connected state counts as such, the way the vendor driver
+	 * reports it: a reading of short to ground means the DAC is not
+	 * looking at a terminated cable either.
+	 */
+	if (FIELD_GET(AC200_TVE_PLUG_STA_MASK, val) ==
+	    AC200_TVE_PLUG_STA_CONNECTED)
+		return connector_status_connected;
+
+	return connector_status_disconnected;
+}
+
+static enum drm_connector_status
+ac200_tve_bridge_detect(struct drm_bridge *bridge,
+			struct drm_connector *connector)
+{
+	struct ac200_tve *tve = bridge_to_ac200_tve(bridge);
 
 	/*
 	 * The detector shares the DAC with the video output and is only set up
-	 * for the idle case, so anything it reports while the encoder is
-	 * running is meaningless. Disable the encoder to get an answer.
+	 * for an idle DAC, so while the encoder drives a picture the answer
+	 * from before it was turned on is the best there is.
 	 */
-	if (tve->enabled) {
-		seq_puts(s, "unknown (encoder enabled)\n");
-		return 0;
-	}
+	if (tve->enabled)
+		return connector->status;
 
-	ret = regmap_read(tve->regmap, AC200_TVE_PLUG_STA, &val);
-	if (ret)
-		return ret;
+	/*
+	 * Before the DAC has driven a picture once the detector reports a
+	 * short no matter what is attached, so there is nothing to report
+	 * yet. Saying so rather than guessing keeps the output usable.
+	 */
+	if (!tve->detect_valid)
+		return connector_status_unknown;
 
-	seq_printf(s, "%s\n",
-		   states[FIELD_GET(AC200_TVE_PLUG_STA_MASK, val)]);
-
-	return 0;
+	return ac200_tve_plug_status(tve);
 }
-DEFINE_SHOW_ATTRIBUTE(ac200_tve_plug);
 
-static void ac200_tve_debugfs_remove(void *data)
+static void ac200_tve_bridge_atomic_enable(struct drm_bridge *bridge,
+					   struct drm_atomic_commit *state)
 {
-	debugfs_remove_recursive(data);
+	struct ac200_tve *tve = bridge_to_ac200_tve(bridge);
+	struct drm_connector_state *conn_state;
+	struct drm_connector *connector;
+
+	connector = drm_atomic_get_new_connector_for_encoder(state,
+							     bridge->encoder);
+	if (WARN_ON(!connector))
+		return;
+
+	conn_state = drm_atomic_get_new_connector_state(state, connector);
+	tve->mode = conn_state->tv.mode == DRM_MODE_TV_MODE_NTSC ?
+		    AC200_TVE_NTSC : AC200_TVE_PAL;
+
+	if (ac200_tve_enable(tve))
+		dev_err(tve->dev, "Failed to enable encoder\n");
 }
 
-static int ac200_tve_debugfs_init(struct ac200_tve *tve)
+static void ac200_tve_bridge_atomic_disable(struct drm_bridge *bridge,
+					    struct drm_atomic_commit *state)
 {
-	struct dentry *dir;
+	struct ac200_tve *tve = bridge_to_ac200_tve(bridge);
 
-	dir = debugfs_create_dir(dev_name(tve->dev), NULL);
-
-	debugfs_create_file_unsafe("enabled", 0644, dir, tve,
-				   &ac200_tve_enabled_fops);
-	debugfs_create_file_unsafe("test_pattern", 0644, dir, tve,
-				   &ac200_tve_pattern_fops);
-	debugfs_create_file("mode", 0644, dir, tve, &ac200_tve_mode_fops);
-	debugfs_create_file("plug", 0444, dir, tve, &ac200_tve_plug_fops);
-
-	return devm_add_action_or_reset(tve->dev, ac200_tve_debugfs_remove,
-					dir);
+	if (ac200_tve_disable(tve))
+		dev_err(tve->dev, "Failed to disable encoder\n");
 }
+
+static irqreturn_t ac200_tve_irq(int irq, void *data)
+{
+	struct ac200_tve *tve = data;
+
+	if (regmap_write(tve->regmap, AC200_TVE_PLUG_IRQ_STA,
+			 AC200_TVE_PLUG_IRQ_STA_AUTO_DET))
+		return IRQ_NONE;
+
+	drm_bridge_hpd_notify(&tve->bridge, ac200_tve_plug_status(tve));
+
+	return IRQ_HANDLED;
+}
+
+static void ac200_tve_bridge_hpd_enable(struct drm_bridge *bridge)
+{
+	struct ac200_tve *tve = bridge_to_ac200_tve(bridge);
+
+	regmap_write(tve->regmap, AC200_TVE_PLUG_IRQ_EN,
+		     AC200_TVE_PLUG_IRQ_EN_AUTO_DET);
+}
+
+static void ac200_tve_bridge_hpd_disable(struct drm_bridge *bridge)
+{
+	struct ac200_tve *tve = bridge_to_ac200_tve(bridge);
+
+	regmap_write(tve->regmap, AC200_TVE_PLUG_IRQ_EN, 0);
+}
+
+static const struct drm_bridge_funcs ac200_tve_bridge_funcs = {
+	.attach			= ac200_tve_bridge_attach,
+	.detect			= ac200_tve_bridge_detect,
+	.hpd_enable		= ac200_tve_bridge_hpd_enable,
+	.hpd_disable		= ac200_tve_bridge_hpd_disable,
+	.get_modes		= ac200_tve_bridge_get_modes,
+	.mode_valid		= ac200_tve_bridge_mode_valid,
+	.atomic_check		= ac200_tve_bridge_atomic_check,
+	.atomic_enable		= ac200_tve_bridge_atomic_enable,
+	.atomic_disable		= ac200_tve_bridge_atomic_disable,
+	.atomic_duplicate_state	= drm_atomic_helper_bridge_duplicate_state,
+	.atomic_destroy_state	= drm_atomic_helper_bridge_destroy_state,
+	.atomic_reset		= drm_atomic_helper_bridge_reset,
+};
 
 static void ac200_tve_shutdown(void *data)
 {
@@ -828,18 +844,15 @@ static int ac200_tve_probe(struct platform_device *pdev)
 	struct ac200_tve *tve;
 	int ret;
 
-	tve = devm_kzalloc(dev, sizeof(*tve), GFP_KERNEL);
-	if (!tve)
-		return -ENOMEM;
+	tve = devm_drm_bridge_alloc(dev, struct ac200_tve, bridge,
+				    &ac200_tve_bridge_funcs);
+	if (IS_ERR(tve))
+		return PTR_ERR(tve);
 
 	tve->dev = dev;
 	tve->regmap = dev_get_regmap(dev->parent, NULL);
 	if (!tve->regmap)
 		return dev_err_probe(dev, -ENODEV, "Parent has no regmap\n");
-
-	ret = devm_mutex_init(dev, &tve->lock);
-	if (ret)
-		return ret;
 
 	/*
 	 * Only the default of the connector's TV mode property, which is what
@@ -866,21 +879,45 @@ static int ac200_tve_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, ret,
 				     "Failed to set up cable detection\n");
 
-	scoped_guard(mutex, &tve->lock) {
-		ret = ac200_tve_enable(tve);
-		if (ret)
-			return dev_err_probe(dev, ret,
-					     "Failed to enable encoder\n");
-	}
-
-	ret = ac200_tve_debugfs_init(tve);
+	/*
+	 * The cable detector only reads sensibly once the encoder as a whole
+	 * has been programmed, so set a mode up before arming it. This does
+	 * not drive the DAC, that only happens once the display pipeline hands
+	 * over a mode of its own.
+	 */
+	ret = ac200_tve_set_mode(tve);
 	if (ret)
-		return ret;
+		return dev_err_probe(dev, ret, "Failed to set up the encoder\n");
 
-	dev_info(dev, "%s composite output enabled, showing colour bars\n",
-		 ac200_tve_timings[tve->mode].name);
+	/*
+	 * Put the DAC into the detection regime, which is also where it waits
+	 * for the display pipeline to hand over a mode.
+	 */
+	ac200_tve_disable(tve);
 
-	return 0;
+	tve->next_bridge = devm_drm_of_get_bridge(dev, dev->of_node, 1, 0);
+	if (IS_ERR(tve->next_bridge))
+		return dev_err_probe(dev, PTR_ERR(tve->next_bridge),
+				     "Failed to find the output connector\n");
+
+	tve->bridge.of_node = dev->of_node;
+	tve->irq = platform_get_irq(pdev, 0);
+	if (tve->irq < 0)
+		return tve->irq;
+
+	ret = devm_request_threaded_irq(dev, tve->irq, NULL, ac200_tve_irq,
+					IRQF_ONESHOT, dev_name(dev), tve);
+	if (ret)
+		return dev_err_probe(dev, ret, "Failed to request interrupt\n");
+
+	tve->bridge.ops = DRM_BRIDGE_OP_DETECT | DRM_BRIDGE_OP_HPD |
+			  DRM_BRIDGE_OP_MODES;
+	tve->bridge.supported_tv_modes = BIT(DRM_MODE_TV_MODE_NTSC) |
+					 BIT(DRM_MODE_TV_MODE_PAL);
+	tve->bridge.type = DRM_MODE_CONNECTOR_Composite;
+	tve->bridge.interlace_allowed = true;
+
+	return devm_drm_bridge_add(dev, &tve->bridge);
 }
 
 static const struct of_device_id ac200_tve_match[] = {

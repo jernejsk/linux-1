@@ -864,7 +864,14 @@ void sun4i_tcon_mode_set(struct sun4i_tcon *tcon,
 		sun4i_tcon0_mode_set_lvds(tcon, encoder, mode);
 		break;
 	case DRM_MODE_ENCODER_NONE:
-		sun4i_tcon0_mode_set_rgb(tcon, encoder, mode);
+		/*
+		 * A TV encoder behind a bridge shows up as a plain encoder, so
+		 * the quirk is what tells us the output is CCIR656.
+		 */
+		if (tcon->quirks->tv_on_channel_0)
+			sun4i_tcon0_mode_set_ccir656(tcon, encoder, mode);
+		else
+			sun4i_tcon0_mode_set_rgb(tcon, encoder, mode);
 		sun4i_tcon_set_mux(tcon, 0, encoder);
 		break;
 	case DRM_MODE_ENCODER_TVDAC:

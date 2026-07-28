@@ -10,6 +10,7 @@
 
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_bridge.h>
+#include <drm/drm_bridge_connector.h>
 #include <drm/drm_of.h>
 #include <drm/drm_panel.h>
 #include <drm/drm_print.h>
@@ -233,9 +234,20 @@ int sun4i_rgb_init(struct drm_device *drm, struct sun4i_tcon *tcon)
 	}
 
 	if (rgb->bridge) {
-		ret = drm_bridge_attach(encoder, rgb->bridge, NULL, 0);
+		struct drm_connector *connector;
+
+		ret = drm_bridge_attach(encoder, rgb->bridge, NULL,
+					DRM_BRIDGE_ATTACH_NO_CONNECTOR);
 		if (ret)
 			goto err_cleanup_connector;
+
+		connector = drm_bridge_connector_init(drm, encoder);
+		if (IS_ERR(connector)) {
+			ret = PTR_ERR(connector);
+			dev_err(drm->dev,
+				"Couldn't initialise the bridge connector\n");
+			goto err_cleanup_connector;
+		}
 	}
 
 	return 0;
