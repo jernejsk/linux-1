@@ -33,6 +33,18 @@ config DRM_AUX_HPD_BRIDGE
 menu "Display Interface Bridges"
 	depends on DRM && DRM_BRIDGE
 
+config DRM_AC200_TVE
+	tristate "X-Powers AC200 TV encoder"
+	depends on MFD_AC200
+	select DRM_KMS_HELPER
+	help
+	  Enable support for the composite video encoder in the X-Powers AC200
+	  mixed-signal companion IC, which is co-packaged with the Allwinner
+	  H6. It turns the CCIR656 output of the SoC into PAL or NTSC composite
+	  video.
+
+	  If in doubt, say "N".
+
 config DRM_CHIPONE_ICN6211
 	tristate "Chipone ICN6211 MIPI-DSI/RGB Converter bridge"
 	depends on OF

@@ -134,6 +134,9 @@ static const struct mfd_cell ac200_cells[] = {
 	}, {
 		.name		= "ac200-ephy-ctl",
 		.of_compatible	= "x-powers,ac200-ephy-ctl",
+	}, {
+		.name		= "ac200-tve",
+		.of_compatible	= "x-powers,ac200-tve",
 	},
 };
 

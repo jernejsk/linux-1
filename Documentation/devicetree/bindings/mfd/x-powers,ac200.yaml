@@ -121,6 +121,22 @@ properties:
       nvmem-cells: [ nvmem-cell-names ]
       nvmem-cell-names: [ nvmem-cells ]
 
+  tv-encoder:
+    type: object
+    additionalProperties: false
+
+    properties:
+      compatible:
+        const: x-powers,ac200-tve
+
+      interrupts:
+        maxItems: 1
+        description: Cable detection interrupt.
+
+    required:
+      - compatible
+      - interrupts
+
   codec:
     type: object
     $ref: /schemas/sound/dai-common.yaml#
@@ -188,6 +204,10 @@ examples:
                 x-powers,link-led;
                 x-powers,speed-led;
                 x-powers,duplex-led;
+            };
+
+            tv-encoder {
+                compatible = "x-powers,ac200-tve";
             };
 
             codec {

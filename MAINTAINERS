@@ -29169,6 +29169,7 @@ M:	Jernej Skrabec <jernej.skrabec@gmail.com>
 L:	linux-sunxi@lists.linux.dev
 S:	Maintained
 F:	Documentation/devicetree/bindings/mfd/x-powers,ac200.yaml
+F:	drivers/gpu/drm/bridge/ac200-tve.c
 F:	drivers/mfd/ac200-ephy-ctl.c
 F:	drivers/mfd/ac200.c
 F:	drivers/net/phy/ac200.c
