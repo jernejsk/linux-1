@@ -59,6 +59,7 @@
 #define SUN4I_TCON0_CTL_SRC_SEL_MASK			GENMASK(2, 0)
 
 #define SUN4I_TCON0_DCLK_REG			0x44
+#define SUN4I_TCON0_DCLK_EN_MASK			GENMASK(31, 28)
 #define SUN4I_TCON0_DCLK_GATE_BIT			(31)
 #define SUN4I_TCON0_DCLK_DIV_SHIFT			(0)
 #define SUN4I_TCON0_DCLK_DIV_WIDTH			(7)
@@ -80,6 +81,14 @@
 #define SUN4I_TCON0_BASIC3_V_SYNC(height)		(((height) - 1) & 0x7ff)
 
 #define SUN4I_TCON0_HV_IF_REG			0x58
+#define SUN4I_TCON0_HV_IF_MODE_MASK			GENMASK(31, 28)
+#define SUN4I_TCON0_HV_IF_MODE_CCIR656			(0xcU << 28)
+#define SUN4I_TCON0_HV_IF_YUV_SEQ_MASK			GENMASK(23, 22)
+#define SUN4I_TCON0_HV_IF_YUV_SEQ_YUYV			(0 << 22)
+#define SUN4I_TCON0_HV_IF_FDLY_MASK			GENMASK(21, 20)
+#define SUN4I_TCON0_HV_IF_FDLY_2_LINES			(1 << 20)
+#define SUN4I_TCON0_HV_IF_FDLY_3_LINES			(2 << 20)
+#define SUN4I_TCON0_HV_IF_CCIR_CSC_DISABLE		BIT(19)
 
 #define SUN4I_TCON0_CPU_IF_REG			0x60
 #define SUN4I_TCON0_CPU_IF_MODE_MASK			GENMASK(31, 28)
@@ -166,6 +175,7 @@
 #define SUN4I_TCON_ECC_FIFO_EN				BIT(3)
 
 #define SUN4I_TCON_CEU_CTL_REG			0x100
+#define SUN4I_TCON_CEU_CTL_EN				BIT(31)
 #define SUN4I_TCON_CEU_MUL_RR_REG		0x110
 #define SUN4I_TCON_CEU_MUL_RG_REG		0x114
 #define SUN4I_TCON_CEU_MUL_RB_REG		0x118
@@ -178,6 +188,10 @@
 #define SUN4I_TCON_CEU_MUL_BG_REG		0x134
 #define SUN4I_TCON_CEU_MUL_BB_REG		0x138
 #define SUN4I_TCON_CEU_ADD_BC_REG		0x13c
+/* The coefficients are 1.8 fixed point, so 0x100 is unity. */
+#define SUN4I_TCON_CEU_MUL_UNITY			0x100
+#define SUN4I_TCON_CEU_RANGE_MAX(x)			(x)
+#define SUN4I_TCON_CEU_RANGE_MIN(x)			((x) << 16)
 #define SUN4I_TCON_CEU_RANGE_R_REG		0x140
 #define SUN4I_TCON_CEU_RANGE_G_REG		0x144
 #define SUN4I_TCON_CEU_RANGE_B_REG		0x148
@@ -236,6 +250,8 @@
 struct sun4i_tcon;
 
 struct sun4i_tcon_quirks {
+	/* TV encoder is fed from channel 0 over a CCIR656 interface */
+	bool	tv_on_channel_0;
 	bool	has_channel_0;	/* a83t does not have channel 0 on second TCON */
 	bool	has_channel_1;	/* a33 does not have channel 1 */
 	bool	has_lvds_alt;	/* Does the LVDS clock have a parent other than the TCON clock? */

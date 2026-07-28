@@ -595,6 +595,148 @@ static void sun4i_tcon0_mode_set_rgb(struct sun4i_tcon *tcon,
 	regmap_write(tcon->regs, SUN4I_TCON0_IO_TRI_REG, 0);
 }
 
+/*
+ * The TV encoder is fed over a CCIR656 interface, where the encoder recovers
+ * the timing from the SAV/EAV codes embedded in the data stream. Two bytes go
+ * out per pixel, so every horizontal quantity the TCON is programmed with is
+ * twice the pixel count and the dot clock is twice the pixel clock.
+ *
+ * Vertically the TCON wants the field for the active lines and the sync, but
+ * the whole frame for the total, which is what the vendor driver programs.
+ */
+static void sun4i_tcon0_mode_set_ccir656(struct sun4i_tcon *tcon,
+					 const struct drm_encoder *encoder,
+					 const struct drm_display_mode *mode)
+{
+	unsigned int bp, hsync, vsync;
+	int clk_delay;
+	u32 val;
+
+	WARN_ON(!tcon->quirks->has_channel_0);
+
+	/*
+	 * CCIR656 carries one byte per clock and two clocks per pixel, so the
+	 * dot clock runs at twice the pixel rate and everything counted in
+	 * clocks rather than lines has to be doubled along with it. The mode
+	 * itself is a progressive frame, which the encoder splits into fields
+	 * of its own accord, so the vertical timings need no halving.
+	 */
+	tcon->dclk_min_div = tcon->quirks->dclk_min_div;
+	tcon->dclk_max_div = 127;
+	clk_set_rate(tcon->dclk, mode->crtc_clock * 2 * 1000);
+
+	/* The interface wants all four dot clock outputs running. */
+	regmap_update_bits(tcon->regs, SUN4I_TCON0_DCLK_REG,
+			   SUN4I_TCON0_DCLK_EN_MASK,
+			   SUN4I_TCON0_DCLK_EN_MASK);
+
+	/*
+	 * The vendor driver starts the fetch later than the RGB path does,
+	 * and clamps the delay to 31 rather than 30.
+	 */
+	clk_delay = clamp(mode->crtc_vtotal - mode->crtc_vdisplay - 8, 10, 31);
+	regmap_update_bits(tcon->regs, SUN4I_TCON0_CTL_REG,
+			   SUN4I_TCON0_CTL_CLK_DELAY_MASK,
+			   SUN4I_TCON0_CTL_CLK_DELAY(clk_delay));
+
+	regmap_write(tcon->regs, SUN4I_TCON0_BASIC0_REG,
+		     SUN4I_TCON0_BASIC0_X(mode->crtc_hdisplay) |
+		     SUN4I_TCON0_BASIC0_Y(mode->crtc_vdisplay));
+
+	bp = mode->crtc_htotal - mode->crtc_hsync_start;
+	regmap_write(tcon->regs, SUN4I_TCON0_BASIC1_REG,
+		     SUN4I_TCON0_BASIC1_H_TOTAL(mode->crtc_htotal * 2) |
+		     SUN4I_TCON0_BASIC1_H_BACKPORCH(bp * 2));
+
+	/*
+	 * The vertical total counts half lines, the back porch and the sync
+	 * width whole ones. Both of the latter describe a field rather than
+	 * the frame that is actually sent, which is what makes them fit: a
+	 * frame has only 49 lines of vertical blanking for the 625 line
+	 * standards, less than a frame worth of back porch plus sync.
+	 */
+	bp = (mode->crtc_vtotal - mode->crtc_vsync_start) / 2;
+	regmap_write(tcon->regs, SUN4I_TCON0_BASIC2_REG,
+		     SUN4I_TCON0_BASIC2_V_TOTAL(mode->crtc_vtotal * 2) |
+		     SUN4I_TCON0_BASIC2_V_BACKPORCH(bp));
+
+	hsync = mode->crtc_hsync_end - mode->crtc_hsync_start;
+	vsync = (mode->crtc_vsync_end - mode->crtc_vsync_start) / 2;
+	regmap_write(tcon->regs, SUN4I_TCON0_BASIC3_REG,
+		     SUN4I_TCON0_BASIC3_H_SYNC(hsync * 2) |
+		     SUN4I_TCON0_BASIC3_V_SYNC(vsync));
+
+	/*
+	 * The encoder needs the field toggle delayed behind the active area,
+	 * by two lines for the 625 line standards and three for the 525 line
+	 * ones. The colour space conversion stays on, as the mixer hands over
+	 * RGB while the interface carries YUV.
+	 */
+	val = SUN4I_TCON0_HV_IF_MODE_CCIR656 |
+	      SUN4I_TCON0_HV_IF_YUV_SEQ_YUYV;
+	if (mode->crtc_vtotal > 525)
+		val |= SUN4I_TCON0_HV_IF_FDLY_2_LINES;
+	else
+		val |= SUN4I_TCON0_HV_IF_FDLY_3_LINES;
+
+	regmap_update_bits(tcon->regs, SUN4I_TCON0_HV_IF_REG,
+			   SUN4I_TCON0_HV_IF_MODE_MASK |
+			   SUN4I_TCON0_HV_IF_YUV_SEQ_MASK |
+			   SUN4I_TCON0_HV_IF_FDLY_MASK |
+			   SUN4I_TCON0_HV_IF_CCIR_CSC_DISABLE,
+			   val);
+
+	/*
+	 * The interface uses 0x00 and 0xff as its timing reference codes, so
+	 * the data handed to it has to stay inside studio swing. The colour
+	 * enhancement unit is set up as a pass through that clamps to the
+	 * ranges BT.601 allows, which is what the vendor driver does as well.
+	 */
+	regmap_write(tcon->regs, SUN4I_TCON_CEU_MUL_RR_REG,
+		     SUN4I_TCON_CEU_MUL_UNITY);
+	regmap_write(tcon->regs, SUN4I_TCON_CEU_MUL_RG_REG, 0);
+	regmap_write(tcon->regs, SUN4I_TCON_CEU_MUL_RB_REG, 0);
+	regmap_write(tcon->regs, SUN4I_TCON_CEU_ADD_RC_REG, 0);
+	regmap_write(tcon->regs, SUN4I_TCON_CEU_MUL_GR_REG, 0);
+	regmap_write(tcon->regs, SUN4I_TCON_CEU_MUL_GG_REG,
+		     SUN4I_TCON_CEU_MUL_UNITY);
+	regmap_write(tcon->regs, SUN4I_TCON_CEU_MUL_GB_REG, 0);
+	regmap_write(tcon->regs, SUN4I_TCON_CEU_ADD_GC_REG, 0);
+	regmap_write(tcon->regs, SUN4I_TCON_CEU_MUL_BR_REG, 0);
+	regmap_write(tcon->regs, SUN4I_TCON_CEU_MUL_BG_REG, 0);
+	regmap_write(tcon->regs, SUN4I_TCON_CEU_MUL_BB_REG,
+		     SUN4I_TCON_CEU_MUL_UNITY);
+	regmap_write(tcon->regs, SUN4I_TCON_CEU_ADD_BC_REG, 0);
+	regmap_write(tcon->regs, SUN4I_TCON_CEU_RANGE_R_REG,
+		     SUN4I_TCON_CEU_RANGE_MIN(16) |
+		     SUN4I_TCON_CEU_RANGE_MAX(235));
+	regmap_write(tcon->regs, SUN4I_TCON_CEU_RANGE_G_REG,
+		     SUN4I_TCON_CEU_RANGE_MIN(16) |
+		     SUN4I_TCON_CEU_RANGE_MAX(240));
+	regmap_write(tcon->regs, SUN4I_TCON_CEU_RANGE_B_REG,
+		     SUN4I_TCON_CEU_RANGE_MIN(16) |
+		     SUN4I_TCON_CEU_RANGE_MAX(240));
+	regmap_write(tcon->regs, SUN4I_TCON_CEU_CTL_REG,
+		     SUN4I_TCON_CEU_CTL_EN);
+
+	/*
+	 * Hold the fetch off until the FIFO has a safe number of clocks worth
+	 * of data in it, or the first line of every frame underruns. The
+	 * vendor driver sizes this as fifteen clocks per MHz of dot clock.
+	 */
+	regmap_write(tcon->regs, SUN4I_TCON_SAFE_PERIOD_REG,
+		     SUN4I_TCON_SAFE_PERIOD_NUM(mode->crtc_clock * 2 / 1000 * 15) |
+		     SUN4I_TCON_SAFE_PERIOD_MODE(3));
+
+	/* Map output pins to channel 0 */
+	regmap_update_bits(tcon->regs, SUN4I_TCON_GCTL_REG,
+			   SUN4I_TCON_GCTL_IOMAP_MASK,
+			   SUN4I_TCON_GCTL_IOMAP_TCON0);
+
+	/* Enable the output on the pins */
+	regmap_write(tcon->regs, SUN4I_TCON0_IO_TRI_REG, 0);
+}
+
 static void sun4i_tcon1_mode_set(struct sun4i_tcon *tcon,
 				 const struct drm_display_mode *mode)
 {
@@ -726,6 +868,12 @@ void sun4i_tcon_mode_set(struct sun4i_tcon *tcon,
 		sun4i_tcon_set_mux(tcon, 0, encoder);
 		break;
 	case DRM_MODE_ENCODER_TVDAC:
+		if (tcon->quirks->tv_on_channel_0) {
+			sun4i_tcon0_mode_set_ccir656(tcon, encoder, mode);
+			sun4i_tcon_set_mux(tcon, 0, encoder);
+			break;
+		}
+		fallthrough;
 	case DRM_MODE_ENCODER_TMDS:
 		sun4i_tcon1_mode_set(tcon, mode);
 		sun4i_tcon_set_mux(tcon, 1, encoder);
@@ -1536,6 +1684,13 @@ static const struct sun4i_tcon_quirks sun9i_a80_tcon_tv_quirks = {
 	.needs_edp_reset = true,
 };
 
+static const struct sun4i_tcon_quirks sun50i_h6_lcd_quirks = {
+	.has_channel_0		= true,
+	.tv_on_channel_0	= true,
+	.dclk_min_div		= 1,
+	.set_mux		= sun8i_r40_tcon_tv_set_mux,
+};
+
 static const struct sun4i_tcon_quirks sun20i_d1_lcd_quirks = {
 	.has_channel_0		= true,
 	.dclk_min_div		= 1,
@@ -1557,6 +1712,7 @@ const struct of_device_id sun4i_tcon_of_table[] = {
 	{ .compatible = "allwinner,sun8i-a83t-tcon-tv", .data = &sun8i_a83t_tv_quirks },
 	{ .compatible = "allwinner,sun8i-r40-tcon-tv", .data = &sun8i_r40_tv_quirks },
 	{ .compatible = "allwinner,sun8i-v3s-tcon", .data = &sun8i_v3s_quirks },
+	{ .compatible = "allwinner,sun50i-h6-tcon-lcd", .data = &sun50i_h6_lcd_quirks },
 	{ .compatible = "allwinner,sun9i-a80-tcon-lcd", .data = &sun9i_a80_tcon_lcd_quirks },
 	{ .compatible = "allwinner,sun9i-a80-tcon-tv", .data = &sun9i_a80_tcon_tv_quirks },
 	{ .compatible = "allwinner,sun20i-d1-tcon-lcd", .data = &sun20i_d1_lcd_quirks },
