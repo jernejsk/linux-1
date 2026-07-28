@@ -323,25 +323,13 @@ static int sun4i_i2s_get_mclk_div(struct sun4i_i2s *i2s,
 	return -EINVAL;
 }
 
-static int sun4i_i2s_oversample_rates[] = { 128, 192, 256, 384, 512, 768 };
-static bool sun4i_i2s_oversample_is_valid(unsigned int oversample)
-{
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(sun4i_i2s_oversample_rates); i++)
-		if (sun4i_i2s_oversample_rates[i] == oversample)
-			return true;
-
-	return false;
-}
-
 static int sun4i_i2s_set_clk_rate(struct snd_soc_dai *dai,
 				  unsigned int rate,
 				  unsigned int slots,
 				  unsigned int slot_width)
 {
 	struct sun4i_i2s *i2s = snd_soc_dai_get_drvdata(dai);
-	unsigned int oversample_rate, clk_rate, bclk_parent_rate;
+	unsigned int clk_rate, bclk_parent_rate;
 	int bclk_div, mclk_div;
 	int ret;
 
@@ -375,13 +363,6 @@ static int sun4i_i2s_set_clk_rate(struct snd_soc_dai *dai,
 	ret = clk_set_rate(i2s->mod_clk, clk_rate);
 	if (ret)
 		return ret;
-
-	oversample_rate = i2s->mclk_freq / rate;
-	if (!sun4i_i2s_oversample_is_valid(oversample_rate)) {
-		dev_err(dai->dev, "Unsupported oversample rate: %d\n",
-			oversample_rate);
-		return -EINVAL;
-	}
 
 	bclk_parent_rate = i2s->variant->get_bclk_parent_rate(i2s);
 	bclk_div = sun4i_i2s_get_bclk_div(i2s, bclk_parent_rate,
