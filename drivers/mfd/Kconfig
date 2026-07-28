@@ -230,6 +230,15 @@ config MFD_AC200_EPHY_CTL
 	  and provides its internal clock gate and reset controls. The PHY's
 	  MDIO registers are handled by the separate AC200 Ethernet PHY driver.
 
+config MFD_AC200_TVE
+	tristate "X-Powers AC200 TV encoder"
+	depends on MFD_AC200
+	help
+	  Enable this to support the composite video encoder in the AC200
+	  mixed-signal companion IC. For now the driver only brings the
+	  encoder up and drives its built-in colour bar generator, so that
+	  the analog output can be tested.
+
 config MFD_AXP20X
 	tristate
 	select MFD_CORE
