@@ -7,6 +7,7 @@
 #include <dt-bindings/clock/sun6i-rtc.h>
 #include <dt-bindings/clock/sun8i-de2.h>
 #include <dt-bindings/clock/sun8i-tcon-top.h>
+#include <dt-bindings/mfd/x-powers,ac200.h>
 #include <dt-bindings/reset/sun50i-h6-ccu.h>
 #include <dt-bindings/reset/sun50i-h6-r-ccu.h>
 #include <dt-bindings/reset/sun8i-de2.h>
@@ -728,6 +729,12 @@
 				ac200_codec: codec {
 					#sound-dai-cells = <0>;
 					compatible = "x-powers,ac200-codec";
+					status = "disabled";
+				};
+
+				ac200_tve: tv-encoder {
+					compatible = "x-powers,ac200-tve";
+					interrupts = <AC200_IRQ_TVE>;
 					status = "disabled";
 				};
 			};
