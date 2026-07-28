@@ -12,6 +12,7 @@
 #include <linux/of.h>
 #include <linux/phy.h>
 #include <linux/pse-pd/pse.h>
+#include <linux/regulator/consumer.h>
 
 MODULE_AUTHOR("Calvin Johnson <calvin.johnson@oss.nxp.com>");
 MODULE_LICENSE("GPL");
@@ -67,6 +68,37 @@ put_node:
 	return mii_ts;
 }
 
+static int
+fwnode_regulator_get_bulk_enabled(struct device *dev,
+				  struct fwnode_handle *fwnode,
+				  struct regulator_bulk_data **consumers)
+{
+	struct device_node *np;
+	int ret, reg_cnt;
+
+	np = to_of_node(fwnode);
+	if (!np)
+		return 0;
+
+	reg_cnt = of_regulator_bulk_get_all(dev, np, consumers);
+	if (reg_cnt <= 0) {
+		ret = reg_cnt;
+		goto clean_consumers;
+	}
+
+	ret = regulator_bulk_enable(reg_cnt, *consumers);
+	if (ret)
+		goto clean_consumers;
+
+	return reg_cnt;
+
+clean_consumers:
+	kfree(*consumers);
+	*consumers = NULL;
+
+	return ret;
+}
+
 int fwnode_mdiobus_phy_device_register(struct mii_bus *mdio,
 				       struct phy_device *phy,
 				       struct fwnode_handle *child, u32 addr)
@@ -117,16 +149,24 @@ EXPORT_SYMBOL(fwnode_mdiobus_phy_device_register);
 int fwnode_mdiobus_register_phy(struct mii_bus *bus,
 				struct fwnode_handle *child, u32 addr)
 {
+	struct regulator_bulk_data *consumers = NULL;
 	struct mii_timestamper *mii_ts = NULL;
 	struct pse_control *psec = NULL;
 	struct phy_device *phy;
+	int rc, reg_cnt;
 	bool is_c45;
 	u32 phy_id;
-	int rc;
 
 	mii_ts = fwnode_find_mii_timestamper(child);
 	if (IS_ERR(mii_ts))
 		return PTR_ERR(mii_ts);
+
+	/* The PHY has to be powered before its identity can be read. */
+	reg_cnt = fwnode_regulator_get_bulk_enabled(&bus->dev, child, &consumers);
+	if (reg_cnt < 0) {
+		rc = reg_cnt;
+		goto clean_mii_ts;
+	}
 
 	is_c45 = fwnode_device_is_compatible(child, "ethernet-phy-ieee802.3-c45");
 	if (is_c45 || fwnode_get_phy_id(child, &phy_id))
@@ -135,8 +175,11 @@ int fwnode_mdiobus_register_phy(struct mii_bus *bus,
 		phy = phy_device_create(bus, addr, phy_id, 0, NULL);
 	if (IS_ERR(phy)) {
 		rc = PTR_ERR(phy);
-		goto clean_mii_ts;
+		goto clean_regulators;
 	}
+
+	phy->regulator_cnt = reg_cnt;
+	phy->consumers = consumers;
 
 	if (is_acpi_node(child)) {
 		phy->irq = bus->irq[addr];
@@ -181,6 +224,10 @@ unregister_phy:
 		phy_device_remove(phy);
 clean_phy:
 	phy_device_free(phy);
+clean_regulators:
+	if (reg_cnt > 0)
+		regulator_bulk_disable(reg_cnt, consumers);
+	kfree(consumers);
 clean_mii_ts:
 	unregister_mii_timestamper(mii_ts);
 

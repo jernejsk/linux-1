@@ -328,6 +328,7 @@ struct device;
 struct kernel_hwtstamp_config;
 struct phylink;
 struct phy_port;
+struct regulator_bulk_data;
 struct sfp_bus;
 struct sfp_upstream_ops;
 struct sk_buff;
@@ -598,6 +599,9 @@ struct phy_oatc14_sqi_capability {
  * @adjust_link: Callback for the enet controller to respond to changes: in the
  *               link state.
  * @phy_link_change: Callback for phylink for notification of link change
+ * @regulator_cnt: Number of supplies described in the PHY's firmware node
+ * @consumers: Supplies described in the PHY's firmware node, enabled for as
+ *             long as the PHY is bound
  * @macsec_ops: MACsec offloading ops.
  *
  * @speed: Current link speed
@@ -803,6 +807,9 @@ struct phy_device {
 
 	void (*phy_link_change)(struct phy_device *phydev, bool up);
 	void (*adjust_link)(struct net_device *dev);
+
+	int regulator_cnt;
+	struct regulator_bulk_data *consumers;
 
 #if IS_ENABLED(CONFIG_MACSEC)
 	/* MACsec management functions */
