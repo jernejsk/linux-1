@@ -34,6 +34,17 @@
 		};
 	};
 
+	cvbs-connector {
+		compatible = "composite-video-connector";
+		label = "AV";
+
+		port {
+			cvbs_con_in: endpoint {
+				remote-endpoint = <&tve_out_cvbs>;
+			};
+		};
+	};
+
 	ext_osc32k: ext-osc32k-clk {
 		#clock-cells = <0>;
 		compatible = "fixed-clock";
@@ -120,6 +131,31 @@
 	status = "okay";
 };
 
+&ac200_tve {
+	status = "okay";
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@0 {
+			reg = <0>;
+
+			tve_in_tcon_lcd: endpoint {
+				remote-endpoint = <&tcon_lcd_out_tve>;
+			};
+		};
+
+		port@1 {
+			reg = <1>;
+
+			tve_out_cvbs: endpoint {
+				remote-endpoint = <&cvbs_con_in>;
+			};
+		};
+	};
+};
+
 &ac200_sound {
 	simple-audio-card,widgets = "Microphone", "Onboard Microphone",
 				    "Line", "Line Out";
@@ -196,6 +232,18 @@
 
 &i2s3 {
 	status = "okay";
+};
+
+&tcon_lcd {
+	pinctrl-names = "default";
+	pinctrl-0 = <&ccir_pins>;
+	status = "okay";
+};
+
+&tcon_lcd_out {
+	tcon_lcd_out_tve: endpoint {
+		remote-endpoint = <&tve_in_tcon_lcd>;
+	};
 };
 
 &mmc0 {
