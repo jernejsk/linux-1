@@ -263,7 +263,10 @@ int simple_util_parse_clk(struct device *dev,
 			  struct snd_soc_dai_link_component *dlc)
 {
 	struct clk *clk;
+	int num, ret;
 	u32 val;
+
+	num = of_property_count_u32_elems(node, "system-clock-frequency");
 
 	/*
 	 * Parse dai->sysclk come from "clocks = <&xxx>"
@@ -278,6 +281,25 @@ int simple_util_parse_clk(struct device *dev,
 		simple_dai->sysclk = clk_get_rate(clk);
 
 		simple_dai->clk = clk;
+	} else if (num > 1) {
+		/*
+		 * A codec that runs from one of a few fixed clocks, typically
+		 * one per sample rate family, needs the right one selecting
+		 * for the rate in use. Leave the sysclk unset so that it is
+		 * only ever set per stream, from hw_params().
+		 */
+		simple_dai->sysclks = devm_kcalloc(dev, num,
+						   sizeof(*simple_dai->sysclks),
+						   GFP_KERNEL);
+		if (!simple_dai->sysclks)
+			return -ENOMEM;
+
+		ret = of_property_read_u32_array(node, "system-clock-frequency",
+						 simple_dai->sysclks, num);
+		if (ret < 0)
+			return ret;
+
+		simple_dai->num_sysclks = num;
 	} else if (!of_property_read_u32(node, "system-clock-frequency", &val)) {
 		simple_dai->sysclk = val;
 		simple_dai->clk_fixed = true;
@@ -383,7 +405,8 @@ void simple_util_shutdown(struct snd_pcm_substream *substream)
 	for_each_prop_dai_cpu(props, i, dai) {
 		struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, i);
 
-		if (props->mclk_fs && !dai->clk_fixed && !snd_soc_dai_active(cpu_dai))
+		if ((props->mclk_fs || dai->num_sysclks) && !dai->clk_fixed &&
+		    !snd_soc_dai_active(cpu_dai))
 			snd_soc_dai_set_sysclk(cpu_dai, 0, 0, dai->clk_direction);
 
 		simple_clk_disable(dai);
@@ -391,7 +414,8 @@ void simple_util_shutdown(struct snd_pcm_substream *substream)
 	for_each_prop_dai_codec(props, i, dai) {
 		struct snd_soc_dai *codec_dai = snd_soc_rtd_to_codec(rtd, i);
 
-		if (props->mclk_fs && !dai->clk_fixed && !snd_soc_dai_active(codec_dai))
+		if ((props->mclk_fs || dai->num_sysclks) && !dai->clk_fixed &&
+		    !snd_soc_dai_active(codec_dai))
 			snd_soc_dai_set_sysclk(codec_dai, 0, 0, dai->clk_direction);
 
 		simple_clk_disable(dai);
@@ -460,6 +484,39 @@ static int simple_set_tdm(struct simple_util_priv *priv,
 	return simple_ret(priv, ret);
 }
 
+static int simple_set_sysclk_for_rate(struct snd_soc_pcm_runtime *rtd,
+				      struct snd_soc_dai *sdai,
+				      struct simple_util_dai *pdai,
+				      unsigned int rate)
+{
+	unsigned int i;
+	int ret;
+
+	if (!pdai || !pdai->num_sysclks)
+		return 0;
+
+	/*
+	 * Pick the clock the rate can be derived from. Codecs that run from a
+	 * fixed clock divide it down internally, so the one that divides the
+	 * rate evenly is the one belonging to its family.
+	 */
+	for (i = 0; i < pdai->num_sysclks; i++) {
+		if (pdai->sysclks[i] % rate)
+			continue;
+
+		ret = snd_soc_dai_set_sysclk(sdai, 0, pdai->sysclks[i],
+					     pdai->clk_direction);
+		if (ret && ret != -ENOTSUPP)
+			return ret;
+
+		return 0;
+	}
+
+	dev_err(rtd->dev, "no system clock for %u Hz on %s\n", rate, pdai->name);
+
+	return -EINVAL;
+}
+
 int simple_util_hw_params(struct snd_pcm_substream *substream,
 			  struct snd_pcm_hw_params *params)
 {
@@ -471,6 +528,22 @@ int simple_util_hw_params(struct snd_pcm_substream *substream,
 	enum simple_util_sysclk_order order = props->sysclk_order;
 	unsigned int mclk, mclk_fs = 0;
 	int i, ret;
+
+	for_each_rtd_codec_dais(rtd, i, sdai) {
+		ret = simple_set_sysclk_for_rate(rtd, sdai,
+						 simple_props_to_dai_codec(props, i),
+						 params_rate(params));
+		if (ret < 0)
+			goto end;
+	}
+
+	for_each_rtd_cpu_dais(rtd, i, sdai) {
+		ret = simple_set_sysclk_for_rate(rtd, sdai,
+						 simple_props_to_dai_cpu(props, i),
+						 params_rate(params));
+		if (ret < 0)
+			goto end;
+	}
 
 	if (props->mclk_fs)
 		mclk_fs = props->mclk_fs;

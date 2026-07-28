@@ -25,6 +25,8 @@ struct simple_util_tdm_width_map {
 struct simple_util_dai {
 	const char *name;
 	unsigned int sysclk;
+	unsigned int *sysclks;
+	unsigned int num_sysclks;
 	int clk_direction;
 	int slots;
 	int slot_width;
