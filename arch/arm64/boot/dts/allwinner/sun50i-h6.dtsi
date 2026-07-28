@@ -37,18 +37,18 @@
 		/*
 		 * The AC200 runs its audio block straight off MCLK, dividing
 		 * it internally, so MCLK is fixed rather than a multiple of
-		 * the sample rate. 24.576MHz covers the 48kHz family; the
-		 * 44.1kHz family would need 22.5792MHz instead.
+		 * the sample rate. One clock per sample rate family: 24.576MHz
+		 * for the 48kHz one and 22.5792MHz for the 44.1kHz one.
 		 */
 		simple-audio-card,cpu {
 			sound-dai = <&i2s3>;
-			system-clock-frequency = <24576000>;
+			system-clock-frequency = <24576000>, <22579200>;
 			system-clock-direction-out;
 		};
 
 		simple-audio-card,codec {
 			sound-dai = <&ac200_codec>;
-			system-clock-frequency = <24576000>;
+			system-clock-frequency = <24576000>, <22579200>;
 		};
 	};
 
