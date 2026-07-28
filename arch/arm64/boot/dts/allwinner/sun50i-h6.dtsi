@@ -403,6 +403,13 @@
 			interrupt-controller;
 			#interrupt-cells = <3>;
 
+			ccir_pins: ccir-pins {
+				pins = "PB0", "PB1", "PB2", "PB3", "PB4",
+				       "PB5", "PB6", "PB7", "PB8", "PB9",
+				       "PB10", "PB11";
+				function = "ccir";
+			};
+
 			ext_rgmii_pins: rgmii-pins {
 				pins = "PD0", "PD1", "PD2", "PD3", "PD4",
 				       "PD5", "PD7", "PD8", "PD9", "PD10",
@@ -1026,6 +1033,11 @@
 					#size-cells = <0>;
 					reg = <1>;
 
+					tcon_top_mixer0_out_tcon_lcd: endpoint@0 {
+						reg = <0>;
+						remote-endpoint = <&tcon_lcd_in_tcon_top_mixer0>;
+					};
+
 					tcon_top_mixer0_out_tcon_tv: endpoint@2 {
 						reg = <2>;
 						remote-endpoint = <&tcon_tv_in_tcon_top_mixer0>;
@@ -1049,6 +1061,38 @@
 					tcon_top_hdmi_out_hdmi: endpoint {
 						remote-endpoint = <&hdmi_in_tcon_top>;
 					};
+				};
+			};
+		};
+
+		tcon_lcd: lcd-controller@6511000 {
+			compatible = "allwinner,sun50i-h6-tcon-lcd";
+			reg = <0x06511000 0x1000>;
+			interrupts = <GIC_SPI 65 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ccu CLK_BUS_TCON_LCD0>,
+				 <&ccu CLK_TCON_LCD0>;
+			clock-names = "ahb",
+				      "tcon-ch0";
+			clock-output-names = "tcon-pixel-clock";
+			#clock-cells = <0>;
+			resets = <&ccu RST_BUS_TCON_LCD0>;
+			reset-names = "lcd";
+			status = "disabled";
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				tcon_lcd_in: port@0 {
+					reg = <0>;
+
+					tcon_lcd_in_tcon_top_mixer0: endpoint {
+						remote-endpoint = <&tcon_top_mixer0_out_tcon_lcd>;
+					};
+				};
+
+				tcon_lcd_out: port@1 {
+					reg = <1>;
 				};
 			};
 		};
