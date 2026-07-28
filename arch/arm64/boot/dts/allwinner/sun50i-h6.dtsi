@@ -730,6 +730,11 @@
 					compatible = "x-powers,ac200-codec";
 					status = "disabled";
 				};
+
+				ac200_tve: tv-encoder {
+					compatible = "x-powers,ac200-tve";
+					status = "disabled";
+				};
 			};
 		};
 
