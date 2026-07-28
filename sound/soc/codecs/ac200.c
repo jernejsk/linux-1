@@ -711,7 +711,12 @@ static int ac200_codec_set_sysclk(struct snd_soc_dai *dai, int clk_id,
 {
 	struct ac200_codec *priv = snd_soc_dai_get_drvdata(dai);
 
-	if (freq != AC200_SYSCLK_48K && freq != AC200_SYSCLK_44K1) {
+	/*
+	 * Zero means the machine has no clock for the encoder at the moment,
+	 * which is what a card that picks one per sample rate reports between
+	 * streams. hw_params() sorts the rate out once one is set again.
+	 */
+	if (freq && freq != AC200_SYSCLK_48K && freq != AC200_SYSCLK_44K1) {
 		dev_err(dai->dev, "Unsupported MCLK rate %u\n", freq);
 		return -EINVAL;
 	}
