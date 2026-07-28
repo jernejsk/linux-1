@@ -32,7 +32,15 @@ definitions:
       If a clock is specified and a multiplication factor is given with
       mclk-fs, the clock will be set to the calculated mclk frequency
       when the stream starts.
-    $ref: /schemas/types.yaml#/definitions/uint32
+
+      More than one frequency may be given for a device that runs from one
+      of a set of fixed clocks, such as a codec with a clock per sample rate
+      family that divides it down internally. The frequency the sample rate
+      divides evenly into is selected when the stream starts, and the device
+      is left without a system clock until then.
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    minItems: 1
+    maxItems: 2
 
   system-clock-direction-out:
     description: |
