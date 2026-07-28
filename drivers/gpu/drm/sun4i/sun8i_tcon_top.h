@@ -14,6 +14,16 @@
 #define TCON_TOP_PORT_SEL_REG		0x1C
 #define TCON_TOP_PORT_DE0_MSK			GENMASK(1, 0)
 #define TCON_TOP_PORT_DE1_MSK			GENMASK(5, 4)
+/*
+ * Both fields index the same list of TCONs, which is the same on all
+ * supported SoCs: 0 - TCON_LCD0, 1 - TCON_LCD1, 2 - TCON_TV0, 3 - TCON_TV1.
+ * Indices of TCONs which are not implemented select nothing.
+ */
+#define TCON_TOP_PORT_TCON_NUM			4
+
+/* Mixer output ports, the endpoint id inside them is the TCON index. */
+#define TCON_TOP_MIXER0_OUT_PORT		1
+#define TCON_TOP_MIXER1_OUT_PORT		3
 
 #define TCON_TOP_GATE_SRC_REG		0x20
 #define TCON_TOP_HDMI_SRC_MSK			GENMASK(29, 28)
@@ -28,6 +38,9 @@ struct sun8i_tcon_top {
 	struct clk_hw_onecell_data	*clk_data;
 	void __iomem			*regs;
 	struct reset_control		*rst;
+
+	/* bitmap of TCON indices which have a TCON attached to them */
+	unsigned int			tcon_map;
 
 	/*
 	 * spinlock is used to synchronize access to same
