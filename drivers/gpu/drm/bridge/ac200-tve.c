@@ -4,11 +4,11 @@
  *
  * Copyright (c) 2026 Jernej Skrabec <jernej.skrabec@gmail.com>
  *
- * The encoder normally takes CCIR656 video from the SoC and turns it into
- * composite video. It also contains a standard colour bar generator, which
- * replaces that input, and that is all this driver drives for now: it brings
- * the encoder up and puts the colour bars on the CVBS output, so that the
- * analog side can be tested before the CCIR656 input is wired up.
+ * The encoder takes CCIR656 video from the SoC and turns it into composite
+ * video, so it shows up as a DRM bridge behind the TCON driving that
+ * interface. It also contains a standard colour bar generator which replaces
+ * that input, kept reachable through debugfs for testing the analog side on
+ * its own.
  *
  * The register documentation covers the encoder itself, but the clock tree
  * setup and the second register block at 0x4100 are undocumented, so those
@@ -34,6 +34,14 @@
 #include <linux/platform_device.h>
 #include <linux/property.h>
 #include <linux/regmap.h>
+
+#include <drm/drm_atomic_state_helper.h>
+#include <drm/drm_bridge.h>
+#include <drm/drm_atomic_helper.h>
+#include <drm/drm_connector.h>
+#include <drm/drm_crtc_helper.h>
+#include <drm/drm_modes.h>
+#include <drm/drm_probe_helper.h>
 
 /* system registers */
 #define AC200_SYS_PLL_CTL0		0x000c
@@ -486,11 +494,18 @@ static const struct reg_sequence ac200_tve_plug_regs[] = {
 struct ac200_tve {
 	struct device *dev;
 	struct regmap *regmap;
+	struct drm_bridge bridge;
+	struct drm_connector connector;
 	struct mutex lock;	/* serialises the state below */
 	enum ac200_tve_mode mode;
 	bool test_pattern;
 	bool enabled;
 };
+
+static inline struct ac200_tve *bridge_to_ac200_tve(struct drm_bridge *bridge)
+{
+	return container_of(bridge, struct ac200_tve, bridge);
+}
 
 static int ac200_tve_calibrate(struct ac200_tve *tve)
 {
@@ -791,6 +806,137 @@ static int ac200_tve_plug_show(struct seq_file *s, void *data)
 }
 DEFINE_SHOW_ATTRIBUTE(ac200_tve_plug);
 
+static int ac200_tve_connector_get_modes(struct drm_connector *connector)
+{
+	return drm_connector_helper_tv_get_modes(connector);
+}
+
+static const struct drm_connector_helper_funcs ac200_tve_con_helper_funcs = {
+	.atomic_check	= drm_atomic_helper_connector_tv_check,
+	.get_modes	= ac200_tve_connector_get_modes,
+};
+
+static void ac200_tve_connector_reset(struct drm_connector *connector)
+{
+	drm_atomic_helper_connector_reset(connector);
+	drm_atomic_helper_connector_tv_reset(connector);
+}
+
+static const struct drm_connector_funcs ac200_tve_con_funcs = {
+	.fill_modes		= drm_helper_probe_single_connector_modes,
+	.destroy		= drm_connector_cleanup,
+	.reset			= ac200_tve_connector_reset,
+	.atomic_duplicate_state	= drm_atomic_helper_connector_duplicate_state,
+	.atomic_destroy_state	= drm_atomic_helper_connector_destroy_state,
+};
+
+static int ac200_tve_bridge_attach(struct drm_bridge *bridge,
+				   struct drm_encoder *encoder,
+				   enum drm_bridge_attach_flags flags)
+{
+	struct ac200_tve *tve = bridge_to_ac200_tve(bridge);
+	int ret;
+
+	if (flags & DRM_BRIDGE_ATTACH_NO_CONNECTOR)
+		return 0;
+
+	drm_connector_helper_add(&tve->connector,
+				 &ac200_tve_con_helper_funcs);
+
+	ret = drm_connector_init(encoder->dev, &tve->connector,
+				 &ac200_tve_con_funcs,
+				 DRM_MODE_CONNECTOR_Composite);
+	if (ret)
+		return ret;
+
+	tve->connector.interlace_allowed = true;
+
+	ret = drm_mode_create_tv_properties(encoder->dev,
+					    BIT(DRM_MODE_TV_MODE_NTSC) |
+					    BIT(DRM_MODE_TV_MODE_PAL));
+	if (ret)
+		return ret;
+
+	/*
+	 * drm_connector_helper_tv_get_modes() reads the default value of this
+	 * property off the connector, so it has to be attached here or the
+	 * connector ends up reporting no modes at all.
+	 */
+	drm_object_attach_property(&tve->connector.base,
+				   encoder->dev->mode_config.tv_mode_property,
+				   tve->mode == AC200_TVE_NTSC ?
+				   DRM_MODE_TV_MODE_NTSC : DRM_MODE_TV_MODE_PAL);
+
+	drm_connector_attach_tv_margin_properties(&tve->connector);
+
+	return drm_connector_attach_encoder(&tve->connector, encoder);
+}
+
+static enum drm_mode_status
+ac200_tve_bridge_mode_valid(struct drm_bridge *bridge,
+			    const struct drm_display_info *info,
+			    const struct drm_display_mode *mode)
+{
+	/* Only the two interlaced standards the encoder knows about. */
+	if (!(mode->flags & DRM_MODE_FLAG_INTERLACE))
+		return MODE_NO_INTERLACE;
+
+	if (mode->hdisplay != 720)
+		return MODE_BAD_HVALUE;
+
+	if (mode->vdisplay != 480 && mode->vdisplay != 576)
+		return MODE_BAD_VVALUE;
+
+	return MODE_OK;
+}
+
+static void ac200_tve_bridge_atomic_enable(struct drm_bridge *bridge,
+					   struct drm_atomic_commit *state)
+{
+	struct ac200_tve *tve = bridge_to_ac200_tve(bridge);
+	struct drm_connector_state *conn_state;
+	struct drm_connector *connector;
+
+	connector = drm_atomic_get_new_connector_for_encoder(state,
+							     bridge->encoder);
+	if (connector) {
+		conn_state = drm_atomic_get_new_connector_state(state,
+								connector);
+		guard(mutex)(&tve->lock);
+		tve->mode = conn_state->tv.mode == DRM_MODE_TV_MODE_NTSC ?
+			    AC200_TVE_NTSC : AC200_TVE_PAL;
+		/* Real video from now on, so drop the colour bars. */
+		tve->test_pattern = false;
+		if (ac200_tve_enable(tve))
+			dev_err(tve->dev, "Failed to enable encoder\n");
+		return;
+	}
+
+	guard(mutex)(&tve->lock);
+	if (ac200_tve_enable(tve))
+		dev_err(tve->dev, "Failed to enable encoder\n");
+}
+
+static void ac200_tve_bridge_atomic_disable(struct drm_bridge *bridge,
+					    struct drm_atomic_commit *state)
+{
+	struct ac200_tve *tve = bridge_to_ac200_tve(bridge);
+
+	guard(mutex)(&tve->lock);
+	if (ac200_tve_disable(tve))
+		dev_err(tve->dev, "Failed to disable encoder\n");
+}
+
+static const struct drm_bridge_funcs ac200_tve_bridge_funcs = {
+	.attach			= ac200_tve_bridge_attach,
+	.mode_valid		= ac200_tve_bridge_mode_valid,
+	.atomic_enable		= ac200_tve_bridge_atomic_enable,
+	.atomic_disable		= ac200_tve_bridge_atomic_disable,
+	.atomic_duplicate_state	= drm_atomic_helper_bridge_duplicate_state,
+	.atomic_destroy_state	= drm_atomic_helper_bridge_destroy_state,
+	.atomic_reset		= drm_atomic_helper_bridge_reset,
+};
+
 static void ac200_tve_debugfs_remove(void *data)
 {
 	debugfs_remove_recursive(data);
@@ -828,9 +974,10 @@ static int ac200_tve_probe(struct platform_device *pdev)
 	struct ac200_tve *tve;
 	int ret;
 
-	tve = devm_kzalloc(dev, sizeof(*tve), GFP_KERNEL);
-	if (!tve)
-		return -ENOMEM;
+	tve = devm_drm_bridge_alloc(dev, struct ac200_tve, bridge,
+				    &ac200_tve_bridge_funcs);
+	if (IS_ERR(tve))
+		return PTR_ERR(tve);
 
 	tve->dev = dev;
 	tve->regmap = dev_get_regmap(dev->parent, NULL);
@@ -866,21 +1013,22 @@ static int ac200_tve_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, ret,
 				     "Failed to set up cable detection\n");
 
-	scoped_guard(mutex, &tve->lock) {
-		ret = ac200_tve_enable(tve);
-		if (ret)
-			return dev_err_probe(dev, ret,
-					     "Failed to enable encoder\n");
-	}
-
 	ret = ac200_tve_debugfs_init(tve);
 	if (ret)
 		return ret;
 
-	dev_info(dev, "%s composite output enabled, showing colour bars\n",
-		 ac200_tve_timings[tve->mode].name);
+	/*
+	 * Put the DAC into the detection regime, which is also where it waits
+	 * for the display pipeline to hand over a mode.
+	 */
+	scoped_guard(mutex, &tve->lock)
+		ac200_tve_disable(tve);
 
-	return 0;
+	tve->bridge.of_node = dev->of_node;
+	tve->bridge.type = DRM_MODE_CONNECTOR_Composite;
+	tve->bridge.interlace_allowed = true;
+
+	return devm_drm_bridge_add(dev, &tve->bridge);
 }
 
 static const struct of_device_id ac200_tve_match[] = {

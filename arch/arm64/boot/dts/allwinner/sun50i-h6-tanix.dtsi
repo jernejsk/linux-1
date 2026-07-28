@@ -112,6 +112,12 @@
 
 &ac200_tve {
 	status = "okay";
+
+	port {
+		tve_in_tcon_lcd: endpoint {
+			remote-endpoint = <&tcon_lcd_out_tve>;
+		};
+	};
 };
 
 &ac200_sound {
@@ -169,6 +175,18 @@
 
 &i2s3 {
 	status = "okay";
+};
+
+&tcon_lcd {
+	pinctrl-names = "default";
+	pinctrl-0 = <&ccir_pins>;
+	status = "okay";
+};
+
+&tcon_lcd_out {
+	tcon_lcd_out_tve: endpoint {
+		remote-endpoint = <&tve_in_tcon_lcd>;
+	};
 };
 
 &mdio {

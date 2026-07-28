@@ -129,6 +129,10 @@ properties:
       compatible:
         const: x-powers,ac200-tve
 
+      port:
+        $ref: /schemas/graph.yaml#/properties/port
+        description: Input from the display pipeline, carrying CCIR656.
+
     required:
       - compatible
 
