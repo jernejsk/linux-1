@@ -102,6 +102,14 @@ struct drm_bridge_connector {
 	 */
 	struct drm_bridge *bridge_hdmi;
 	/**
+	 * @bridge_tv:
+	 *
+	 * The bridge in the chain that encodes an analog TV standard, if any.
+	 * It is used to decide whether the connector carries the TV mode and
+	 * TV margin properties.
+	 */
+	struct drm_bridge *bridge_tv;
+	/**
 	 * @bridge_hdmi_audio:
 	 *
 	 * The bridge in the chain that implements necessary support for the
@@ -274,6 +282,8 @@ static void drm_bridge_connector_reset(struct drm_connector *connector)
 	if (bridge_connector->bridge_hdmi)
 		__drm_atomic_helper_connector_hdmi_reset(connector,
 							 connector->state);
+	if (bridge_connector->bridge_tv)
+		drm_atomic_helper_connector_tv_reset(connector);
 }
 
 static const struct drm_connector_funcs drm_bridge_connector_funcs = {
@@ -378,6 +388,9 @@ static int drm_bridge_connector_atomic_check(struct drm_connector *connector,
 
 	if (bridge_connector->bridge_hdmi)
 		return drm_atomic_helper_connector_hdmi_check(connector, state);
+
+	if (bridge_connector->bridge_tv)
+		return drm_atomic_helper_connector_tv_check(connector, state);
 
 	return 0;
 }
@@ -766,6 +779,7 @@ static void drm_bridge_connector_put_bridges(struct drm_device *dev, void *data)
 	drm_bridge_put(bridge_connector->bridge_hdmi_audio);
 	drm_bridge_put(bridge_connector->bridge_dp_audio);
 	drm_bridge_put(bridge_connector->bridge_hdmi_cec);
+	drm_bridge_put(bridge_connector->bridge_tv);
 }
 
 /**
@@ -851,6 +865,13 @@ struct drm_connector *drm_bridge_connector_init(struct drm_device *drm,
 			drm_bridge_put(bridge_connector->bridge_detect);
 			bridge_connector->bridge_detect = drm_bridge_get(bridge);
 		}
+		if (bridge->supported_tv_modes) {
+			if (bridge_connector->bridge_tv)
+				return ERR_PTR(-EBUSY);
+
+			bridge_connector->bridge_tv = drm_bridge_get(bridge);
+		}
+
 		if (bridge->ops & DRM_BRIDGE_OP_HDMI) {
 			if (bridge_connector->bridge_hdmi)
 				return ERR_PTR(-EBUSY);
@@ -1041,6 +1062,26 @@ struct drm_connector *drm_bridge_connector_init(struct drm_device *drm,
 						       bridge->hdmi_cec_dev);
 		if (ret)
 			return ERR_PTR(ret);
+	}
+
+	if (bridge_connector->bridge_tv) {
+		unsigned int tv_modes =
+			bridge_connector->bridge_tv->supported_tv_modes;
+
+		ret = drm_mode_create_tv_properties(drm, tv_modes);
+		if (ret)
+			return ERR_PTR(ret);
+
+		/*
+		 * drm_connector_helper_tv_get_modes() takes the standard to
+		 * list first from the default value of this property, so the
+		 * lowest numbered supported one wins unless userspace or the
+		 * video= command line says otherwise.
+		 */
+		drm_object_attach_property(&connector->base,
+					   drm->mode_config.tv_mode_property,
+					   ffs(tv_modes) - 1);
+		drm_connector_attach_tv_margin_properties(connector);
 	}
 
 	drm_connector_helper_add(connector, &drm_bridge_connector_helper_funcs);

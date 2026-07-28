@@ -1195,6 +1195,15 @@ struct drm_bridge {
 	unsigned int supported_formats;
 
 	/**
+	 * @supported_tv_modes: Bitmask of @drm_connector_tv_mode listing the
+	 * analog TV standards the bridge can encode. A bridge that sets this
+	 * makes drm_bridge_connector_init() create the TV mode and TV margin
+	 * properties and initialise their state, which an analog TV output
+	 * needs for drm_connector_helper_tv_get_modes() to report modes.
+	 */
+	unsigned int supported_tv_modes;
+
+	/**
 	 * @max_bpc: Maximum bits per char the HDMI bridge supports. Allowed
 	 * values are 8, 10 and 12. This is only relevant if
 	 * @DRM_BRIDGE_OP_HDMI is set.
