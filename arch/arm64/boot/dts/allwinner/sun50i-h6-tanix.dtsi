@@ -110,6 +110,11 @@
 	status = "okay";
 };
 
+&ac200_tve {
+	x-powers,tv-mode = "pal";
+	status = "okay";
+};
+
 &ac200_sound {
 	simple-audio-card,widgets = "Line", "Line Out";
 	simple-audio-card,routing = "Line Out", "LINEOUT";
