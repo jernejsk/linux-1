@@ -70,6 +70,12 @@ rtw88_8188f-objs		:= rtw8188f.o rtw8188f_table.o
 obj-$(CONFIG_RTW88_8189FS)	+= rtw88_8189fs.o
 rtw88_8189fs-objs		:= rtw8189fs.o
 
+obj-$(CONFIG_RTW88_8188E)	+= rtw88_8188e.o
+rtw88_8188e-objs		:= rtw8188e.o rtw8188e_table.o
+
+obj-$(CONFIG_RTW88_8189ES)	+= rtw88_8189es.o
+rtw88_8189es-objs		:= rtw8189es.o
+
 obj-$(CONFIG_RTW88_8723DE)	+= rtw88_8723de.o
 rtw88_8723de-objs		:= rtw8723de.o
 

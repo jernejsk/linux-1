@@ -22749,6 +22749,14 @@ F:	drivers/net/wireless/realtek/rtw88/rtw8188f*.c
 F:	drivers/net/wireless/realtek/rtw88/rtw8188f*.h
 F:	drivers/net/wireless/realtek/rtw88/rtw8189fs.c
 
+REALTEK RTL8188E WIRELESS DRIVER (rtw88)
+M:	Jernej Skrabec <jernej.skrabec@gmail.com>
+L:	linux-wireless@vger.kernel.org
+S:	Maintained
+F:	drivers/net/wireless/realtek/rtw88/rtw8188e*.c
+F:	drivers/net/wireless/realtek/rtw88/rtw8188e*.h
+F:	drivers/net/wireless/realtek/rtw88/rtw8189es.c
+
 REALTEK RTL8723B WIRELESS DRIVER (rtw88)
 M:	Luka Gejak <luka.gejak@linux.dev>
 L:	linux-wireless@vger.kernel.org
