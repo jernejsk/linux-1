@@ -257,7 +257,8 @@ static void rtw_rx_fill_rx_status(struct rtw_dev *rtwdev,
 	 * Rtl8723cs and rtl8723bs drivers check for size < 14 or size > 8192
 	 * and simply drop the packet.
 	 */
-	if ((rtwdev->chip->id == RTW_CHIP_TYPE_8703B || rtw_is_8723bs(rtwdev)) &&
+	if ((rtwdev->chip->id == RTW_CHIP_TYPE_8703B ||
+	     rtw_sdio_is_legacy_trx(rtwdev)) &&
 	    pkt_stat->pkt_len == 0) {
 		rx_status->flag |= RX_FLAG_NO_PSDU;
 		rtw_dbg(rtwdev, RTW_DBG_RX, "zero length packet");
