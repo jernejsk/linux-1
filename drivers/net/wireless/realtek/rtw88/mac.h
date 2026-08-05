@@ -6,7 +6,7 @@
 #define __RTW_MAC_H__
 
 #define RTW_HW_PORT_NUM		5
-#define cut_version_to_mask(cut) (0x1 << ((cut) + 1))
+#define cut_version_to_mask(cut) (0x1U << ((cut) + 1))
 #define DDMA_POLLING_COUNT	1000
 #define C2H_PKT_BUF		256
 #define REPORT_BUF		128

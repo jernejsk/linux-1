@@ -32,8 +32,9 @@ void rtw_tx_stats(struct rtw_dev *rtwdev, struct ieee80211_vif *vif,
 	}
 }
 
-void rtw_tx_fill_tx_desc(struct rtw_dev *rtwdev,
-			 struct rtw_tx_pkt_info *pkt_info, struct sk_buff *skb)
+static void rtw_tx_fill_tx_desc_common(struct rtw_dev *rtwdev,
+				       struct rtw_tx_pkt_info *pkt_info,
+				       struct sk_buff *skb)
 {
 	struct rtw_tx_desc *tx_desc = (struct rtw_tx_desc *)skb->data;
 	bool more_data = false;
@@ -90,6 +91,15 @@ void rtw_tx_fill_tx_desc(struct rtw_dev *rtwdev,
 	if (pkt_info->tim_offset)
 		tx_desc->w9 |= le32_encode_bits(1, RTW_TX_DESC_W9_TIM_EN) |
 			       le32_encode_bits(pkt_info->tim_offset, RTW_TX_DESC_W9_TIM_OFFSET);
+}
+
+void rtw_tx_fill_tx_desc(struct rtw_dev *rtwdev,
+			 struct rtw_tx_pkt_info *pkt_info, struct sk_buff *skb)
+{
+	if (rtwdev->chip->ops->fill_tx_desc)
+		rtwdev->chip->ops->fill_tx_desc(rtwdev, pkt_info, skb);
+	else
+		rtw_tx_fill_tx_desc_common(rtwdev, pkt_info, skb);
 }
 EXPORT_SYMBOL(rtw_tx_fill_tx_desc);
 
@@ -261,6 +271,30 @@ void rtw_tx_report_handle(struct rtw_dev *rtwdev, struct sk_buff *skb, int src)
 	}
 	spin_unlock_irqrestore(&tx_report->q_lock, flags);
 }
+
+void rtw_tx_report_handle_8188e(struct rtw_dev *rtwdev, const u8 *report,
+				unsigned int len)
+{
+	struct rtw_tx_report *tx_report = &rtwdev->tx_report;
+	struct sk_buff *cur, *tmp;
+	unsigned long flags;
+	u8 *seq;
+
+	if (len < 8 || !(report[0] & BIT(7)))
+		return;
+
+	spin_lock_irqsave(&tx_report->q_lock, flags);
+	skb_queue_walk_safe(&tx_report->queue, cur, tmp) {
+		seq = (u8 *)IEEE80211_SKB_CB(cur)->status.status_driver_data;
+		if (*seq == report[7]) {
+			__skb_unlink(cur, &tx_report->queue);
+			rtw_tx_report_tx_status(rtwdev, cur, report[1] & BIT(6));
+			break;
+		}
+	}
+	spin_unlock_irqrestore(&tx_report->q_lock, flags);
+}
+EXPORT_SYMBOL(rtw_tx_report_handle_8188e);
 
 static u8 rtw_get_mgmt_rate(struct rtw_dev *rtwdev, struct sk_buff *skb,
 			    u8 lowest_rate, bool ignore_rate)

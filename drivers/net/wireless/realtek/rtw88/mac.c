@@ -183,7 +183,7 @@ err:
 }
 
 static int rtw_sub_pwr_seq_parser(struct rtw_dev *rtwdev, u8 intf_mask,
-				  u8 cut_mask,
+				  u16 cut_mask,
 				  const struct rtw_pwr_seq_cmd *cmd)
 {
 	const struct rtw_pwr_seq_cmd *cur_cmd;
@@ -230,7 +230,7 @@ static int rtw_sub_pwr_seq_parser(struct rtw_dev *rtwdev, u8 intf_mask,
 int rtw_pwr_seq_parser(struct rtw_dev *rtwdev,
 		       const struct rtw_pwr_seq_cmd * const *cmd_seq)
 {
-	u8 cut_mask;
+	u16 cut_mask;
 	u8 intf_mask;
 	u8 cut;
 	u32 idx = 0;

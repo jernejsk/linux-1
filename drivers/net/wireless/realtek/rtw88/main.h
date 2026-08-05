@@ -196,6 +196,7 @@ enum rtw_chip_type {
 	RTW_CHIP_TYPE_8703B,
 	RTW_CHIP_TYPE_8723B,
 	RTW_CHIP_TYPE_8188F,
+	RTW_CHIP_TYPE_8188E,
 	RTW_CHIP_TYPE_8821A,
 	RTW_CHIP_TYPE_8812A,
 	RTW_CHIP_TYPE_8814A,
@@ -645,6 +646,7 @@ struct rtw_rx_pkt_stat {
 	bool crc_err;
 	bool decrypted;
 	bool is_c2h;
+	u8 pkt_report_type;
 	bool channel_invalid;
 
 	s32 signal_power;
@@ -874,6 +876,8 @@ struct rtw_chip_ops {
 			    u8 bandwidth, u8 primary_chan_idx);
 	void (*query_phy_status)(struct rtw_dev *rtwdev, u8 *phy_status,
 				 struct rtw_rx_pkt_stat *pkt_stat);
+	int (*query_rx_desc)(struct rtw_dev *rtwdev, void *rx_desc,
+			     struct rtw_rx_pkt_stat *pkt_stat);
 	u32 (*read_rf)(struct rtw_dev *rtwdev, enum rtw_rf_path rf_path,
 		       u32 addr, u32 mask);
 	bool (*write_rf)(struct rtw_dev *rtwdev, enum rtw_rf_path rf_path,
@@ -910,6 +914,9 @@ struct rtw_chip_ops {
 	void (*config_txrx_mode)(struct rtw_dev *rtwdev, u8 tx_path,
 				 u8 rx_path, bool is_tx2_path);
 	void (*led_set)(struct led_classdev *led, enum led_brightness brightness);
+	void (*fill_tx_desc)(struct rtw_dev *rtwdev,
+			     struct rtw_tx_pkt_info *pkt_info,
+			     struct sk_buff *skb);
 	/* for USB/SDIO only */
 	void (*fill_txdesc_checksum)(struct rtw_dev *rtwdev,
 				     struct rtw_tx_pkt_info *pkt_info,
@@ -953,7 +960,7 @@ struct rtw_chip_ops {
 #define RTW_PWR_CUT_E_MSK	BIT(5)
 #define RTW_PWR_CUT_F_MSK	BIT(6)
 #define RTW_PWR_CUT_G_MSK	BIT(7)
-#define RTW_PWR_CUT_ALL_MSK	0xFF
+#define RTW_PWR_CUT_ALL_MSK	0xFFFF
 
 enum rtw_pwr_seq_cmd_delay_unit {
 	RTW_PWR_DELAY_US,
@@ -962,7 +969,7 @@ enum rtw_pwr_seq_cmd_delay_unit {
 
 struct rtw_pwr_seq_cmd {
 	u16 offset;
-	u8 cut_mask;
+	u16 cut_mask;
 	u8 intf_mask;
 	u8 base:4;
 	u8 cmd:4;
@@ -978,6 +985,8 @@ enum rtw_chip_ver {
 	RTW_CHIP_VER_CUT_E = 0x04,
 	RTW_CHIP_VER_CUT_F = 0x05,
 	RTW_CHIP_VER_CUT_G = 0x06,
+	RTW_CHIP_VER_CUT_H = 0x07,
+	RTW_CHIP_VER_CUT_I = 0x08,
 };
 
 #define RTW_INTF_PHY_PLATFORM_ALL 0
@@ -1225,6 +1234,8 @@ struct rtw_chip_info {
 	u16 rsvd_drv_pg_num;
 	u8 band;
 	u16 page_size;
+	u16 sdio_oqt_free_addr;
+	u16 sdio_rx_agg_align;
 	u8 csi_buf_pg_num;
 	u8 dig_max;
 	u8 dig_min;
@@ -2207,6 +2218,12 @@ static inline bool rtw_is_8189fs(struct rtw_dev *rtwdev)
 	       rtwdev->hci.type == RTW_HCI_TYPE_SDIO;
 }
 
+static inline bool rtw_is_8189es(struct rtw_dev *rtwdev)
+{
+	return rtwdev->chip->id == RTW_CHIP_TYPE_8188E &&
+	       rtwdev->hci.type == RTW_HCI_TYPE_SDIO;
+}
+
 /* Older SDIO parts whose firmware does not throttle the host: the driver
  * has to account for free TX pages and output queue credits itself, pad
  * writes to a 4 byte (and, above one block, block sized) boundary, and
@@ -2214,7 +2231,8 @@ static inline bool rtw_is_8189fs(struct rtw_dev *rtwdev)
  */
 static inline bool rtw_sdio_is_legacy_trx(struct rtw_dev *rtwdev)
 {
-	return rtw_is_8723bs(rtwdev) || rtw_is_8189fs(rtwdev);
+	return rtw_is_8723bs(rtwdev) || rtw_is_8189fs(rtwdev) ||
+	       rtw_is_8189es(rtwdev);
 }
 
 static inline u8 rtw_acquire_macid(struct rtw_dev *rtwdev)

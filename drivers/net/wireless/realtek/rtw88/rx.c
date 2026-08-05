@@ -265,17 +265,11 @@ static void rtw_rx_fill_rx_status(struct rtw_dev *rtwdev,
 	}
 }
 
-int rtw_rx_query_rx_desc(struct rtw_dev *rtwdev, void *rx_desc8,
-			 struct rtw_rx_pkt_stat *pkt_stat,
-			 struct ieee80211_rx_status *rx_status)
+static int rtw_rx_desc_to_pkt_stat(struct rtw_dev *rtwdev, void *rx_desc8,
+				   struct rtw_rx_pkt_stat *pkt_stat)
 {
-	u32 desc_sz = rtwdev->chip->rx_pkt_desc_sz;
 	struct rtw_rx_desc *rx_desc = rx_desc8;
-	struct ieee80211_hdr *hdr;
 	u32 enc_type, swdec;
-	void *phy_status;
-
-	memset(pkt_stat, 0, sizeof(*pkt_stat));
 
 	pkt_stat->pkt_len = le32_get_bits(rx_desc->w0, RTW_RX_DESC_W0_PKT_LEN);
 	pkt_stat->crc_err = le32_get_bits(rx_desc->w0, RTW_RX_DESC_W0_CRC32);
@@ -298,6 +292,31 @@ int rtw_rx_query_rx_desc(struct rtw_dev *rtwdev, void *rx_desc8,
 	pkt_stat->bw = le32_get_bits(rx_desc->w4, RTW_RX_DESC_W4_BW);
 
 	pkt_stat->tsf_low = le32_get_bits(rx_desc->w5, RTW_RX_DESC_W5_TSFL);
+
+	return 0;
+}
+
+int rtw_rx_query_rx_desc(struct rtw_dev *rtwdev, void *rx_desc8,
+			 struct rtw_rx_pkt_stat *pkt_stat,
+			 struct ieee80211_rx_status *rx_status)
+{
+	u32 desc_sz = rtwdev->chip->rx_pkt_desc_sz;
+	struct ieee80211_hdr *hdr;
+	void *phy_status;
+	int ret;
+
+	memset(pkt_stat, 0, sizeof(*pkt_stat));
+	memset(rx_status, 0, sizeof(*rx_status));
+
+	if (rtwdev->chip->ops->query_rx_desc)
+		ret = rtwdev->chip->ops->query_rx_desc(rtwdev, rx_desc8,
+						       pkt_stat);
+	else
+		ret = rtw_rx_desc_to_pkt_stat(rtwdev, rx_desc8, pkt_stat);
+	if (ret)
+		return ret;
+	if (pkt_stat->pkt_report_type)
+		return 0;
 
 	if (unlikely(pkt_stat->rate >= DESC_RATE_MAX))
 		return -EINVAL;
