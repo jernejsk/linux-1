@@ -604,7 +604,8 @@ static void rtw_sdio_legacy_init_free_txpg(struct rtw_dev *rtwdev)
 	}
 
 	atomic_set(&rtwsdio->tx_oqt_free,
-		   rtw_read8(rtwdev, REG_SDIO_OQT_FREE_PG));
+		   rtw_read8(rtwdev, SDIO_LOCAL_OFFSET +
+			     rtwdev->chip->sdio_oqt_free_addr));
 }
 
 static void rtw_sdio_legacy_sync_free_txpg(struct rtw_dev *rtwdev)
@@ -763,7 +764,8 @@ static int rtw_sdio_legacy_wait_tx_oqt(struct rtw_dev *rtwdev)
 		return 0;
 
 	for (i = 0; i < RTW_SDIO_OQT_TIMEOUT_MS; i++) {
-		free = rtw_read8(rtwdev, REG_SDIO_OQT_FREE_PG);
+		free = rtw_read8(rtwdev, SDIO_LOCAL_OFFSET +
+				 rtwdev->chip->sdio_oqt_free_addr);
 		if (free) {
 			atomic_set(&rtwsdio->tx_oqt_free, free - 1);
 			return 0;
@@ -887,6 +889,14 @@ static void rtw_sdio_init(struct rtw_dev *rtwdev)
 static void rtw_sdio_enable_rx_aggregation(struct rtw_dev *rtwdev)
 {
 	u8 size, timeout;
+
+	if (rtw_is_8189es(rtwdev)) {
+		rtw_write8_set(rtwdev, REG_TXDMA_PQ_MAP, BIT_RXDMA_AGG_EN);
+		rtw_write16(rtwdev, REG_RXDMA_AGG_PG_TH,
+			    FIELD_PREP(BIT_RXDMA_AGG_PG_TH, 0x24) |
+			    FIELD_PREP(BIT_DMA_AGG_TO_V1, 0x06));
+		return;
+	}
 
 	switch (rtwdev->chip->id) {
 	case RTW_CHIP_TYPE_8723B:
@@ -1089,6 +1099,8 @@ static void rtw_sdio_interface_cfg(struct rtw_dev *rtwdev)
 	val &= 0xfff8;
 	if (rtw_is_8723bs(rtwdev))
 		val |= BIT_SDIO_TX_CTRL_ALWAYS_RECOGNIZE;
+	else if (rtw_is_8189es(rtwdev))
+		val |= BIT(1);
 	rtw_write32(rtwdev, REG_SDIO_TX_CTRL, val);
 }
 
@@ -1224,6 +1236,15 @@ static void rtw_sdio_rx_skb(struct rtw_dev *rtwdev, struct sk_buff *skb,
 {
 	*IEEE80211_SKB_RXCB(skb) = *rx_status;
 
+	if (rtw_is_8189es(rtwdev) && pkt_stat->pkt_report_type) {
+		skb_put(skb, pkt_stat->pkt_len + pkt_offset);
+		if (pkt_stat->pkt_report_type == 1)
+			rtw_tx_report_handle_8188e(rtwdev, skb->data + pkt_offset,
+						   pkt_stat->pkt_len);
+		dev_kfree_skb_any(skb);
+		return;
+	}
+
 	if (pkt_stat->is_c2h) {
 		skb_put(skb, pkt_stat->pkt_len + pkt_offset);
 		rtw_fw_c2h_cmd_rx_irqsafe(rtwdev, pkt_offset, skb);
@@ -1248,11 +1269,14 @@ static void rtw_sdio_rxfifo_recv(struct rtw_dev *rtwdev, u32 rx_len)
 	struct rtw_rx_pkt_stat pkt_stat;
 	struct sk_buff *skb, *split_skb;
 	u32 pkt_offset, curr_pkt_len;
+	u16 rx_agg_align;
 	size_t bufsz;
 	u8 *rx_desc;
 	int ret;
 
 	bufsz = sdio_align_size(rtwsdio->sdio_func, rx_len);
+	rx_agg_align = rtwdev->chip->sdio_rx_agg_align ?:
+		       RTW_SDIO_DATA_PTR_ALIGN;
 
 	skb = dev_alloc_skb(bufsz);
 	if (!skb)
@@ -1277,7 +1301,7 @@ static void rtw_sdio_rxfifo_recv(struct rtw_dev *rtwdev, u32 rx_len)
 			     pkt_stat.shift;
 
 		curr_pkt_len = ALIGN(pkt_offset + pkt_stat.pkt_len,
-				     RTW_SDIO_DATA_PTR_ALIGN);
+				     rx_agg_align);
 
 		if ((curr_pkt_len + pkt_desc_sz) >= rx_len) {
 			/* Use the original skb (with it's adjusted offset)

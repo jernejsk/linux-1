@@ -1762,6 +1762,7 @@ const struct rtw_chip_info rtw8188f_hw_spec = {
 	.rsvd_drv_pg_num = 8,
 	.band = RTW_BAND_2G,
 	.page_size = TX_PAGE_SIZE,
+	.sdio_oqt_free_addr = 0x2a,
 	.csi_buf_pg_num = 0,
 	.dig_min = 0x20,
 	.txgi_factor = 1,

@@ -3008,6 +3008,7 @@ const struct rtw_chip_info rtw8723b_hw_spec = {
 	.csi_buf_pg_num = 0,
 	.band = RTW_BAND_2G,
 	.page_size = TX_PAGE_SIZE,
+	.sdio_oqt_free_addr = 0x1e,
 
 	.dig_min = 0x20,
 	.usb_tx_agg_desc_num = 1,
