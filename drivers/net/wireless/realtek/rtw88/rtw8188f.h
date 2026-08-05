@@ -123,8 +123,6 @@ struct phy_status_8188f {
  * 0x24[22:17] = 0x24[16:11] = crystal_cap.
  */
 #define BIT_MASK_XTAL_8188F	0x007FF800
-#define REG_SECONDARY_CCA_CTRL	0x0577
-#define REG_2ND_CCA_RELATED	0x0976
 #define REG_CTX			0x0d03
 #define BIT_MASK_CTX_TYPE	GENMASK(6, 4)
 
@@ -199,14 +197,10 @@ struct phy_status_8188f {
 #define REG_OFDM0_TR_MUX_PAR	0x0c08
 #define REG_OFDM0_XA_RX_AFE	0x0c10
 #define REG_OFDM0_XA_RX_IQ_IMB	0x0c14
-#define REG_OFDM0_XB_RX_IQ_IMB	0x0c1c
 #define REG_NOTCH_CTRL		0x0c40
 #define REG_OFDM0_ECCA_THRES	0x0c4c
 #define REG_OFDM0_XAAGC1	0x0c50
-#define REG_OFDM0_AGC_RSSI_TBL	0x0c78
-#define REG_OFDM0_XB_TX_IQ_IMB	0x0c88
 #define REG_OFDM0_XC_TX_AFE	0x0c94
-#define REG_OFDM0_XD_TX_AFE	0x0c9c
 #define REG_OFDM0_RX_IQ_EXT_A	0x0ca0
 #define REG_OFDM0_TX_PSD_NOISE	0x0ce4
 
@@ -235,12 +229,7 @@ struct phy_status_8188f {
 #define REG_CSI_MASK_EN		0x0d2c
 #define BIT_CSI_MASK_EN		BIT(28)
 
-/* 0xaXX: CCK TX power registers used by power tracking */
-#define REG_CCK_TXSF2		0x0a24
-#define REG_CCK_DBG		0x0a28
-
 /* RF registers */
-#define RF_AC			0x00
 #define RF_WLINT		0x01
 #define RF_LOK			0x08
 #define RF_TRX_BW		0x18

@@ -569,16 +569,16 @@ static int rtw8188f_mac_init(struct rtw_dev *rtwdev)
 	rtw_write32(rtwdev, REG_INT_MIG, 0);
 	rtw_write32(rtwdev, REG_MCUTST_1, 0x0);
 
+	/* The vendor driver's "YJ,TODO" CCA block writes 0x3 to 0x577 and 0
+	 * to 0x976, which is exactly REG_MISC_CTRL/BIT_DIS_SECOND_CCA and
+	 * REG_2ND_CCA_CTRL in rtw88 terms.
+	 */
 	rtw_write8(rtwdev, REG_MISC_CTRL, BIT_DIS_SECOND_CCA);
 	rtw_write8(rtwdev, REG_2ND_CCA_CTRL, 0);
 
 	/* vendor _InitRDGSetting() */
 	rtw_write8(rtwdev, REG_RD_CTRL, 0xFF);
 	rtw_write16(rtwdev, REG_RD_NAV_NXT, 0x200);
-
-	/* vendor rtl8188fs_hal_init(): "YJ,TODO" CCA block */
-	rtw_write8(rtwdev, REG_SECONDARY_CCA_CTRL, 0x3);
-	rtw_write8(rtwdev, REG_2ND_CCA_RELATED, 0);
 
 	return 0;
 }
