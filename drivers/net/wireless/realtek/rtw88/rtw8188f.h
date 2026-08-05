@@ -178,21 +178,54 @@ struct phy_status_8188f {
 #define BIT_MASK_OFDM_LCRC_OK	GENMASK(15, 0)
 #define BIT_MASK_OFDM_LCRC_ERR	GENMASK(31, 16)
 
-/* Baseband registers */
+/* Baseband registers, from the vendor's include/Hal8188FPhyReg.h */
+#define REG_FPGA0_PSD_FUNC	0x0808
+#define REG_FPGA0_XA_HSSI_PARA1	0x0820
+#define REG_FPGA0_XB_HSSI_PARA1	0x0828
+#define REG_FPGA0_XCD_SWITCH	0x085c
+#define REG_FPGA0_XA_RF_INT_OE	0x0860
+#define REG_FPGA0_XAB_RF_INT_SW	0x0870
+#define REG_FPGA0_XCD_RF_INT_SW	0x0874
+#define REG_FPGA0_ANAPARAM4	0x088c
+#define REG_FPGA0_PSD_REPORT	0x08b4
 #define REG_FPGA1_RFMOD		0x0900
+#define REG_S0S1_PATH_SWITCH	0x0948
+#define REG_BB_RX_DFIR		0x0954
 #define REG_CCK0_SYSTEM		0x0a00
 #define BIT_CCK_SIDE_BAND	BIT(4)
-#define REG_BB_RX_DFIR		0x0954
-#define REG_S0S1_PATH_SWITCH	0x0948
-#define REG_FPGA0_ANAPARAM4	0x0088
-#define REG_FPGA0_PSD_FUNC	0x0808
-#define REG_FPGA0_PSD_REPORT	0x0f58
-#define REG_OFDM0_XAAGC1	0x0c50
+#define REG_CONFIG_ANT_A	0x0b68
+#define REG_CONFIG_ANT_B	0x0b6c
+#define REG_OFDM0_TRX_PATH_EN	0x0c04
+#define REG_OFDM0_TR_MUX_PAR	0x0c08
 #define REG_OFDM0_XA_RX_AFE	0x0c10
-#define REG_OFDM0_TX_PSD_NOISE	0x0ce4
-#define REG_OFDM0_XA_TX_AFE	0x0c84
-#define REG_OFDM0_ECCA_THRES	0x0c4c
+#define REG_OFDM0_XA_RX_IQ_IMB	0x0c14
+#define REG_OFDM0_XB_RX_IQ_IMB	0x0c1c
 #define REG_NOTCH_CTRL		0x0c40
+#define REG_OFDM0_ECCA_THRES	0x0c4c
+#define REG_OFDM0_XAAGC1	0x0c50
+#define REG_OFDM0_AGC_RSSI_TBL	0x0c78
+#define REG_OFDM0_XB_TX_IQ_IMB	0x0c88
+#define REG_OFDM0_XC_TX_AFE	0x0c94
+#define REG_OFDM0_XD_TX_AFE	0x0c9c
+#define REG_OFDM0_RX_IQ_EXT_A	0x0ca0
+#define REG_OFDM0_TX_PSD_NOISE	0x0ce4
+
+/* IQK registers */
+#define REG_FPGA0_IQK		0x0e28
+#define REG_TX_IQK_TONE_A	0x0e30
+#define REG_RX_IQK_TONE_A	0x0e34
+#define REG_TX_IQK_PI_A		0x0e38
+#define REG_RX_IQK_PI_A		0x0e3c
+#define REG_TX_IQK		0x0e40
+#define REG_RX_IQK		0x0e44
+#define REG_IQK_AGC_PTS		0x0e48
+#define REG_IQK_AGC_RSP		0x0e4c
+#define REG_BLUE_TOOTH		0x0e6c
+#define REG_PMPD_ANAEN		0x0eec
+#define REG_TX_PWR_BEFORE_IQK_A	0x0e94
+#define REG_TX_PWR_AFTER_IQK_A	0x0e9c
+#define REG_RX_PWR_BEFORE_IQK_A	0x0ea4
+#define REG_RX_PWR_AFTER_IQK_A	0x0eac
 #define BIT_MASK_NOTCH_IDX	GENMASK(28, 24)
 #define BIT_NOTCH_EN		BIT(9)
 #define REG_CSI_MASK_0		0x0d40
@@ -207,13 +240,62 @@ struct phy_status_8188f {
 #define REG_CCK_DBG		0x0a28
 
 /* RF registers */
+#define RF_AC			0x00
 #define RF_WLINT		0x01
+#define RF_LOK			0x08
 #define RF_TRX_BW		0x18
 #define BIT_LCK			BIT(15)
 #define RF_RC_CORNER_B		0x1b
 #define RF_FILTER_BW		0x1c
+#define RF_RCK_OS		0x30
+#define RF_TXPA_G1		0x31
+#define RF_TXPA_G2		0x32
+#define RF_PAD_TXG		0x56
 #define RF_FILTER_RC		0x87
 #define RF_RC_CORNER		0xdf
+#define RF_WE_LUT		0xef
+
+/* Power tracking: vendor RF_T_METER_8188F, read as bits [15:10] */
+#define BIT_MASK_THERMAL	0xfc00
+#define BIT_MASK_THERMAL_TRIG	GENMASK(17, 16)
+
+#define RTW8188F_IQK_ADDA_REG_NUM	16
+#define RTW8188F_IQK_MAC8_REG_NUM	3
+#define RTW8188F_IQK_MAC32_REG_NUM	1
+#define RTW8188F_IQK_BB_REG_NUM		9
+
+/* Vendor IQK_DELAY_TIME_8188F */
+#define RTW8188F_IQK_DELAY_MS		25
+/* Vendor MAX_TOLERANCE in halrf_8188f.c */
+#define RTW8188F_IQK_MAX_TOLERANCE	5
+/* Vendor retry_count for the non-MP build */
+#define RTW8188F_IQK_RETRY		2
+
+enum rtw8188f_iqk_result {
+	IQK_TX_X,
+	IQK_TX_Y,
+	IQK_RX_X,
+	IQK_RX_Y,
+	IQK_NR,
+};
+
+enum rtw8188f_iqk_round {
+	IQK_ROUND_0,
+	IQK_ROUND_1,
+	IQK_ROUND_2,
+	IQK_ROUND_HYBRID,
+	IQK_ROUND_SIZE,
+	IQK_ROUND_INVALID = 0xff,
+};
+
+struct rtw8188f_iqk_backup_regs {
+	u32 adda[RTW8188F_IQK_ADDA_REG_NUM];
+	u8 mac8[RTW8188F_IQK_MAC8_REG_NUM];
+	u32 mac32[RTW8188F_IQK_MAC32_REG_NUM];
+	u32 bb[RTW8188F_IQK_BB_REG_NUM];
+	u32 igia;
+	bool rf_pi_enable;
+};
 
 #define AGG_BURST_NUM		3
 #define AGG_BURST_SIZE		0 /* 1K */

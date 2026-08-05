@@ -1050,13 +1050,453 @@ static void rtw8188f_lck(struct rtw_dev *rtwdev)
 		rtw_write8(rtwdev, REG_TXPAUSE, 0x00);
 }
 
+/* IQK, ported from the vendor's phy_iq_calibrate_8188f() and friends in
+ * hal/phydm/halrf/rtl8188f/halrf_8188f.c. RTL8188F is 1T1R, so only
+ * path A is calibrated; the vendor's path B code is compiled out there.
+ */
+#define ADDA_ON_VAL_8188F 0x03c00014
+
+static const u32 iqk_adda_regs_8188f[RTW8188F_IQK_ADDA_REG_NUM] = {
+	REG_FPGA0_XCD_SWITCH, REG_BLUE_TOOTH, 0xe70, 0xe74,
+	0xe78, 0xe7c, 0xe80, 0xe84,
+	0xe88, 0xe8c, 0xed0, 0xed4,
+	0xed8, 0xedc, 0xee0, REG_PMPD_ANAEN,
+};
+
+static const u32 iqk_mac8_regs_8188f[RTW8188F_IQK_MAC8_REG_NUM] = {
+	REG_TXPAUSE, REG_BCN_CTRL, REG_BCN_CTRL_CLINT0,
+};
+
+static const u32 iqk_mac32_regs_8188f[RTW8188F_IQK_MAC32_REG_NUM] = {
+	REG_GPIO_MUXCFG,
+};
+
+static const u32 iqk_bb_regs_8188f[RTW8188F_IQK_BB_REG_NUM] = {
+	REG_OFDM0_TRX_PATH_EN, REG_OFDM0_TR_MUX_PAR, REG_FPGA0_XCD_RF_INT_SW,
+	REG_CONFIG_ANT_A, REG_CONFIG_ANT_B, REG_FPGA0_XAB_RF_INT_SW,
+	REG_FPGA0_XA_RF_INT_OE, REG_FPGA0_XB_RF_INT_OE, REG_FPGA0_RFMOD,
+};
+
+static void rtw8188f_iqk_backup_regs(struct rtw_dev *rtwdev,
+				     struct rtw8188f_iqk_backup_regs *backup)
+{
+	int i;
+
+	for (i = 0; i < RTW8188F_IQK_ADDA_REG_NUM; i++)
+		backup->adda[i] = rtw_read32(rtwdev, iqk_adda_regs_8188f[i]);
+	for (i = 0; i < RTW8188F_IQK_MAC8_REG_NUM; i++)
+		backup->mac8[i] = rtw_read8(rtwdev, iqk_mac8_regs_8188f[i]);
+	for (i = 0; i < RTW8188F_IQK_MAC32_REG_NUM; i++)
+		backup->mac32[i] = rtw_read32(rtwdev, iqk_mac32_regs_8188f[i]);
+	for (i = 0; i < RTW8188F_IQK_BB_REG_NUM; i++)
+		backup->bb[i] = rtw_read32(rtwdev, iqk_bb_regs_8188f[i]);
+
+	backup->igia = rtw_read32_mask(rtwdev, REG_OFDM0_XAAGC1, MASKBYTE0);
+	backup->rf_pi_enable = rtw_read32_mask(rtwdev, REG_FPGA0_XA_HSSI_PARA1,
+					       BIT(8));
+}
+
+static void rtw8188f_iqk_restore_regs(struct rtw_dev *rtwdev,
+				      const struct rtw8188f_iqk_backup_regs *backup)
+{
+	int i;
+
+	/* Switch BB back to SI mode if it was not in PI mode before. */
+	if (!backup->rf_pi_enable) {
+		rtw_write32(rtwdev, REG_FPGA0_XA_HSSI_PARA1, 0x01000000);
+		rtw_write32(rtwdev, REG_FPGA0_XB_HSSI_PARA1, 0x01000000);
+	}
+
+	for (i = 0; i < RTW8188F_IQK_ADDA_REG_NUM; i++)
+		rtw_write32(rtwdev, iqk_adda_regs_8188f[i], backup->adda[i]);
+	for (i = 0; i < RTW8188F_IQK_MAC8_REG_NUM; i++)
+		rtw_write8(rtwdev, iqk_mac8_regs_8188f[i], backup->mac8[i]);
+	for (i = 0; i < RTW8188F_IQK_MAC32_REG_NUM; i++)
+		rtw_write32(rtwdev, iqk_mac32_regs_8188f[i], backup->mac32[i]);
+	for (i = 0; i < RTW8188F_IQK_BB_REG_NUM; i++)
+		rtw_write32(rtwdev, iqk_bb_regs_8188f[i], backup->bb[i]);
+
+	/* Restore the RX initial gain. The vendor driver writes 0x50 first
+	 * to make sure the new value is latched.
+	 */
+	rtw_write32_mask(rtwdev, REG_OFDM0_XAAGC1, MASKBYTE0, 0x50);
+	rtw_write32_mask(rtwdev, REG_OFDM0_XAAGC1, MASKBYTE0, backup->igia);
+
+	/* 0xe30/0xe34 IQC default value */
+	rtw_write32(rtwdev, REG_TX_IQK_TONE_A, 0x01008c00);
+	rtw_write32(rtwdev, REG_RX_IQK_TONE_A, 0x01008c00);
+}
+
+static void rtw8188f_iqk_path_adda_on(struct rtw_dev *rtwdev)
+{
+	int i;
+
+	for (i = 0; i < RTW8188F_IQK_ADDA_REG_NUM; i++)
+		rtw_write32(rtwdev, iqk_adda_regs_8188f[i], ADDA_ON_VAL_8188F);
+}
+
+static void rtw8188f_iqk_config_mac(struct rtw_dev *rtwdev)
+{
+	rtw_write8(rtwdev, REG_TXPAUSE, 0xff);
+}
+
+static void rtw8188f_iqk_one_shot(struct rtw_dev *rtwdev)
+{
+	rtw_write32(rtwdev, REG_IQK_AGC_PTS, 0xf9000000);
+	rtw_write32(rtwdev, REG_IQK_AGC_PTS, 0xf8000000);
+
+	msleep(RTW8188F_IQK_DELAY_MS);
+
+	/* reload RF 0xdf */
+	rtw_write32_mask(rtwdev, REG_FPGA0_IQK, MASKH3BYTES, 0x000000);
+	rtw_write_rf(rtwdev, RF_PATH_A, RF_RC_CORNER, RFREG_MASK, 0x180);
+}
+
+static bool rtw8188f_iqk_tx_ok(struct rtw_dev *rtwdev)
+{
+	u32 reg_eac, reg_e94, reg_e9c;
+
+	reg_eac = rtw_read32(rtwdev, REG_RX_PWR_AFTER_IQK_A);
+	reg_e94 = rtw_read32(rtwdev, REG_TX_PWR_BEFORE_IQK_A);
+	reg_e9c = rtw_read32(rtwdev, REG_TX_PWR_AFTER_IQK_A);
+
+	rtw_dbg(rtwdev, RTW_DBG_RFK,
+		"[IQK] 0xeac = 0x%x 0xe94 = 0x%x 0xe9c = 0x%x\n",
+		reg_eac, reg_e94, reg_e9c);
+
+	return !(reg_eac & BIT(28)) &&
+	       FIELD_GET(GENMASK(25, 16), reg_e94) != 0x142 &&
+	       FIELD_GET(GENMASK(25, 16), reg_e9c) != 0x42;
+}
+
+static bool rtw8188f_iqk_rx_ok(struct rtw_dev *rtwdev)
+{
+	u32 reg_eac, reg_ea4;
+
+	reg_eac = rtw_read32(rtwdev, REG_RX_PWR_AFTER_IQK_A);
+	reg_ea4 = rtw_read32(rtwdev, REG_RX_PWR_BEFORE_IQK_A);
+
+	rtw_dbg(rtwdev, RTW_DBG_RFK, "[IQK] 0xea4 = 0x%x 0xeac = 0x%x\n",
+		reg_ea4, reg_eac);
+
+	return !(reg_eac & BIT(27)) &&
+	       FIELD_GET(GENMASK(25, 16), reg_ea4) != 0x132 &&
+	       FIELD_GET(GENMASK(25, 16), reg_eac) != 0x36;
+}
+
+/* Set up the RF path for one IQK step. @rck_os, @txpa_g2 and @pad are the
+ * per-step values from the vendor driver.
+ */
+static void rtw8188f_iqk_rf_setting(struct rtw_dev *rtwdev, u32 rck_os,
+				    u32 txpa_g2, u32 pad)
+{
+	rtw_write32_mask(rtwdev, REG_FPGA0_IQK, MASKH3BYTES, 0x000000);
+	rtw_write_rf(rtwdev, RF_PATH_A, RF_WE_LUT, 0x80000, 0x1);
+	rtw_write_rf(rtwdev, RF_PATH_A, RF_RCK_OS, RFREG_MASK, rck_os);
+	rtw_write_rf(rtwdev, RF_PATH_A, RF_TXPA_G1, RFREG_MASK, 0x0000f);
+	rtw_write_rf(rtwdev, RF_PATH_A, RF_TXPA_G2, RFREG_MASK, txpa_g2);
+	/* PA/PAD gain adjust */
+	rtw_write_rf(rtwdev, RF_PATH_A, RF_RC_CORNER, RFREG_MASK, 0x980);
+	rtw_write_rf(rtwdev, RF_PATH_A, RF_PAD_TXG, RFREG_MASK, pad);
+	rtw_write32_mask(rtwdev, REG_FPGA0_IQK, MASKH3BYTES, 0x808000);
+}
+
+/* vendor phy_path_a_iqk_8188f(): TX IQK only */
+static bool rtw8188f_iqk_tx_path(struct rtw_dev *rtwdev)
+{
+	rtw_dbg(rtwdev, RTW_DBG_RFK, "[IQK] path A TX IQK\n");
+
+	rtw8188f_iqk_rf_setting(rtwdev, 0x20000, 0x07ff7, 0x5102a);
+
+	rtw_write32(rtwdev, REG_TX_IQK_TONE_A, 0x18008c1c);
+	rtw_write32(rtwdev, REG_RX_IQK_TONE_A, 0x38008c1c);
+	rtw_write32(rtwdev, REG_TX_IQK_PI_A, 0x821403ff);
+	rtw_write32(rtwdev, REG_RX_IQK_PI_A, 0x28160000);
+
+	/* LO calibration setting */
+	rtw_write32(rtwdev, REG_IQK_AGC_RSP, 0x00462911);
+
+	rtw8188f_iqk_one_shot(rtwdev);
+
+	return rtw8188f_iqk_tx_ok(rtwdev);
+}
+
+/* vendor phy_path_a_rx_iqk_8188f(): re-runs TX IQK to get TXIMR, then RX */
+static bool rtw8188f_iqk_rx_path(struct rtw_dev *rtwdev, u32 lok)
+{
+	u32 reg_e94, reg_e9c, u4tmp;
+
+	rtw_dbg(rtwdev, RTW_DBG_RFK, "[IQK] path A RX IQK\n");
+
+	/* 1 Get TXIMR setting */
+	rtw8188f_iqk_rf_setting(rtwdev, 0x30000, 0xf1173, 0x5102a);
+
+	rtw_write32(rtwdev, REG_TX_IQK, 0x01007c00);
+	rtw_write32(rtwdev, REG_RX_IQK, 0x01004800);
+
+	rtw_write32(rtwdev, REG_TX_IQK_TONE_A, 0x10008c1c);
+	rtw_write32(rtwdev, REG_RX_IQK_TONE_A, 0x30008c1c);
+	rtw_write32(rtwdev, REG_TX_IQK_PI_A, 0x82160fff);
+	rtw_write32(rtwdev, REG_RX_IQK_PI_A, 0x28160000);
+
+	rtw_write32(rtwdev, REG_IQK_AGC_RSP, 0x00462911);
+
+	rtw8188f_iqk_one_shot(rtwdev);
+
+	if (!rtw8188f_iqk_tx_ok(rtwdev))
+		return false;
+
+	reg_e94 = rtw_read32(rtwdev, REG_TX_PWR_BEFORE_IQK_A);
+	reg_e9c = rtw_read32(rtwdev, REG_TX_PWR_AFTER_IQK_A);
+	u4tmp = 0x80007c00 | (reg_e94 & 0x3ff0000) |
+		((reg_e9c & 0x3ff0000) >> 16);
+	rtw_write32(rtwdev, REG_TX_IQK, u4tmp);
+
+	/* 1 RX IQK */
+	rtw8188f_iqk_rf_setting(rtwdev, 0x30000, 0xf7ff2, 0x51000);
+
+	rtw_write32(rtwdev, REG_RX_IQK, 0x01004800);
+
+	rtw_write32(rtwdev, REG_TX_IQK_TONE_A, 0x30008c1c);
+	rtw_write32(rtwdev, REG_RX_IQK_TONE_A, 0x10008c1c);
+	rtw_write32(rtwdev, REG_TX_IQK_PI_A, 0x82160000);
+	rtw_write32(rtwdev, REG_RX_IQK_PI_A, 0x281613ff);
+
+	rtw_write32(rtwdev, REG_IQK_AGC_RSP, 0x0046a911);
+
+	rtw8188f_iqk_one_shot(rtwdev);
+
+	/* reload the LOK value saved by the TX step */
+	rtw_write_rf(rtwdev, RF_PATH_A, RF_LOK, RFREG_MASK, lok);
+
+	return rtw8188f_iqk_rx_ok(rtwdev);
+}
+
+static void rtw8188f_iqk_one_round(struct rtw_dev *rtwdev,
+				   s32 result[][IQK_NR], u8 t)
+{
+	u32 lok = 0;
+	int i;
+
+	rtw_dbg(rtwdev, RTW_DBG_RFK, "[IQK] round %d\n", t);
+
+	rtw8188f_iqk_path_adda_on(rtwdev);
+
+	/* BB setting */
+	rtw_write32(rtwdev, REG_OFDM0_TRX_PATH_EN, 0x03a05600);
+	rtw_write32(rtwdev, REG_OFDM0_TR_MUX_PAR, 0x000800e4);
+	rtw_write32(rtwdev, REG_FPGA0_XCD_RF_INT_SW, 0x25204000);
+
+	rtw8188f_iqk_config_mac(rtwdev);
+
+	rtw_write32_mask(rtwdev, REG_FPGA0_IQK, MASKH3BYTES, 0x808000);
+	rtw_write32(rtwdev, REG_TX_IQK, 0x01007c00);
+	rtw_write32(rtwdev, REG_RX_IQK, 0x01004800);
+
+	for (i = 0; i < RTW8188F_IQK_RETRY; i++) {
+		if (!rtw8188f_iqk_tx_path(rtwdev))
+			continue;
+
+		rtw_write32_mask(rtwdev, REG_FPGA0_IQK, MASKH3BYTES, 0x000000);
+		/* Save the LOK result, reloaded after the RX step. */
+		lok = rtw_read_rf(rtwdev, RF_PATH_A, RF_LOK, RFREG_MASK);
+
+		result[t][IQK_TX_X] =
+			FIELD_GET(GENMASK(25, 16),
+				  rtw_read32(rtwdev, REG_TX_PWR_BEFORE_IQK_A));
+		result[t][IQK_TX_Y] =
+			FIELD_GET(GENMASK(25, 16),
+				  rtw_read32(rtwdev, REG_TX_PWR_AFTER_IQK_A));
+		break;
+	}
+
+	for (i = 0; i < RTW8188F_IQK_RETRY; i++) {
+		if (!rtw8188f_iqk_rx_path(rtwdev, lok))
+			continue;
+
+		result[t][IQK_RX_X] =
+			FIELD_GET(GENMASK(25, 16),
+				  rtw_read32(rtwdev, REG_RX_PWR_BEFORE_IQK_A));
+		result[t][IQK_RX_Y] =
+			FIELD_GET(GENMASK(25, 16),
+				  rtw_read32(rtwdev, REG_RX_PWR_AFTER_IQK_A));
+		break;
+	}
+
+	/* back to BB mode */
+	rtw_write32_mask(rtwdev, REG_FPGA0_IQK, MASKH3BYTES, 0);
+}
+
+static s32 iqk_to_s32(s32 val)
+{
+	/* val is a 10 bit two's complement number */
+	if (val & BIT(9))
+		return val | ~GENMASK(9, 0);
+	return val;
+}
+
+/* vendor phy_simularity_compare_8188f(), reduced to the 1T1R case */
+static bool rtw8188f_iqk_similarity_cmp(struct rtw_dev *rtwdev,
+					s32 result[][IQK_NR], u8 c1, u8 c2)
+{
+	u32 bitmap = 0;
+	bool valid = true;
+	int i, j;
+
+	for (i = 0; i < IQK_NR; i++) {
+		s32 tmp1, tmp2, diff;
+
+		if (i == IQK_TX_Y || i == IQK_RX_Y) {
+			tmp1 = iqk_to_s32(result[c1][i]);
+			tmp2 = iqk_to_s32(result[c2][i]);
+		} else {
+			tmp1 = result[c1][i];
+			tmp2 = result[c2][i];
+		}
+
+		diff = abs(tmp1 - tmp2);
+		if (diff <= RTW8188F_IQK_MAX_TOLERANCE)
+			continue;
+
+		if (i == IQK_RX_X && !bitmap) {
+			if (result[c1][i] + result[c1][i + 1] == 0)
+				valid = false;
+			else if (result[c2][i] + result[c2][i + 1] == 0)
+				valid = false;
+			else
+				bitmap |= BIT(i);
+
+			if (!valid) {
+				u8 cand = result[c1][i] + result[c1][i + 1] == 0
+					  ? c2 : c1;
+
+				for (j = IQK_TX_X; j < IQK_RX_X; j++)
+					result[IQK_ROUND_HYBRID][j] =
+						result[cand][j];
+			}
+		} else {
+			bitmap |= BIT(i);
+		}
+	}
+
+	if (bitmap == 0)
+		return valid;
+
+	if (!(bitmap & GENMASK(IQK_TX_Y, IQK_TX_X))) {
+		result[IQK_ROUND_HYBRID][IQK_TX_X] = result[c1][IQK_TX_X];
+		result[IQK_ROUND_HYBRID][IQK_TX_Y] = result[c1][IQK_TX_Y];
+	}
+
+	if (!(bitmap & GENMASK(IQK_RX_Y, IQK_RX_X))) {
+		result[IQK_ROUND_HYBRID][IQK_RX_X] = result[c1][IQK_RX_X];
+		result[IQK_ROUND_HYBRID][IQK_RX_Y] = result[c1][IQK_RX_Y];
+	}
+
+	return false;
+}
+
+/* vendor _phy_path_a_fill_iqk_matrix8188f() */
+static void rtw8188f_iqk_fill_matrix(struct rtw_dev *rtwdev, const s32 *result,
+				     bool tx_only)
+{
+	s32 oldval_0, x, y, tx0_a, tx0_c;
+	u32 reg;
+
+	oldval_0 = (rtw_read32(rtwdev, REG_OFDM0_XA_TX_IQ_IMBALANCE) >> 22)
+		   & 0x3ff;
+
+	x = iqk_to_s32(result[IQK_TX_X]);
+	tx0_a = (x * oldval_0) >> 8;
+	rtw_write32_mask(rtwdev, REG_OFDM0_XA_TX_IQ_IMBALANCE, 0x3ff, tx0_a);
+	rtw_write32_mask(rtwdev, REG_OFDM0_ECCA_THRES, BIT(31),
+			 ((x * oldval_0) >> 7) & 0x1);
+
+	y = iqk_to_s32(result[IQK_TX_Y]);
+	tx0_c = (y * oldval_0) >> 8;
+	rtw_write32_mask(rtwdev, REG_OFDM0_XC_TX_AFE, MASKH4BITS,
+			 (tx0_c & 0x3c0) >> 6);
+	rtw_write32_mask(rtwdev, REG_OFDM0_XA_TX_IQ_IMBALANCE, 0x003f0000,
+			 tx0_c & 0x3f);
+	rtw_write32_mask(rtwdev, REG_OFDM0_ECCA_THRES, BIT(29),
+			 ((y * oldval_0) >> 7) & 0x1);
+
+	if (tx_only) {
+		rtw_dbg(rtwdev, RTW_DBG_RFK, "[IQK] only TX filled\n");
+		return;
+	}
+
+	reg = result[IQK_RX_X];
+	rtw_write32_mask(rtwdev, REG_OFDM0_XA_RX_IQ_IMB, 0x3ff, reg);
+	reg = result[IQK_RX_Y] & 0x3f;
+	rtw_write32_mask(rtwdev, REG_OFDM0_XA_RX_IQ_IMB, 0xfc00, reg);
+	reg = (result[IQK_RX_Y] >> 6) & 0xf;
+	rtw_write32_mask(rtwdev, REG_OFDM0_RX_IQ_EXT_A, MASKH4BITS, reg);
+}
+
+static void rtw8188f_iqk(struct rtw_dev *rtwdev)
+{
+	struct rtw_dm_info *dm_info = &rtwdev->dm_info;
+	struct rtw8188f_iqk_backup_regs backup;
+	u8 final_candidate = IQK_ROUND_INVALID;
+	s32 result[IQK_ROUND_SIZE][IQK_NR];
+	u8 i, j;
+
+	rtw_dbg(rtwdev, RTW_DBG_RFK, "[IQK] Start!\n");
+
+	memset(result, 0, sizeof(result));
+	rtw8188f_iqk_backup_regs(rtwdev, &backup);
+
+	for (i = IQK_ROUND_0; i <= IQK_ROUND_2; i++) {
+		rtw8188f_iqk_one_round(rtwdev, result, i);
+
+		if (i > IQK_ROUND_0)
+			rtw8188f_iqk_restore_regs(rtwdev, &backup);
+
+		for (j = IQK_ROUND_0; j < i; j++) {
+			if (rtw8188f_iqk_similarity_cmp(rtwdev, result, j, i)) {
+				final_candidate = j;
+				goto iqk_done;
+			}
+		}
+	}
+
+	if (final_candidate == IQK_ROUND_INVALID) {
+		s32 reg_tmp = 0;
+
+		for (i = 0; i < IQK_NR; i++)
+			reg_tmp += result[IQK_ROUND_HYBRID][i];
+
+		if (reg_tmp != 0) {
+			final_candidate = IQK_ROUND_HYBRID;
+		} else {
+			rtw_warn(rtwdev, "[IQK] failed, using defaults\n");
+			goto out;
+		}
+	}
+
+iqk_done:
+	if (result[final_candidate][IQK_TX_X] != 0)
+		rtw8188f_iqk_fill_matrix(rtwdev, result[final_candidate],
+					 result[final_candidate][IQK_RX_X] == 0);
+
+	dm_info->iqk.result.s1_x = result[final_candidate][IQK_TX_X];
+	dm_info->iqk.result.s1_y = result[final_candidate][IQK_TX_Y];
+	dm_info->iqk.done = true;
+
+out:
+	for (i = IQK_ROUND_0; i < IQK_ROUND_SIZE; i++)
+		rtw_dbg(rtwdev, RTW_DBG_RFK,
+			"[IQK] Result %u: rege94=%x rege9c=%x regea4=%x regeac=%x %s\n",
+			i, result[i][IQK_TX_X], result[i][IQK_TX_Y],
+			result[i][IQK_RX_X], result[i][IQK_RX_Y],
+			final_candidate == i ? "(final candidate)" : "");
+
+	rtw_dbg(rtwdev, RTW_DBG_RFK, "[IQK] Finished.\n");
+}
+
 static void rtw8188f_phy_calibration(struct rtw_dev *rtwdev)
 {
-	/* TODO: IQK. The vendor's phy_iq_calibrate_8188f() in
-	 * hal/phydm/halrf/rtl8188f/halrf_8188f.c is not ported yet, so
-	 * only the LC calibration runs here. Without IQK the TX/RX IQ
-	 * imbalance compensation stays at the values from the BB table.
-	 */
+	rtw8188f_iqk(rtwdev);
 	rtw8188f_lck(rtwdev);
 }
 
@@ -1106,7 +1546,7 @@ static void rtw8188f_pwrtrack_set_ofdm_pwr(struct rtw_dev *rtwdev, s8 swing_idx,
 	swing_idx = clamp_t(s8, swing_idx, 0, RTW_OFDM_SWING_TABLE_SIZE - 1);
 	rtw_write32(rtwdev, REG_OFDM0_XA_TX_IQ_IMBALANCE,
 		    rtw8188f_ofdm_swing_table[swing_idx]);
-	rtw_write32_mask(rtwdev, REG_OFDM0_XA_TX_AFE, MASKH4BITS, 0);
+	rtw_write32_mask(rtwdev, REG_OFDM0_XC_TX_AFE, MASKH4BITS, 0);
 	rtw_write32_mask(rtwdev, REG_OFDM0_ECCA_THRES, BIT(24), 0);
 }
 
@@ -1181,7 +1621,8 @@ static void rtw8188f_phy_pwrtrack(struct rtw_dev *rtwdev)
 		return;
 	}
 
-	thermal_value = rtw_read_rf(rtwdev, RF_PATH_A, RF_T_METER, 0xf800);
+	thermal_value = rtw_read_rf(rtwdev, RF_PATH_A, RF_T_METER,
+				    BIT_MASK_THERMAL);
 
 	rtw_phy_pwrtrack_avg(rtwdev, thermal_value, RF_PATH_A);
 
@@ -1220,7 +1661,7 @@ static void rtw8188f_pwr_track(struct rtw_dev *rtwdev)
 
 	if (!dm_info->pwr_trk_triggered) {
 		rtw_write_rf(rtwdev, RF_PATH_A, RF_T_METER,
-			     GENMASK(17, 16), 0x03);
+			     BIT_MASK_THERMAL_TRIG, 0x03);
 		dm_info->pwr_trk_triggered = true;
 		return;
 	}
