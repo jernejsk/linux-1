@@ -1807,8 +1807,12 @@ const struct rtw_chip_info rtw8188f_hw_spec = {
 
 	.iqk_threshold = 8,
 
-	/* WoWLAN firmware exists, but is not implemented yet */
-	.wow_fw_name = "rtw88/rtw8188f_wow_fw.bin",
+	/* WoWLAN is not implemented, so deliberately do not declare
+	 * wow_fw_name: rtw_wait_firmware_completion() fails probe with
+	 * -EINVAL if the WoWLAN blob is declared but cannot be loaded, and
+	 * rtw8188f_wow_fw.bin is not in linux-firmware. Set both this and
+	 * wowlan_stub when WoWLAN is actually wired up.
+	 */
 	.wowlan_stub = NULL,
 	.max_scan_ie_len = IEEE80211_MAX_DATA_LEN,
 
