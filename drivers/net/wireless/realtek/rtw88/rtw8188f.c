@@ -1781,6 +1781,12 @@ const struct rtw_chip_info rtw8188f_hw_spec = {
 	.ampdu_density = IEEE80211_HT_MPDU_DENSITY_16,
 	.usb_tx_agg_desc_num = 1,
 	.hw_feature_report = true,
+	/* The vendor driver has no CCX TX report handling for this chip at
+	 * all and the firmware never sends C2H_CCX_TX_RPT: asking for one
+	 * only makes every frame with IEEE80211_TX_CTL_REQ_TX_STATUS wait
+	 * for the purge timer and then get reported as not acked.
+	 */
+	.no_ccx_tx_report = true,
 	.c2h_ra_report_size = 7,
 	.old_datarate_fb_limit = true,
 
