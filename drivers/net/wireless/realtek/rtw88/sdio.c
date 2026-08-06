@@ -20,7 +20,13 @@
 #include "tx.h"
 
 #define RTW_SDIO_INDIRECT_RW_RETRIES			50
-#define RTW_SDIO_OQT_TIMEOUT_MS				1000
+/*
+ * Output queue credits are polled, with a short sleep every
+ * RTW_SDIO_OQT_POLLS_PER_YIELD misses. The bound keeps the worst case at
+ * roughly a second, as before, while the common case costs no sleep at all.
+ */
+#define RTW_SDIO_OQT_POLLS_PER_YIELD			60
+#define RTW_SDIO_OQT_POLL_MAX				(1000 * RTW_SDIO_OQT_POLLS_PER_YIELD)
 
 /*
  * 8723BS SDIO TX FIFO back-pressure watermarks: stop the mac80211 queue once
@@ -796,19 +802,31 @@ static int rtw_sdio_check_free_txpg(struct rtw_dev *rtwdev, u8 queue,
 static int rtw_sdio_legacy_wait_tx_oqt(struct rtw_dev *rtwdev)
 {
 	struct rtw_sdio *rtwsdio = (struct rtw_sdio *)rtwdev->priv;
+	u32 reg = rtw_sdio_legacy_oqt_reg(rtwdev);
+	unsigned int i;
 	u8 free;
-	int i;
 
 	if (atomic_add_unless(&rtwsdio->tx_oqt_free, -1, 0))
 		return 0;
 
-	for (i = 0; i < RTW_SDIO_OQT_TIMEOUT_MS; i++) {
-		free = rtw_read8(rtwdev, rtw_sdio_legacy_oqt_reg(rtwdev));
+	/*
+	 * The chip hands credits back within microseconds, so poll for them
+	 * instead of sleeping on every miss: the vendor driver re-reads the
+	 * register on each iteration and only yields once every
+	 * RTW_SDIO_OQT_POLLS_PER_YIELD polls. Sleeping 1-2 ms per frame
+	 * whenever the cached credit runs out adds milliseconds of TX
+	 * latency, which is enough to collapse TCP throughput in the
+	 * *receive* direction, because the ACKs go out late.
+	 */
+	for (i = 1; i <= RTW_SDIO_OQT_POLL_MAX; i++) {
+		free = rtw_read8(rtwdev, reg);
 		if (free) {
 			atomic_set(&rtwsdio->tx_oqt_free, free - 1);
 			return 0;
 		}
-		usleep_range(1000, 2000);
+
+		if (i % RTW_SDIO_OQT_POLLS_PER_YIELD == 0)
+			usleep_range(1000, 2000);
 	}
 
 	return -EBUSY;
