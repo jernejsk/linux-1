@@ -566,31 +566,71 @@ static int rtw_sdio_read_port(struct rtw_dev *rtwdev, u8 *buf, size_t count)
  * not enough room they are resynchronised from the chip before the caller
  * gives up, which also absorbs a lost update.
  */
+/*
+ * Read the four free page counters. The register layout is chip specific:
+ * RTL8723BS packs them as four bytes in one dword, while RTL8188F uses four
+ * 16 bit fields spanning eight bytes -- vendor
+ * HalQueryTxBufferStatus8188FSdio() reads 8 bytes at SDIO_REG_FREE_TXPG and
+ * takes bytes 0, 2, 4 and 6. Returns false if the chip reports nothing yet.
+ */
+static bool rtw_sdio_legacy_read_free_txpg(struct rtw_dev *rtwdev, u32 pg[4])
+{
+	u32 lo, hi;
+
+	if (rtw_is_8189fs(rtwdev)) {
+		lo = rtw_read32(rtwdev, REG_SDIO_FREE_TXPG);
+		hi = rtw_read32(rtwdev, REG_SDIO_FREE_TXPG + 4);
+		if (!lo && !hi)
+			return false;
+
+		pg[0] = lo & 0xffff;		/* high */
+		pg[1] = (lo >> 16) & 0xffff;	/* normal */
+		pg[2] = hi & 0xffff;		/* low */
+		pg[3] = (hi >> 16) & 0xffff;	/* public */
+
+		return true;
+	}
+
+	lo = rtw_read32(rtwdev, REG_SDIO_FREE_TXPG);
+	if (!lo)
+		return false;
+
+	pg[0] = u32_get_bits(lo, BIT_FREE_TXPG_HIGH);
+	pg[1] = u32_get_bits(lo, BIT_FREE_TXPG_NORMAL);
+	pg[2] = u32_get_bits(lo, BIT_FREE_TXPG_LOW);
+	pg[3] = u32_get_bits(lo, BIT_FREE_TXPG_PUB);
+
+	return true;
+}
+
+static u32 rtw_sdio_legacy_oqt_reg(struct rtw_dev *rtwdev)
+{
+	if (rtw_is_8189fs(rtwdev))
+		return REG_SDIO_OQT_FREE_PG_8188F;
+
+	return REG_SDIO_OQT_FREE_PG;
+}
+
 static void rtw_sdio_legacy_store_free_txpg(struct rtw_dev *rtwdev,
-					    u32 free_txpg)
+					    const u32 pg[4])
 {
 	struct rtw_sdio *rtwsdio = (struct rtw_sdio *)rtwdev->priv;
 
-	atomic_set(&rtwsdio->free_pg_high,
-		   u32_get_bits(free_txpg, BIT_FREE_TXPG_HIGH));
-	atomic_set(&rtwsdio->free_pg_normal,
-		   u32_get_bits(free_txpg, BIT_FREE_TXPG_NORMAL));
-	atomic_set(&rtwsdio->free_pg_low,
-		   u32_get_bits(free_txpg, BIT_FREE_TXPG_LOW));
-	atomic_set(&rtwsdio->free_pg_pub,
-		   u32_get_bits(free_txpg, BIT_FREE_TXPG_PUB));
+	atomic_set(&rtwsdio->free_pg_high, pg[0]);
+	atomic_set(&rtwsdio->free_pg_normal, pg[1]);
+	atomic_set(&rtwsdio->free_pg_low, pg[2]);
+	atomic_set(&rtwsdio->free_pg_pub, pg[3]);
 }
 
 static void rtw_sdio_legacy_init_free_txpg(struct rtw_dev *rtwdev)
 {
 	struct rtw_sdio *rtwsdio = (struct rtw_sdio *)rtwdev->priv;
 	const struct rtw_page_table *pg_tbl;
-	u32 free_txpg;
+	u32 pg[4];
 	u16 pubq_num;
 
-	free_txpg = rtw_read32(rtwdev, REG_SDIO_FREE_TXPG);
-	if (free_txpg) {
-		rtw_sdio_legacy_store_free_txpg(rtwdev, free_txpg);
+	if (rtw_sdio_legacy_read_free_txpg(rtwdev, pg)) {
+		rtw_sdio_legacy_store_free_txpg(rtwdev, pg);
 	} else {
 		pg_tbl = &rtwdev->chip->page_table[0];
 		pubq_num = rtwdev->fifo.acq_pg_num - pg_tbl->hq_num -
@@ -604,15 +644,15 @@ static void rtw_sdio_legacy_init_free_txpg(struct rtw_dev *rtwdev)
 	}
 
 	atomic_set(&rtwsdio->tx_oqt_free,
-		   rtw_read8(rtwdev, REG_SDIO_OQT_FREE_PG));
+		   rtw_read8(rtwdev, rtw_sdio_legacy_oqt_reg(rtwdev)));
 }
 
 static void rtw_sdio_legacy_sync_free_txpg(struct rtw_dev *rtwdev)
 {
-	u32 free_txpg = rtw_read32(rtwdev, REG_SDIO_FREE_TXPG);
+	u32 pg[4];
 
-	if (free_txpg)
-		rtw_sdio_legacy_store_free_txpg(rtwdev, free_txpg);
+	if (rtw_sdio_legacy_read_free_txpg(rtwdev, pg))
+		rtw_sdio_legacy_store_free_txpg(rtwdev, pg);
 }
 
 /*
@@ -763,7 +803,7 @@ static int rtw_sdio_legacy_wait_tx_oqt(struct rtw_dev *rtwdev)
 		return 0;
 
 	for (i = 0; i < RTW_SDIO_OQT_TIMEOUT_MS; i++) {
-		free = rtw_read8(rtwdev, REG_SDIO_OQT_FREE_PG);
+		free = rtw_read8(rtwdev, rtw_sdio_legacy_oqt_reg(rtwdev));
 		if (free) {
 			atomic_set(&rtwsdio->tx_oqt_free, free - 1);
 			return 0;

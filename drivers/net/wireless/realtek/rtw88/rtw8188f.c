@@ -1616,10 +1616,12 @@ static void rtw8188f_phy_pwrtrack(struct rtw_dev *rtwdev)
 
 	rtw_phy_config_swing_table(rtwdev, &swing_table);
 
-	if (rtwdev->efuse.thermal_meter[RF_PATH_A] == 0xff) {
-		rtw_warn(rtwdev, "thermal meter is not calibrated\n");
+	/* Boards without a calibrated thermal meter simply do not get power
+	 * tracking. Return quietly, as rtw8703b does: this is checked on every
+	 * watchdog tick, so warning here would spam the log every 2 seconds.
+	 */
+	if (rtwdev->efuse.thermal_meter[RF_PATH_A] == 0xff)
 		return;
-	}
 
 	thermal_value = rtw_read_rf(rtwdev, RF_PATH_A, RF_T_METER,
 				    BIT_MASK_THERMAL);
@@ -1683,8 +1685,11 @@ static void rtw8188f_fill_txdesc_checksum(struct rtw_dev *rtwdev,
 	while (words--)
 		chksum ^= *data++;
 
-	chksum = ~chksum;
-
+	/* Unlike the 8723x family, this chip does *not* want the checksum
+	 * inverted: vendor rtl8188f_cal_txdesc_chksum() stores the plain XOR.
+	 * Getting this wrong makes the chip discard every frame without any
+	 * error, so TX goes silently dead while RX keeps working.
+	 */
 	le32p_replace_bits(&tx_desc->w7, __le16_to_cpu(chksum),
 			   RTW_TX_DESC_W7_TXDESC_CHECKSUM);
 }
@@ -1737,8 +1742,12 @@ static const struct rtw_chip_ops rtw8188f_ops = {
 };
 
 static const struct rtw_rfe_def rtw8188f_rfe_defs[] = {
+	/* pwr_track_tbl is not optional: rtw_phy_config_swing_table()
+	 * dereferences it without checking for NULL.
+	 */
 	[0] = { .phy_pg_tbl = &rtw8188f_bb_pg_tbl,
-		.txpwr_lmt_tbl = &rtw8188f_txpwr_lmt_tbl, },
+		.txpwr_lmt_tbl = &rtw8188f_txpwr_lmt_tbl,
+		.pwr_track_tbl = &rtw8188f_rtw_pwr_track_tbl, },
 };
 
 const struct rtw_chip_info rtw8188f_hw_spec = {

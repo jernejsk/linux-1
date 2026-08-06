@@ -93,6 +93,10 @@
 #define REG_SDIO_RX0_REQ_LEN			(SDIO_LOCAL_OFFSET + 0x001C)
 /* OQT Free Page */
 #define REG_SDIO_OQT_FREE_PG			(SDIO_LOCAL_OFFSET + 0x001E)
+/* RTL8188F puts the AC output-queue credits elsewhere: vendor
+ * HalQueryTxOQTBufferStatus8188FSdio() reads SDIO_REG_AC_OQT_FREEPG_8188F.
+ */
+#define REG_SDIO_OQT_FREE_PG_8188F		(SDIO_LOCAL_OFFSET + 0x002A)
 /* Free Tx Buffer Page */
 #define REG_SDIO_FREE_TXPG			(SDIO_LOCAL_OFFSET + 0x0020)
 #define BIT_FREE_TXPG_HIGH			GENMASK(7, 0)

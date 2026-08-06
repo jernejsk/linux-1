@@ -800,3 +800,24 @@ static const u32 rtw8188f_rf_a[] = {
 };
 
 RTW_DECL_TABLE_RF_RADIO(rtw8188f_rf_a, A);
+
+static const u8 rtw8188f_pwrtrk_2ga_n[] = {0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9, 9, 10, 11, 12, 13, 14, 15, 16, 17, 17, 18, 18, 18, 18, 18, 18, 18, 18, 18};
+static const u8 rtw8188f_pwrtrk_2ga_p[] = {0, 1, 2, 2, 3, 3, 4, 5, 5, 6, 7, 8, 9, 10, 11, 11, 12, 13, 14, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15};
+static const u8 rtw8188f_pwrtrk_2gb_n[] = {0, 0, 1, 1, 2, 2, 2, 3, 3, 3, 3, 4, 5, 5, 5, 6, 6, 7, 7, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9};
+static const u8 rtw8188f_pwrtrk_2gb_p[] = {0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 7, 8, 8, 8, 8};
+static const u8 rtw8188f_pwrtrk_2g_cck_a_n[] = {0, 1, 2, 3, 4, 6, 7, 7, 8, 9, 10, 11, 11, 12, 13, 14, 14, 15, 16, 16, 17, 18, 18, 18, 18, 18, 18, 18, 18, 18};
+static const u8 rtw8188f_pwrtrk_2g_cck_a_p[] = {0, 0, 1, 2, 2, 3, 3, 4, 5, 5, 6, 7, 8, 9, 10, 11, 12, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14};
+static const u8 rtw8188f_pwrtrk_2g_cck_b_n[] = {0, 1, 2, 2, 3, 3, 3, 4, 4, 4, 4, 5, 5, 6, 6, 6, 6, 7, 7, 7, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9};
+static const u8 rtw8188f_pwrtrk_2g_cck_b_p[] = {0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 5, 6, 6, 6, 6, 7, 7};
+
+const struct rtw_pwr_track_tbl rtw8188f_rtw_pwr_track_tbl = {
+	.pwrtrk_2gb_n = rtw8188f_pwrtrk_2gb_n,
+	.pwrtrk_2gb_p = rtw8188f_pwrtrk_2gb_p,
+	.pwrtrk_2ga_n = rtw8188f_pwrtrk_2ga_n,
+	.pwrtrk_2ga_p = rtw8188f_pwrtrk_2ga_p,
+	.pwrtrk_2g_cckb_n = rtw8188f_pwrtrk_2g_cck_b_n,
+	.pwrtrk_2g_cckb_p = rtw8188f_pwrtrk_2g_cck_b_p,
+	.pwrtrk_2g_ccka_n = rtw8188f_pwrtrk_2g_cck_a_n,
+	.pwrtrk_2g_ccka_p = rtw8188f_pwrtrk_2g_cck_a_p,
+};
+

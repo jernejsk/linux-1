@@ -12,5 +12,6 @@ extern const struct rtw_table rtw8188f_mac_tbl;
 extern const struct rtw_table rtw8188f_agc_tbl;
 extern const struct rtw_table rtw8188f_bb_tbl;
 extern const struct rtw_table rtw8188f_rf_a_tbl;
+extern const struct rtw_pwr_track_tbl rtw8188f_rtw_pwr_track_tbl;
 
 #endif
