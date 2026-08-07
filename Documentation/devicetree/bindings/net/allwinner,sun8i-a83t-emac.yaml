@@ -41,6 +41,7 @@ properties:
               - allwinner,sun50i-h616-emac0
               - allwinner,sun55i-a523-gmac0
           - const: allwinner,sun50i-a64-emac
+      - const: allwinner,sun50i-h616-emac1
       - items:
           - const: allwinner,sun55i-a523-gmac200
           - const: snps,dwmac-4.20a
@@ -71,10 +72,15 @@ properties:
     maxItems: 1
 
   syscon:
-    $ref: /schemas/types.yaml#/definitions/phandle
+    $ref: /schemas/types.yaml#/definitions/phandle-array
+    items:
+      - minItems: 1
+        maxItems: 2
     description:
-      Phandle to the device containing the EMAC or GMAC clock
-      register
+      Phandle to the device containing the EMAC or GMAC clock register,
+      optionally followed by the index of that register within the device.
+      SoCs with more than one EMAC keep one register per EMAC, laid out
+      consecutively. The index defaults to 0 when left out.
 
 required:
   - compatible
