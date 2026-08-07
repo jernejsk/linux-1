@@ -1013,8 +1013,14 @@ static int __rtw_download_firmware_legacy(struct rtw_dev *rtwdev,
 {
 	int ret = 0;
 
-	/* reset firmware if still present */
-	if (rtwdev->chip->id == RTW_CHIP_TYPE_8703B &&
+	/* Reset the firmware if it is still running, otherwise it never
+	 * releases REG_MCUFW_CTRL and en_download_firmware_legacy() below
+	 * fails to arm BIT_MCUFWDL_EN ("failed to check fw download ready"),
+	 * after which the download - and the whole probe - fails. This is hit
+	 * every time the driver is reloaded without power-cycling the chip.
+	 */
+	if ((rtwdev->chip->id == RTW_CHIP_TYPE_8703B ||
+	     rtwdev->chip->id == RTW_CHIP_TYPE_8188F) &&
 	    rtw_read8_mask(rtwdev, REG_MCUFW_CTRL, BIT_RAM_DL_SEL)) {
 		rtw_write8(rtwdev, REG_MCUFW_CTRL, 0x00);
 	}
