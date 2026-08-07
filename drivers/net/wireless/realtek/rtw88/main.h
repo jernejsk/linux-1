@@ -195,6 +195,7 @@ enum rtw_chip_type {
 	RTW_CHIP_TYPE_8821C,
 	RTW_CHIP_TYPE_8703B,
 	RTW_CHIP_TYPE_8723B,
+	RTW_CHIP_TYPE_8188F,
 	RTW_CHIP_TYPE_8821A,
 	RTW_CHIP_TYPE_8812A,
 	RTW_CHIP_TYPE_8814A,
@@ -2198,6 +2199,22 @@ static inline bool rtw_is_8723bs(struct rtw_dev *rtwdev)
 {
 	return rtwdev->chip->id == RTW_CHIP_TYPE_8723B &&
 	       rtwdev->hci.type == RTW_HCI_TYPE_SDIO;
+}
+
+static inline bool rtw_is_8189fs(struct rtw_dev *rtwdev)
+{
+	return rtwdev->chip->id == RTW_CHIP_TYPE_8188F &&
+	       rtwdev->hci.type == RTW_HCI_TYPE_SDIO;
+}
+
+/* Older SDIO parts whose firmware does not throttle the host: the driver
+ * has to account for free TX pages and output queue credits itself, pad
+ * writes to a 4 byte (and, above one block, block sized) boundary, and
+ * cope with RX descriptors that carry a zero packet length.
+ */
+static inline bool rtw_sdio_is_legacy_trx(struct rtw_dev *rtwdev)
+{
+	return rtw_is_8723bs(rtwdev) || rtw_is_8189fs(rtwdev);
 }
 
 static inline u8 rtw_acquire_macid(struct rtw_dev *rtwdev)
