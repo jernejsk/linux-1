@@ -499,6 +499,9 @@ struct cw1200_common;
 /* 4.37 GroupTxSequenceCounter */
 #define WSM_MIB_ID_GRP_SEQ_COUNTER		0x101F
 
+/* XRadio extension: tell the firmware the host is going to sleep */
+#define WSM_MIB_ID_SET_HOST_SLEEP		0x1050
+
 /* 4.38 ProtectedMgmtPolicy */
 #define WSM_MIB_ID_PROTECTED_MGMT_POLICY	0x1020
 

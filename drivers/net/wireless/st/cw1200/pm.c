@@ -13,6 +13,7 @@
 #include "sta.h"
 #include "bh.h"
 #include "hwbus.h"
+#include "wsm.h"
 
 #define CW1200_BEACON_SKIPPING_MULTIPLIER 3
 
@@ -153,6 +154,80 @@ int cw1200_can_suspend(struct cw1200_common *priv)
 	return 1;
 }
 EXPORT_SYMBOL_GPL(cw1200_can_suspend);
+
+static int cw1200_pm_set_host_sleep(struct cw1200_common *priv, bool sleep)
+{
+	u8 host_sleep = sleep;
+
+	if (priv->fw_api != CW1200_FW_API_XRADIO)
+		return 0;
+
+	return wsm_write_mib(priv, WSM_MIB_ID_SET_HOST_SLEEP,
+			     &host_sleep, sizeof(host_sleep));
+}
+
+/*
+ * Hand the chip over to the suspend: tell the XRadio firmware to stop poking
+ * us, then park the BH thread. Left running, the BH would claim the SDIO host
+ * the moment interrupts come back in the noirq resume phase -- before the SDIO
+ * card itself is resumed -- and deadlock mmc_sdio_resume() in
+ * __mmc_claim_host().
+ */
+int cw1200_pm_prepare_suspend(struct cw1200_common *priv)
+{
+	int ret;
+
+	/*
+	 * With WoWLAN configured mac80211 suspends the wiphy first, and
+	 * cw1200_wow_suspend() has already parked the BH thread by the time we
+	 * get here. There is then nothing left to carry a WSM command, and the
+	 * thread must not be parked a second time. Masking the out-of-band
+	 * interrupt in the caller is enough on its own in that case.
+	 */
+	if (priv->pm_state.suspend_state)
+		return 0;
+
+	ret = cw1200_pm_set_host_sleep(priv, true);
+	if (ret) {
+		pr_err("[PM] can't put the firmware to sleep: %d\n", ret);
+		return ret;
+	}
+
+	ret = cw1200_bh_suspend(priv);
+	if (ret)
+		pr_err("[PM] can't park the BH thread: %d\n", ret);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(cw1200_pm_prepare_suspend);
+
+/*
+ * The mirror image, and it must run once the SDIO card is fully resumed --
+ * waking the chip means claiming the SDIO host, which ->resume() cannot do
+ * without racing mmc_sdio_resume() for the very same lock.
+ */
+void cw1200_pm_finish_resume(struct cw1200_common *priv)
+{
+	int ret;
+
+	/* Left to cw1200_wow_resume(), which mac80211 calls after us */
+	if (priv->pm_state.suspend_state)
+		return;
+
+	ret = cw1200_bh_resume(priv);
+	if (ret) {
+		pr_err("[PM] can't restart the BH thread: %d\n", ret);
+		return;
+	}
+
+	/* The chip is in its low power state; make the BH wake it first. */
+	priv->device_can_sleep = true;
+
+	ret = cw1200_pm_set_host_sleep(priv, false);
+	if (ret)
+		pr_err("[PM] can't wake the firmware back up: %d\n", ret);
+}
+EXPORT_SYMBOL_GPL(cw1200_pm_finish_resume);
 
 int cw1200_wow_suspend(struct ieee80211_hw *hw, struct cfg80211_wowlan *wowlan)
 {

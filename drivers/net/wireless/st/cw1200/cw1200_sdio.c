@@ -24,6 +24,7 @@
 #include "hwbus.h"
 #include <linux/platform_data/net-cw1200.h>
 #include "hwio.h"
+#include "pm.h"
 
 MODULE_AUTHOR("Dmitry Tarnyagin <dmitry.tarnyagin@lockless.no>");
 MODULE_DESCRIPTION("mac80211 ST-Ericsson CW1200 SDIO driver");
@@ -58,6 +59,8 @@ struct hwbus_priv {
 	const struct cw1200_platform_data_sdio *pdata;
 	/* Backing store for pdata when it is built from the device tree */
 	struct cw1200_platform_data_sdio of_pdata;
+	bool			suspended;
+	bool			irq_masked;
 };
 
 static const struct sdio_device_id cw1200_sdio_ids[] = {
@@ -106,6 +109,25 @@ static void cw1200_sdio_irq_handler(struct sdio_func *func)
 
 static irqreturn_t cw1200_gpio_hardirq(int irq, void *dev_id)
 {
+	struct hwbus_priv *self = dev_id;
+
+	/*
+	 * Interrupts are unmasked again in the noirq resume phase, well before
+	 * the SDIO card itself is resumed. Running the threaded handler then
+	 * would claim the SDIO host and block on a bus that is still down,
+	 * which deadlocks mmc_sdio_resume() in __mmc_claim_host(). Mask the
+	 * line instead and let ->resume() put it back once the bus is up.
+	 *
+	 * A wakeup arriving while the system is actually suspended never gets
+	 * here: the interrupt is armed for wakeup, so the core takes it and
+	 * wakes the system without running any handler.
+	 */
+	if (READ_ONCE(self->suspended)) {
+		disable_irq_nosync(irq);
+		WRITE_ONCE(self->irq_masked, true);
+		return IRQ_HANDLED;
+	}
+
 	return IRQ_WAKE_THREAD;
 }
 
@@ -404,14 +426,44 @@ static int cw1200_sdio_suspend(struct device *dev)
 
 	/* Notify SDIO that CW1200 will remain powered during suspend */
 	ret = sdio_set_host_pm_flags(func, MMC_PM_KEEP_POWER);
-	if (ret)
+	if (ret) {
 		pr_err("Error setting SDIO pm flags: %i\n", ret);
+		return ret;
+	}
 
-	return ret;
+	ret = cw1200_pm_prepare_suspend(self->core);
+	if (ret)
+		return ret;
+
+	/*
+	 * Keep the out-of-band interrupt armed so it can still wake the
+	 * system; cw1200_gpio_hardirq() takes care of not touching the bus
+	 * until ->resume() has run.
+	 */
+	WRITE_ONCE(self->suspended, true);
+
+	return 0;
 }
 
 static int cw1200_sdio_resume(struct device *dev)
 {
+	struct sdio_func *func = dev_to_sdio_func(dev);
+	struct hwbus_priv *self = sdio_get_drvdata(func);
+
+	WRITE_ONCE(self->suspended, false);
+	if (READ_ONCE(self->irq_masked)) {
+		WRITE_ONCE(self->irq_masked, false);
+		enable_irq(self->pdata->irq);
+	}
+
+	/*
+	 * The SDIO card is our parent, so it has already been resumed and the
+	 * bus is usable again. Wake the chip here rather than from ->complete()
+	 * so that it is answering commands by the time mac80211 resumes the
+	 * wiphy, which happens right after this.
+	 */
+	cw1200_pm_finish_resume(self->core);
+
 	return 0;
 }
 
