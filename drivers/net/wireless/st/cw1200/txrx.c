@@ -365,8 +365,24 @@ static int tx_policy_upload(struct cw1200_common *priv)
 			struct wsm_tx_rate_retry_policy *dst =
 				&arg.tbl[arg.num];
 			dst->index = i;
-			dst->short_retries = priv->short_frame_max_tx_count;
-			dst->long_retries = priv->long_frame_max_tx_count;
+			if (priv->fw_api == CW1200_FW_API_XRADIO) {
+				/*
+				 * COUNT_INITIAL_TRANSMIT below makes these a
+				 * count of transmissions rather than retries,
+				 * so subtract the initial one. The XRadio
+				 * firmware only applies the long count to RTS,
+				 * so give it the short limit too.
+				 */
+				dst->short_retries =
+					priv->short_frame_max_tx_count - 1;
+				dst->long_retries =
+					priv->short_frame_max_tx_count - 1;
+			} else {
+				dst->short_retries =
+					priv->short_frame_max_tx_count;
+				dst->long_retries =
+					priv->long_frame_max_tx_count;
+			}
 
 			dst->flags = WSM_TX_RATE_POLICY_FLAG_TERMINATE_WHEN_FINISHED |
 				WSM_TX_RATE_POLICY_FLAG_COUNT_INITIAL_TRANSMIT;
