@@ -309,7 +309,8 @@ static int cw1200_sdio_probe(struct sdio_func *func,
 				   self->pdata->ref_clk,
 				   self->pdata->macaddr,
 				   self->pdata->sdd_file,
-				   self->pdata->have_5ghz);
+				   self->pdata->have_5ghz,
+				   CW1200_FW_API_ORIGINAL);
 	if (status) {
 		cw1200_sdio_irq_unsubscribe(self);
 		sdio_claim_host(func);
