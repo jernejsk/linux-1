@@ -282,6 +282,45 @@ int rtw_pwr_seq_parser(struct rtw_dev *rtwdev,
 }
 EXPORT_SYMBOL(rtw_pwr_seq_parser);
 
+/* A chip whose MAC power domain is down answers CMD52 with 0xea and fails every
+ * CMD53 block transfer. That is indistinguishable from success to
+ * rtw_pwr_seq_parser(), because 0xea satisfies the poll conditions of the
+ * power-on sequence by accident (BIT(1) is set, BIT(0) is clear), so the
+ * sequence "passes" and the driver carries on against a dead chip. Verify the
+ * result the way the vendor driver does in sdio_power_on_check(): reject the
+ * 0xea marker and require byte and block access to agree on REG_CR.
+ */
+static int rtw_mac_power_on_check_sdio(struct rtw_dev *rtwdev)
+{
+	u32 cmd52 = 0;
+	u32 cmd53;
+	unsigned int i;
+	u8 val8;
+
+	/* rtw_read8() is a plain CMD52 whether or not RTW_FLAG_POWERON is set */
+	for (i = 0; i < 4; i++) {
+		val8 = rtw_read8(rtwdev, REG_CR + i);
+		if (val8 == 0xea) {
+			rtw_dbg(rtwdev, RTW_DBG_UNEXP,
+				"MAC power domain is down (REG_CR+%u = 0xea)\n", i);
+			return -EIO;
+		}
+
+		cmd52 |= (u32)val8 << (i * 8);
+	}
+
+	/* RTW_FLAG_POWERON is set by now, so this is a CMD53 transfer */
+	cmd53 = rtw_read32(rtwdev, REG_CR);
+	if (cmd53 != cmd52) {
+		rtw_dbg(rtwdev, RTW_DBG_UNEXP,
+			"REG_CR differs between cmd52 (0x%08x) and cmd53 (0x%08x)\n",
+			cmd52, cmd53);
+		return -EIO;
+	}
+
+	return 0;
+}
+
 static int rtw_mac_power_switch(struct rtw_dev *rtwdev, bool pwr_on)
 {
 	const struct rtw_chip_info *chip = rtwdev->chip;
@@ -334,8 +373,15 @@ static int rtw_mac_power_switch(struct rtw_dev *rtwdev, bool pwr_on)
 	if (rtw_hci_type(rtwdev) == RTW_HCI_TYPE_SDIO)
 		rtw_write32(rtwdev, REG_SDIO_HIMR, imr);
 
-	if (!ret && pwr_on)
+	if (!ret && pwr_on) {
 		set_bit(RTW_FLAG_POWERON, rtwdev->flags);
+
+		if (rtw_hci_type(rtwdev) == RTW_HCI_TYPE_SDIO) {
+			ret = rtw_mac_power_on_check_sdio(rtwdev);
+			if (ret)
+				clear_bit(RTW_FLAG_POWERON, rtwdev->flags);
+		}
+	}
 
 	return ret;
 }
@@ -397,7 +443,11 @@ int rtw_mac_power_on(struct rtw_dev *rtwdev)
 		goto err;
 
 	ret = rtw_mac_power_switch(rtwdev, true);
-	if (ret == -EALREADY) {
+	if (ret == -EALREADY || ret == -EIO) {
+		/* -EIO means the MAC power domain never came up: take the chip
+		 * back down and run the whole sequence again, which is what the
+		 * vendor driver does too.
+		 */
 		rtw_mac_power_switch(rtwdev, false);
 
 		ret = rtw_mac_pre_system_cfg(rtwdev);
