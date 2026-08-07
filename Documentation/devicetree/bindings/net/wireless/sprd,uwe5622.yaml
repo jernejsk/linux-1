@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/net/wireless/sprd,uwe5622.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Unisoc UWE5622 Wi-Fi and Bluetooth controller
+
+maintainers:
+  - Jernej Skrabec <jernej.skrabec@gmail.com>
+
+description: |
+  The UWE5622 is a combined dual-band 802.11ac and Bluetooth 5 controller.
+  Wi-Fi, Bluetooth HCI, firmware control, and power-management messages share
+  one multiplexed SDIO function. Boards normally control reset and the 32 kHz
+  low-power clock through the parent MMC power sequence.
+
+allOf:
+  - $ref: /schemas/net/wireless/wireless-controller.yaml#
+
+properties:
+  compatible:
+    const: sprd,uwe5622
+
+  reg:
+    const: 1
+
+  interrupts:
+    maxItems: 1
+    description:
+      Optional out-of-band interrupt from the controller. If it is absent,
+      the SDIO in-band interrupt is used.
+
+  interrupt-names:
+    const: host-wake
+
+  bluetooth-enable-gpios:
+    maxItems: 1
+    description:
+      Bluetooth reset/regulator-enable signal. The signal is asserted while
+      the HCI device is open and forced inactive during shutdown.
+
+  device-wake-gpios:
+    maxItems: 1
+    description:
+      Optional host-to-controller Bluetooth wake signal.
+
+  wakeup-source: true
+
+required:
+  - compatible
+  - reg
+
+dependencies:
+  interrupts:
+    - interrupt-names
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+
+    mmc {
+        #address-cells = <1>;
+        #size-cells = <0>;
+        bus-width = <4>;
+        non-removable;
+        keep-power-in-suspend;
+
+        wifi@1 {
+            compatible = "sprd,uwe5622";
+            reg = <1>;
+            bluetooth-enable-gpios = <&gpio 4 4 GPIO_ACTIVE_HIGH>;
+            device-wake-gpios = <&gpio 4 2 GPIO_ACTIVE_HIGH>;
+            wakeup-source;
+        };
+    };
