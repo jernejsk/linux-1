@@ -636,7 +636,12 @@ static irqreturn_t sunxi_mmc_handle_manual_stop(int irq, void *dev_id)
 		return IRQ_HANDLED;
 	}
 
-	dev_err(mmc_dev(host->mmc), "data error, sending stop command\n");
+	/*
+	 * Consumers retry these, and on a busy SDIO card an occasional data
+	 * CRC error is normal, so do not let a recovered error flood the log.
+	 */
+	dev_err_ratelimited(mmc_dev(host->mmc),
+			    "data error, sending stop command\n");
 
 	/*
 	 * We will never have more than one outstanding request,
