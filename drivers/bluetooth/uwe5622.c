@@ -286,8 +286,10 @@ static int uwe5622_bt_resume(struct device *dev)
 	msleep(20);
 	bt->suspended = false;
 	ret = uwe5622_bt_sleep_mode(bt, false, false);
-	if (ret)
+	if (ret) {
+		uwe5622_set_wake(bt->client, false);
 		return ret;
+	}
 	ret = hci_resume_dev(bt->hdev);
 	uwe5622_set_wake(bt->client, false);
 	return ret;
