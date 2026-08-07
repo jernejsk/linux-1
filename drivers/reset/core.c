@@ -1181,7 +1181,13 @@ __fwnode_reset_control_get(struct fwnode_handle *fwnode, const char *id, int ind
 		ret = __reset_add_reset_gpio_device(fwnode, &args);
 		if (ret) {
 			fwnode_handle_put(args.fwnode);
-			return ERR_PTR(ret);
+			/*
+			 * The reset-gpio fallback only understands a subset of
+			 * the GPIO controllers out there. Failing to build one
+			 * must not turn an optional reset into a hard error:
+			 * the consumer can still drive the GPIO itself.
+			 */
+			return optional ? NULL : ERR_PTR(ret);
 		}
 	}
 
