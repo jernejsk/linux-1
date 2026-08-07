@@ -98,7 +98,7 @@
 };
 
 &mmc1 {
-	vmmc-supply = <&reg_dcdce>;
+	vmmc-supply = <&reg_aldo2>;
 	mmc-pwrseq = <&wifi_pwrseq>;
 	bus-width = <4>;
 	max-frequency = <50000000>;
@@ -163,18 +163,23 @@
 				regulator-name = "vcc-sys";
 			};
 
+			/* Supplies the WiFi chip, among other things */
 			reg_aldo2: aldo2 {
-				regulator-always-on;
 				regulator-min-microvolt = <3300000>;
 				regulator-max-microvolt = <3300000>;
 				regulator-name = "vcc3v3-ext";
 			};
 
+			/*
+			 * Enabled by the Android BSP, and tied to the same net
+			 * as aldo2: with aldo2 off but this one on the WiFi
+			 * chip still comes up. Not needed on its own.
+			 */
 			reg_aldo3: aldo3 {
-				regulator-always-on;
 				regulator-min-microvolt = <3300000>;
 				regulator-max-microvolt = <3300000>;
 				regulator-name = "vcc3v3-ext2";
+				status = "disabled";
 			};
 
 			reg_bldo1: bldo1 {
