@@ -16,11 +16,23 @@
 	compatible = "hechuang,x96-mate", "allwinner,sun50i-h616";
 
 	aliases {
+		ethernet0 = &emac1;
+		ethernet1 = &sdio_wifi;
 		serial0 = &uart0;
 	};
 
 	chosen {
 		stdout-path = "serial0:115200n8";
+	};
+
+	wifi_pwrseq: pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		clocks = <&rtc CLK_OSC32K_FANOUT>;
+		clock-names = "ext_clock";
+		pinctrl-0 = <&x32clk_fanout_pin>;
+		pinctrl-names = "default";
+		reset-gpios = <&pio 6 18 GPIO_ACTIVE_LOW>;	/* PG18 */
+		post-power-on-delay-ms = <200>;
 	};
 
 	reg_vcc5v: vcc5v {
@@ -50,6 +62,17 @@
 	status = "okay";
 };
 
+&emac1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&rmii_pins>;
+	phy-mode = "rmii";
+	phy-handle = <&rmii_phy>;
+	phy-supply = <&reg_aldo1>;
+	allwinner,rx-delay-ps = <3100>;
+	allwinner,tx-delay-ps = <700>;
+	status = "okay";
+};
+
 &gpu {
 	mali-supply = <&reg_dcdcc>;
 	status = "okay";
@@ -59,12 +82,36 @@
 	status = "okay";
 };
 
+&mdio1 {
+	rmii_phy: ethernet-phy@1 {
+		compatible = "ethernet-phy-ieee802.3-c22";
+		reg = <1>;
+	};
+};
+
 &mmc0 {
 	vmmc-supply = <&reg_dcdce>;
-	cd-gpios = <&pio 5 6 GPIO_ACTIVE_LOW>;	/* PF6 */
+	broken-cd;
 	disable-wp;
 	bus-width = <4>;
 	status = "okay";
+};
+
+&mmc1 {
+	vmmc-supply = <&reg_dcdce>;
+	mmc-pwrseq = <&wifi_pwrseq>;
+	bus-width = <4>;
+	max-frequency = <50000000>;
+	non-removable;
+	status = "okay";
+
+	sdio_wifi: wifi@1 {
+		compatible = "xradio,xr819";
+		reg = <1>;
+		interrupt-parent = <&pio>;
+		interrupts = <6 15 IRQ_TYPE_LEVEL_HIGH>;	/* PG15 */
+		interrupt-names = "host-wake";
+	};
 };
 
 &mmc2 {
@@ -114,20 +161,18 @@
 				regulator-name = "vcc-sys";
 			};
 
-			/* Enabled by the Android BSP */
 			reg_aldo2: aldo2 {
+				regulator-always-on;
 				regulator-min-microvolt = <3300000>;
 				regulator-max-microvolt = <3300000>;
 				regulator-name = "vcc3v3-ext";
-				status = "disabled";
 			};
 
-			/* Enabled by the Android BSP */
 			reg_aldo3: aldo3 {
+				regulator-always-on;
 				regulator-min-microvolt = <3300000>;
 				regulator-max-microvolt = <3300000>;
 				regulator-name = "vcc3v3-ext2";
-				status = "disabled";
 			};
 
 			reg_bldo1: bldo1 {
