@@ -239,6 +239,19 @@ int rtw_pwr_seq_parser(struct rtw_dev *rtwdev,
 
 	cut = rtwdev->hal.cut_version;
 	cut_mask = cut_version_to_mask(cut);
+	if (!(cut_mask & RTW_PWR_CUT_ALL_MSK)) {
+		/* The cut version is read from REG_SYS_CFG1 before the chip is
+		 * powered on. When the driver is reloaded the chip is still
+		 * powered down from the previous time, that register reads back
+		 * as 0xea, and the cut version - and with it this mask - is
+		 * garbage. No sequence entry is tagged wider than
+		 * RTW_PWR_CUT_ALL_MSK, so such a mask matches nothing and the
+		 * whole power sequence silently turns into a no-op while
+		 * reporting success. Fall back to matching every cut, which is
+		 * what the tables ask for anyway.
+		 */
+		cut_mask = RTW_PWR_CUT_ALL_MSK;
+	}
 	switch (rtw_hci_type(rtwdev)) {
 	case RTW_HCI_TYPE_PCIE:
 		intf_mask = RTW_PWR_INTF_PCI_MSK;
