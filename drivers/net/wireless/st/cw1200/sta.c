@@ -1857,8 +1857,13 @@ void cw1200_bss_info_changed(struct ieee80211_hw *dev,
 	     BSS_CHANGED_IBSS)) {
 		pr_debug("BSS_CHANGED_BEACON\n");
 		priv->beacon_int = info->beacon_int;
-		cw1200_update_beaconing(priv);
+		/*
+		 * The beacon template has to reach the firmware before the AP
+		 * is started, or it starts beaconing with nothing to send and
+		 * takes an exception.
+		 */
 		cw1200_upload_beacon(priv);
+		cw1200_update_beaconing(priv);
 	}
 
 	if (changed & BSS_CHANGED_BEACON_ENABLED) {
