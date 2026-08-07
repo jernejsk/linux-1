@@ -1463,10 +1463,24 @@ static int __maybe_unused rtw_sdio_suspend(struct device *dev)
 	int ret;
 
 	ret = sdio_set_host_pm_flags(func, MMC_PM_KEEP_POWER);
-	if (ret)
-		rtw_err(rtwdev, "Failed to host PM flag MMC_PM_KEEP_POWER");
+	if (ret) {
+		/* Plenty of SDIO hosts do not advertise MMC_PM_KEEP_POWER at
+		 * all, so this fails with -EINVAL on them. That only matters
+		 * when the chip has to keep running across the suspend for
+		 * WoWLAN; otherwise mac80211 has already stopped the device and
+		 * starts it again on resume, which powers the chip back up. Do
+		 * not take the whole system suspend down over it.
+		 */
+		if (test_bit(RTW_FLAG_WOWLAN, rtwdev->flags)) {
+			rtw_err(rtwdev, "failed to set MMC_PM_KEEP_POWER\n");
+			return ret;
+		}
 
-	return ret;
+		rtw_dbg(rtwdev, RTW_DBG_SDIO,
+			"host cannot keep SDIO power across suspend\n");
+	}
+
+	return 0;
 }
 
 static int __maybe_unused rtw_sdio_resume(struct device *dev)
