@@ -1901,6 +1901,8 @@ patternProperties:
     description: Shenzhen Xinpeng Technology Co., Ltd
   "^xiphera,.*":
     description: Xiphera Ltd.
+  "^xradio,.*":
+    description: XRadio Technology Co., Ltd.
   "^xlnx,.*":
     description: Xilinx
   "^xnano,.*":
