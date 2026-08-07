@@ -329,6 +329,9 @@ static inline void rtw_coex_set_init(struct rtw_dev *rtwdev)
 {
 	const struct rtw_chip_info *chip = rtwdev->chip;
 
+	if (!chip->ops->coex_set_init)
+		return;
+
 	chip->ops->coex_set_init(rtwdev);
 }
 
@@ -347,6 +350,9 @@ static inline void rtw_coex_set_gnt_fix(struct rtw_dev *rtwdev)
 {
 	const struct rtw_chip_info *chip = rtwdev->chip;
 
+	if (!chip->ops->coex_set_gnt_fix)
+		return;
+
 	chip->ops->coex_set_gnt_fix(rtwdev);
 }
 
@@ -354,12 +360,18 @@ static inline void rtw_coex_set_gnt_debug(struct rtw_dev *rtwdev)
 {
 	const struct rtw_chip_info *chip = rtwdev->chip;
 
+	if (!chip->ops->coex_set_gnt_debug)
+		return;
+
 	chip->ops->coex_set_gnt_debug(rtwdev);
 }
 
-static inline  void rtw_coex_set_rfe_type(struct rtw_dev *rtwdev)
+static inline void rtw_coex_set_rfe_type(struct rtw_dev *rtwdev)
 {
 	const struct rtw_chip_info *chip = rtwdev->chip;
+
+	if (!chip->ops->coex_set_rfe_type)
+		return;
 
 	chip->ops->coex_set_rfe_type(rtwdev);
 }
@@ -368,6 +380,9 @@ static inline void rtw_coex_set_wl_tx_power(struct rtw_dev *rtwdev, u8 wl_pwr)
 {
 	const struct rtw_chip_info *chip = rtwdev->chip;
 
+	if (!chip->ops->coex_set_wl_tx_power)
+		return;
+
 	chip->ops->coex_set_wl_tx_power(rtwdev, wl_pwr);
 }
 
@@ -375,6 +390,9 @@ static inline
 void rtw_coex_set_wl_rx_gain(struct rtw_dev *rtwdev, bool low_gain)
 {
 	const struct rtw_chip_info *chip = rtwdev->chip;
+
+	if (!chip->ops->coex_set_wl_rx_gain)
+		return;
 
 	chip->ops->coex_set_wl_rx_gain(rtwdev, low_gain);
 }
