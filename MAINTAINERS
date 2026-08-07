@@ -28208,6 +28208,16 @@ S:	Maintained
 W:	http://en.wikipedia.org/wiki/Util-linux
 T:	git git://git.kernel.org/pub/scm/utils/util-linux/util-linux.git
 
+UNISOC UWE5622 WIRELESS DRIVER
+M:	Jernej Skrabec <jernej.skrabec@gmail.com>
+L:	linux-wireless@vger.kernel.org
+L:	linux-bluetooth@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/net/wireless/sprd,uwe5622.yaml
+F:	drivers/bluetooth/uwe5622.c
+F:	drivers/net/wireless/unisoc/
+F:	include/linux/uwe5622.h
+
 UUID HELPERS
 R:	Andy Shevchenko <andriy.shevchenko@linux.intel.com>
 L:	linux-kernel@vger.kernel.org
