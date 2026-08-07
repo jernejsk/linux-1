@@ -278,6 +278,7 @@ void rtw_phy_dig_write(struct rtw_dev *rtwdev, u8 igi)
 		rtw_write32_mask(rtwdev, addr, mask, igi);
 	}
 }
+EXPORT_SYMBOL(rtw_phy_dig_write);
 
 static void rtw_phy_stat_false_alarm(struct rtw_dev *rtwdev)
 {
