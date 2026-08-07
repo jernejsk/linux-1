@@ -2320,6 +2320,30 @@ static int cw1200_enable_beaconing(struct cw1200_common *priv,
 	return wsm_beacon_transmit(priv, &transmit);
 }
 
+/*
+ * The basic rates only reach mac80211 through the SET_BSS that user space
+ * sends after the AP has been started, so bss_conf.basic_rates is still empty
+ * when the AP is brought up. The firmware takes an exception if it is started
+ * with an empty basic rate set, so fall back to the mandatory rates for the
+ * band.
+ */
+static u32 cw1200_ap_basic_rate_set(struct cw1200_common *priv, u32 basic_rates)
+{
+	u32 mandatory;
+
+	if (basic_rates)
+		return cw1200_rate_mask_to_wsm(priv, basic_rates);
+
+	if (priv->channel->band == NL80211_BAND_5GHZ)
+		/* 6, 12 and 24 Mb/s, indices into cw1200_a_rates */
+		mandatory = BIT(0) | BIT(2) | BIT(4);
+	else
+		/* 1, 2, 5.5 and 11 Mb/s, indices into cw1200_g_rates */
+		mandatory = BIT(0) | BIT(1) | BIT(2) | BIT(3);
+
+	return cw1200_rate_mask_to_wsm(priv, mandatory);
+}
+
 static int cw1200_start_ap(struct cw1200_common *priv)
 {
 	int ret;
@@ -2336,7 +2360,7 @@ static int cw1200_start_ap(struct cw1200_common *priv)
 				WSM_JOIN_PREAMBLE_SHORT :
 				WSM_JOIN_PREAMBLE_LONG,
 		.probe_delay = 100,
-		.basic_rate_set = cw1200_rate_mask_to_wsm(priv,
+		.basic_rate_set = cw1200_ap_basic_rate_set(priv,
 				conf->basic_rates),
 	};
 	struct wsm_operational_mode mode = {
