@@ -15,6 +15,9 @@
 #include <linux/mmc/card.h>
 #include <linux/mmc/sdio.h>
 #include <linux/mmc/sdio_ids.h>
+#include <linux/of.h>
+#include <linux/of_irq.h>
+#include <linux/of_net.h>
 #include <net/mac80211.h>
 
 #include "cw1200.h"
@@ -35,6 +38,12 @@ static struct cw1200_platform_data_sdio sagrad_109x_evk_platform_data = {
 	.sdd_file = "sdd_sagrad_1091_1098.bin",
 };
 
+/* The XR819 is clocked from a 24MHz reference and is 2.4GHz only */
+static const struct cw1200_platform_data_sdio xradio_xr819_platform_data = {
+	.ref_clk = 24000,
+	.have_5ghz = false,
+};
+
 /* Allow platform data to be overridden */
 static struct cw1200_platform_data_sdio *global_plat_data = &sagrad_109x_evk_platform_data;
 
@@ -47,10 +56,15 @@ struct hwbus_priv {
 	struct sdio_func	*func;
 	struct cw1200_common	*core;
 	const struct cw1200_platform_data_sdio *pdata;
+	/* Backing store for pdata when it is built from the device tree */
+	struct cw1200_platform_data_sdio of_pdata;
 };
 
 static const struct sdio_device_id cw1200_sdio_ids[] = {
-	{ SDIO_DEVICE(SDIO_VENDOR_ID_STE, SDIO_DEVICE_ID_STE_CW1200) },
+	{ SDIO_DEVICE(SDIO_VENDOR_ID_STE, SDIO_DEVICE_ID_STE_CW1200),
+	  .driver_data = CW1200_FW_API_ORIGINAL },
+	{ SDIO_DEVICE(SDIO_VENDOR_ID_STE, SDIO_DEVICE_ID_STE_XR819),
+	  .driver_data = CW1200_FW_API_XRADIO },
 	{ /* end: all zeroes */			},
 };
 MODULE_DEVICE_TABLE(sdio, cw1200_sdio_ids);
@@ -274,6 +288,40 @@ static const struct hwbus_ops cw1200_sdio_hwbus_ops = {
 	.power_mgmt		= cw1200_sdio_pm,
 };
 
+static const struct of_device_id xradio_sdio_of_match_table[] = {
+	{ .compatible = "xradio,xr819" },
+	{ }
+};
+
+/*
+ * The SDIO ids are enough to bind the driver, so a device tree node is
+ * optional. When there is one it can name an out-of-band host wake interrupt
+ * and a MAC address.
+ */
+static const struct cw1200_platform_data_sdio *
+cw1200_sdio_get_pdata(struct hwbus_priv *self,
+		      const struct sdio_device_id *id)
+{
+	struct device *dev = &self->func->dev;
+	u8 *macaddr;
+
+	if (id->driver_data != CW1200_FW_API_XRADIO)
+		return global_plat_data;
+
+	self->of_pdata = xradio_xr819_platform_data;
+
+	if (of_match_node(xradio_sdio_of_match_table, dev->of_node)) {
+		/* Without one of these the in-band SDIO interrupt is used */
+		self->of_pdata.irq = irq_of_parse_and_map(dev->of_node, 0);
+
+		macaddr = devm_kmalloc(dev, ETH_ALEN, GFP_KERNEL);
+		if (macaddr && !of_get_mac_address(dev->of_node, macaddr))
+			self->of_pdata.macaddr = macaddr;
+	}
+
+	return &self->of_pdata;
+}
+
 /* Probe Function to be called by SDIO stack when device is discovered */
 static int cw1200_sdio_probe(struct sdio_func *func,
 			     const struct sdio_device_id *id)
@@ -295,8 +343,8 @@ static int cw1200_sdio_probe(struct sdio_func *func,
 
 	func->card->quirks |= MMC_QUIRK_LENIENT_FN0;
 
-	self->pdata = global_plat_data; /* FIXME */
 	self->func = func;
+	self->pdata = cw1200_sdio_get_pdata(self, id);
 	sdio_set_drvdata(func, self);
 	sdio_claim_host(func);
 	sdio_enable_func(func);
@@ -310,7 +358,7 @@ static int cw1200_sdio_probe(struct sdio_func *func,
 				   self->pdata->macaddr,
 				   self->pdata->sdd_file,
 				   self->pdata->have_5ghz,
-				   CW1200_FW_API_ORIGINAL);
+				   id->driver_data);
 	if (status) {
 		cw1200_sdio_irq_unsubscribe(self);
 		sdio_claim_host(func);
