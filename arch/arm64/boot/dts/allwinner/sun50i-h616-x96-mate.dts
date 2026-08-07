@@ -103,6 +103,8 @@
 	bus-width = <4>;
 	max-frequency = <50000000>;
 	non-removable;
+	keep-power-in-suspend;
+	wakeup-source;
 	status = "okay";
 
 	sdio_wifi: wifi@1 {
