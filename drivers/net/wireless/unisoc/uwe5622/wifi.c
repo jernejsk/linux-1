@@ -128,7 +128,7 @@ static struct ieee80211_channel uwe5622_channels_5ghz[] = {
 	UWE5622_CHAN5(165, 5825),
 };
 
-static struct ieee80211_supported_band uwe5622_band_2ghz = {
+static const struct ieee80211_supported_band uwe5622_band_2ghz = {
 	.channels = uwe5622_channels_2ghz,
 	.n_channels = ARRAY_SIZE(uwe5622_channels_2ghz),
 	.bitrates = uwe5622_rates,
@@ -142,7 +142,7 @@ static struct ieee80211_supported_band uwe5622_band_2ghz = {
 	},
 };
 
-static struct ieee80211_supported_band uwe5622_band_5ghz = {
+static const struct ieee80211_supported_band uwe5622_band_5ghz = {
 	.channels = uwe5622_channels_5ghz,
 	.n_channels = ARRAY_SIZE(uwe5622_channels_5ghz),
 	.bitrates = &uwe5622_rates[4],
@@ -153,6 +153,15 @@ static struct ieee80211_supported_band uwe5622_band_5ghz = {
 		.ampdu_factor = IEEE80211_HT_MAX_AMPDU_64K,
 		.ampdu_density = IEEE80211_HT_MPDU_DENSITY_8,
 		.mcs = { .rx_mask = { 0xff }, .tx_params = IEEE80211_HT_MCS_TX_DEFINED },
+	},
+	.vht_cap = {
+		.vht_supported = true,
+		.cap = IEEE80211_VHT_CAP_MAX_MPDU_LENGTH_7991 |
+		       IEEE80211_VHT_CAP_SHORT_GI_80,
+		.vht_mcs = {
+			.rx_mcs_map = cpu_to_le16(0xfffe),
+			.tx_mcs_map = cpu_to_le16(0xfffe),
+		},
 	},
 };
 
@@ -1202,6 +1211,8 @@ static int uwe5622_wifi_init_firmware(struct uwe5622_wifi *wifi)
 	} version = { .main_version = cpu_to_le32(1) };
 	u8 request[] = { 2, 0, 1, 0, 0 };
 	u8 info[128] = {};
+	const u8 *sec2;
+	u16 ampdu;
 	size_t len = sizeof(info);
 	static const u8 api_ids[] = {
 		1, 3, 4, 5, 7, 9, 10, 11, 13, 14, 17, 18, 25, 72,
@@ -1273,6 +1284,21 @@ out_config:
 	if (len < 83)
 		return -EPROTO;
 	wifi->fw_capa = get_unaligned_le32(info + 16);
+	sec2 = info + 24;
+	ampdu = get_unaligned_le16(sec2 + 2);
+	wifi->band_2ghz.ht_cap.cap = get_unaligned_le16(sec2);
+	wifi->band_2ghz.ht_cap.ampdu_factor = ampdu & 0x3;
+	wifi->band_2ghz.ht_cap.ampdu_density = (ampdu >> 2) & 0x7;
+	memcpy(&wifi->band_2ghz.ht_cap.mcs, sec2 + 4,
+	       sizeof(wifi->band_2ghz.ht_cap.mcs));
+	wifi->band_5ghz.ht_cap = wifi->band_2ghz.ht_cap;
+	wifi->band_5ghz.vht_cap.cap = get_unaligned_le32(sec2 + 20);
+	memcpy(&wifi->band_5ghz.vht_cap.vht_mcs, sec2 + 24,
+	       sizeof(wifi->band_5ghz.vht_cap.vht_mcs));
+	wifi->wiphy->available_antennas_tx = get_unaligned_le32(sec2 + 32);
+	wifi->wiphy->available_antennas_rx = get_unaligned_le32(sec2 + 36);
+	wifi->wiphy->retry_short = sec2[40];
+	wifi->wiphy->retry_long = sec2[41];
 	ether_addr_copy(wifi->perm_addr, info + 76);
 	if (!is_valid_ether_addr(wifi->perm_addr))
 		eth_random_addr(wifi->perm_addr);
@@ -1292,6 +1318,8 @@ static int uwe5622_wifi_probe(struct auxiliary_device *adev,
 	wifi = wiphy_priv(wiphy);
 	wifi->dev = &adev->dev;
 	wifi->wiphy = wiphy;
+	wifi->band_2ghz = uwe5622_band_2ghz;
+	wifi->band_5ghz = uwe5622_band_5ghz;
 	mutex_init(&wifi->cmd_mutex);
 	init_completion(&wifi->cmd_done);
 	spin_lock_init(&wifi->vif_lock);
@@ -1323,9 +1351,9 @@ static int uwe5622_wifi_probe(struct auxiliary_device *adev,
 
 	wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION) |
 				 BIT(NL80211_IFTYPE_AP);
-	wiphy->bands[NL80211_BAND_2GHZ] = &uwe5622_band_2ghz;
+	wiphy->bands[NL80211_BAND_2GHZ] = &wifi->band_2ghz;
 	if (wifi->fw_capa & UWE5622_GET_INFO_CAP_5G)
-		wiphy->bands[NL80211_BAND_5GHZ] = &uwe5622_band_5ghz;
+		wiphy->bands[NL80211_BAND_5GHZ] = &wifi->band_5ghz;
 	wiphy->signal_type = CFG80211_SIGNAL_TYPE_MBM;
 	wiphy->max_scan_ssids = 9;
 	wiphy->max_scan_ie_len = 255;

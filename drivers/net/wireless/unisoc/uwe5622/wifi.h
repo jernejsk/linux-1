@@ -89,6 +89,8 @@ struct uwe5622_wifi {
 	struct wiphy *wiphy;
 	struct uwe5622_client *cmd_client;
 	struct uwe5622_client *data_client;
+	struct ieee80211_supported_band band_2ghz;
+	struct ieee80211_supported_band band_5ghz;
 
 	/* Allows one firmware command transaction at a time. */
 	struct mutex cmd_mutex;
