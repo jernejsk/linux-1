@@ -42,7 +42,12 @@
 #define UWE5622_SYNC_ALL_FINISHED	0xf0f0f0ff
 
 /* SDMA RX, 840-byte blocks, and an in-band DATA1 interrupt. */
-#define UWE5622_SDIO_CONFIG		(BIT(0) | BIT(4) | BIT(11))
+#define UWE5622_SDIO_CONFIG_ENABLE	BIT(0)
+#define UWE5622_SDIO_CONFIG_SDMA_RX	BIT(4)
+#define UWE5622_SDIO_CONFIG_BT_WAKE	BIT(8)
+#define UWE5622_SDIO_CONFIG_BT_TRIGGER	GENMASK(10, 9)
+#define UWE5622_SDIO_CONFIG_INBAND_IRQ	BIT(11)
+#define UWE5622_SDIO_CONFIG_WAKE_TIME	GENMASK(22, 18)
 
 #define UWE5622_PUH_PAD		GENMASK(5, 0)
 #define UWE5622_PUH_CHECKSUM		BIT(6)
@@ -229,8 +234,21 @@ static int uwe5622_sdio_wait_ready(struct uwe5622_sdio *sdio)
 {
 	u8 sync[UWE5622_SYNC_INFO_SIZE];
 	unsigned long deadline = jiffies + msecs_to_jiffies(5000);
+	u32 config = UWE5622_SDIO_CONFIG_ENABLE |
+		     UWE5622_SDIO_CONFIG_SDMA_RX |
+		     UWE5622_SDIO_CONFIG_INBAND_IRQ;
 	u32 status;
 	int ret;
+
+	/*
+	 * The Orange Pi host-wake input is shared by Wi-Fi and Bluetooth.
+	 * Ask the firmware to hold it high for 20 ms; the rising-edge IRQ then
+	 * wakes Linux for either service.
+	 */
+	if (sdio->wake_irq_set)
+		config |= UWE5622_SDIO_CONFIG_BT_WAKE |
+			  FIELD_PREP(UWE5622_SDIO_CONFIG_BT_TRIGGER, 3) |
+			  FIELD_PREP(UWE5622_SDIO_CONFIG_WAKE_TIME, 2);
 
 	do {
 		ret = uwe5622_sdio_direct_read_locked(sdio, UWE5622_SYNC_ADDR,
@@ -245,7 +263,7 @@ static int uwe5622_sdio_wait_ready(struct uwe5622_sdio *sdio)
 		case UWE5622_SYNC_CAL_WAITING:
 			ret = uwe5622_sdio_write_u32_locked(sdio,
 					UWE5622_SYNC_SDIO_CONFIG,
-					UWE5622_SDIO_CONFIG);
+					config);
 			if (!ret)
 				ret = uwe5622_sdio_write_u32_locked(sdio,
 						UWE5622_SYNC_ADDR,
@@ -502,7 +520,8 @@ static int uwe5622_sdio_suspend_bus(struct uwe5622 *wcn, bool wake)
 
 	flush_work(&sdio->tx_work);
 
-	if (wake)
+	/* An out-of-band host-wake GPIO does not need SDIO IRQ wake support. */
+	if (wake && !sdio->wake_irq_set)
 		required |= MMC_PM_WAKE_SDIO_IRQ;
 
 	caps = sdio_get_host_pm_caps(sdio->func);
@@ -654,6 +673,3 @@ static struct sdio_driver uwe5622_sdio_driver = {
 	.drv.pm = pm_sleep_ptr(&uwe5622_sdio_pm_ops),
 };
 module_sdio_driver(uwe5622_sdio_driver);
-
-MODULE_DESCRIPTION("Unisoc UWE5622 SDIO transport");
-MODULE_LICENSE("GPL");

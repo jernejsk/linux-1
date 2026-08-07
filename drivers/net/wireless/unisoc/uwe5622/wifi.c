@@ -855,6 +855,7 @@ static int uwe5622_wifi_resume(struct wiphy *wiphy)
 	return ret;
 }
 
+#ifdef CONFIG_PM
 static void uwe5622_set_wakeup(struct wiphy *wiphy, bool enabled)
 {
 	struct uwe5622_wifi *wifi = wiphy_priv(wiphy);
@@ -887,11 +888,14 @@ static const struct wiphy_wowlan_support uwe5622_wowlan_support = {
 	.flags = WIPHY_WOWLAN_ANY | WIPHY_WOWLAN_MAGIC_PKT |
 		 WIPHY_WOWLAN_DISCONNECT,
 };
+#endif
 
 static const struct cfg80211_ops uwe5622_cfg80211_ops = {
 	.suspend = uwe5622_wifi_suspend,
 	.resume = uwe5622_wifi_resume,
+#ifdef CONFIG_PM
 	.set_wakeup = uwe5622_set_wakeup,
+#endif
 	.add_virtual_intf = uwe5622_add_virtual_intf,
 	.del_virtual_intf = uwe5622_del_virtual_intf,
 	.scan = uwe5622_scan,
@@ -1085,6 +1089,7 @@ void uwe5622_wifi_event(struct uwe5622_wifi *wifi,
 		break;
 	case UWE5622_EVENT_HANG:
 		dev_err(wifi->dev, "firmware reported a hang\n");
+		uwe5622_recover(wifi->cmd_client);
 		break;
 	default:
 		dev_dbg(wifi->dev, "unhandled event %#x\n", hdr->id);
@@ -1327,7 +1332,9 @@ static int uwe5622_wifi_probe(struct auxiliary_device *adev,
 	wiphy->cipher_suites = uwe5622_cipher_suites;
 	wiphy->n_cipher_suites = ARRAY_SIZE(uwe5622_cipher_suites);
 	wiphy->max_num_pmkids = 4;
+#ifdef CONFIG_PM
 	wiphy->wowlan = &uwe5622_wowlan_support;
+#endif
 	if (wifi->fw_capa & UWE5622_GET_INFO_CAP_AP_SME)
 		wiphy->flags |= WIPHY_FLAG_HAVE_AP_SME;
 	/* Do not set NL80211_EXT_FEATURE_4WAY_HANDSHAKE_STA_PSK. */

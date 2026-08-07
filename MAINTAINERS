@@ -28215,7 +28215,7 @@ L:	linux-bluetooth@vger.kernel.org
 S:	Maintained
 F:	Documentation/devicetree/bindings/net/wireless/sprd,uwe5622.yaml
 F:	drivers/bluetooth/uwe5622.c
-F:	drivers/net/wireless/unisoc/
+F:	drivers/net/wireless/unisoc/uwe5622/
 F:	include/linux/uwe5622.h
 
 UUID HELPERS

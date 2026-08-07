@@ -43,6 +43,7 @@ int uwe5622_client_send(struct uwe5622_client *client, struct sk_buff *skb);
 int uwe5622_power_get(struct uwe5622_client *client);
 void uwe5622_power_put(struct uwe5622_client *client);
 void uwe5622_set_wake(struct uwe5622_client *client, bool enabled);
+void uwe5622_recover(struct uwe5622_client *client);
 void uwe5622_bluetooth_enable(struct uwe5622_client *client, bool enabled);
 void uwe5622_bluetooth_wake(struct uwe5622_client *client, bool enabled);
 enum uwe5622_bus_type uwe5622_client_bus(struct uwe5622_client *client);

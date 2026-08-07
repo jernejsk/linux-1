@@ -11,6 +11,7 @@
 #include <linux/skbuff.h>
 #include <linux/srcu.h>
 #include <linux/uwe5622.h>
+#include <linux/workqueue.h>
 
 #define UWE5622_FIRMWARE_NAME	"unisoc/uwe5622/wcnmodem.bin"
 #define UWE5622_MAX_CHANNELS	32
@@ -63,6 +64,8 @@ struct uwe5622 {
 	enum uwe5622_state state;
 	unsigned int users;
 	bool wake_enabled;
+	bool removing;
+	struct work_struct recovery_work;
 	struct gpio_desc *bluetooth_enable;
 	struct gpio_desc *device_wake;
 

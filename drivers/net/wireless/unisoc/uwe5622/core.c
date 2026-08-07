@@ -198,6 +198,96 @@ void uwe5622_set_wake(struct uwe5622_client *client, bool enabled)
 }
 EXPORT_SYMBOL_GPL(uwe5622_set_wake);
 
+static void uwe5622_notify_reset(struct uwe5622 *wcn)
+{
+	struct uwe5622_client *client;
+	int idx, channel;
+
+	idx = srcu_read_lock(&wcn->channel_srcu);
+	for (channel = 0; channel < UWE5622_MAX_CHANNELS; channel++) {
+		client = srcu_dereference(wcn->channels[channel],
+					  &wcn->channel_srcu);
+		if (client && client->ops->reset)
+			client->ops->reset(client->priv);
+	}
+	srcu_read_unlock(&wcn->channel_srcu, idx);
+}
+
+static void uwe5622_recovery_work(struct work_struct *work)
+{
+	struct uwe5622 *wcn = container_of(work, struct uwe5622,
+					   recovery_work);
+	const struct firmware *fw;
+	int ret;
+
+	uwe5622_notify_reset(wcn);
+	uwe5622_auxdev_del(wcn->bt_auxdev);
+	uwe5622_auxdev_del(wcn->wifi_auxdev);
+	wcn->bt_auxdev = NULL;
+	wcn->wifi_auxdev = NULL;
+	wcn->bus_ops->stop(wcn);
+
+	ret = request_firmware(&fw, UWE5622_FIRMWARE_NAME, wcn->dev);
+	if (ret)
+		goto out_failed;
+	ret = wcn->bus_ops->start(wcn, fw);
+	release_firmware(fw);
+	if (ret)
+		goto out_failed;
+
+	mutex_lock(&wcn->state_mutex);
+	if (wcn->removing) {
+		mutex_unlock(&wcn->state_mutex);
+		wcn->bus_ops->stop(wcn);
+		return;
+	}
+	wcn->state = UWE5622_READY;
+	mutex_unlock(&wcn->state_mutex);
+
+	wcn->wifi_auxdev = uwe5622_auxdev_add(wcn, "wifi");
+	if (IS_ERR(wcn->wifi_auxdev)) {
+		ret = PTR_ERR(wcn->wifi_auxdev);
+		wcn->wifi_auxdev = NULL;
+		goto out_stop;
+	}
+	wcn->bt_auxdev = uwe5622_auxdev_add(wcn, "bluetooth");
+	if (IS_ERR(wcn->bt_auxdev)) {
+		ret = PTR_ERR(wcn->bt_auxdev);
+		wcn->bt_auxdev = NULL;
+		goto out_del_wifi;
+	}
+
+	dev_info(wcn->dev, "firmware recovery completed\n");
+	return;
+
+out_del_wifi:
+	uwe5622_auxdev_del(wcn->wifi_auxdev);
+	wcn->wifi_auxdev = NULL;
+out_stop:
+	mutex_lock(&wcn->state_mutex);
+	wcn->state = UWE5622_RECOVERING;
+	mutex_unlock(&wcn->state_mutex);
+	wcn->bus_ops->stop(wcn);
+out_failed:
+	dev_err(wcn->dev, "firmware recovery failed: %d\n", ret);
+}
+
+void uwe5622_recover(struct uwe5622_client *client)
+{
+	struct uwe5622 *wcn;
+
+	if (!client)
+		return;
+	wcn = client->wcn;
+	mutex_lock(&wcn->state_mutex);
+	if (wcn->state == UWE5622_READY && !wcn->removing) {
+		wcn->state = UWE5622_RECOVERING;
+		schedule_work(&wcn->recovery_work);
+	}
+	mutex_unlock(&wcn->state_mutex);
+}
+EXPORT_SYMBOL_GPL(uwe5622_recover);
+
 void uwe5622_bluetooth_enable(struct uwe5622_client *client, bool enabled)
 {
 	if (client && client->wcn->bluetooth_enable)
@@ -245,6 +335,7 @@ int uwe5622_core_probe(struct uwe5622 *wcn)
 
 	mutex_init(&wcn->state_mutex);
 	mutex_init(&wcn->channel_mutex);
+	INIT_WORK(&wcn->recovery_work, uwe5622_recovery_work);
 	ret = init_srcu_struct(&wcn->channel_srcu);
 	if (ret)
 		return ret;
@@ -305,7 +396,9 @@ void uwe5622_core_remove(struct uwe5622 *wcn)
 		mutex_unlock(&wcn->state_mutex);
 		return;
 	}
+	wcn->removing = true;
 	mutex_unlock(&wcn->state_mutex);
+	cancel_work_sync(&wcn->recovery_work);
 
 	/* Children must still be able to send their firmware-close commands. */
 	uwe5622_auxdev_del(wcn->bt_auxdev);
