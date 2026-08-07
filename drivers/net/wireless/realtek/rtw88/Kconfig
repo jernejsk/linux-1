@@ -44,6 +44,9 @@ config RTW88_8723D
 	tristate
 	select RTW88_8723X
 
+config RTW88_8188F
+	tristate
+
 config RTW88_8821C
 	tristate
 
@@ -176,6 +179,20 @@ config RTW88_8723BS
 	  wireless network adapter.
 
 	  If you choose to build a module, it'll be called rtw88_8723bs.
+
+config RTW88_8189FS
+	tristate "Realtek 8189FS SDIO wireless network adapter"
+	depends on MMC
+	select RTW88_CORE
+	select RTW88_SDIO
+	select RTW88_8188F
+	help
+	  Select this option to enable support for 8189FS chipset
+
+	  This module adds support for the 8189FS 802.11n SDIO
+	  wireless network adapter, which uses the RTL8188F chip.
+
+	  If you choose to build a module, it'll be called rtw88_8189fs.
 
 config RTW88_8723DU
 	tristate "Realtek 8723DU USB wireless network adapter"
