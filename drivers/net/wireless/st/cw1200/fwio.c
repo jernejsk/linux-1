@@ -51,9 +51,14 @@ static int cw1200_get_hw_type(u32 config_reg_val, int *major_revision)
 static int cw1200_load_bootloader(struct cw1200_common *priv)
 {
 	const struct firmware *bootloader = NULL;
-	const char *bl_path = BOOTLOADER_CW1X60;
 	u32 *data, i, addr = AHB_MEMORY_ADDRESS;
+	const char *bl_path;
 	int ret;
+
+	if (priv->fw_api == CW1200_FW_API_XRADIO)
+		bl_path = BOOTLOADER_XRADIO;
+	else
+		bl_path = BOOTLOADER_CW1X60;
 
 	ret = request_firmware(&bootloader, bl_path, priv->pdev);
 	if (ret) {
@@ -145,9 +150,16 @@ static int cw1200_load_firmware_cw1200(struct cw1200_common *priv)
 			priv->sdd_path = SDD_FILE_22;
 		break;
 	case CW1X60_HW_REV:
-		fw_path = FIRMWARE_CW1X60;
-		if (!priv->sdd_path)
-			priv->sdd_path = SDD_FILE_CW1X60;
+		if (priv->fw_api == CW1200_FW_API_XRADIO)
+			fw_path = FIRMWARE_XRADIO;
+		else
+			fw_path = FIRMWARE_CW1X60;
+		if (!priv->sdd_path) {
+			if (priv->fw_api == CW1200_FW_API_XRADIO)
+				priv->sdd_path = SDD_FILE_XRADIO;
+			else
+				priv->sdd_path = SDD_FILE_CW1X60;
+		}
 		break;
 	default:
 		pr_err("Invalid silicon revision %d.\n", priv->hw_revision);
