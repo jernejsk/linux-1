@@ -336,7 +336,8 @@ static void rtw_usb_write_port_tx_complete(struct urb *urb)
 		skb_pull(skb, rtwdev->chip->tx_pkt_desc_sz);
 
 		/* enqueue to wait for tx report */
-		if (info->flags & IEEE80211_TX_CTL_REQ_TX_STATUS) {
+		if (info->flags & IEEE80211_TX_CTL_REQ_TX_STATUS &&
+		    !rtwdev->chip->no_ccx_tx_report) {
 			rtw_tx_report_enqueue(rtwdev, skb, tx_data->sn);
 			continue;
 		}
