@@ -1241,6 +1241,10 @@ struct rtw_chip_info {
 	bool amsdu_in_ampdu;
 	u8 usb_tx_agg_desc_num;
 	bool hw_feature_report;
+	/* set when the firmware does not implement the CCX per-packet TX
+	 * report (C2H_CCX_TX_RPT), so it must not be asked for one
+	 */
+	bool no_ccx_tx_report;
 	u8 c2h_ra_report_size;
 	bool old_datarate_fb_limit;
 
