@@ -3,6 +3,7 @@
 #include <linux/auxiliary_bus.h>
 #include <linux/delay.h>
 #include <linux/module.h>
+#include <linux/property.h>
 #include <linux/skbuff.h>
 #include <linux/uwe5622.h>
 #include <net/bluetooth/bluetooth.h>
@@ -346,7 +347,13 @@ static int uwe5622_bt_probe(struct auxiliary_device *adev,
 	if (ret)
 		goto err_hdev;
 	auxiliary_set_drvdata(adev, bt);
-	device_init_wakeup(&adev->dev, true);
+	ret = device_init_wakeup(&adev->dev,
+				 device_property_read_bool(&adev->dev,
+							   "wakeup-source"));
+	if (ret) {
+		hci_unregister_dev(hdev);
+		goto err_hdev;
+	}
 	return 0;
 
 err_hdev:
