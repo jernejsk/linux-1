@@ -28,11 +28,28 @@ properties:
   interrupts:
     maxItems: 1
     description:
-      Optional out-of-band interrupt from the controller. If it is absent,
-      the SDIO in-band interrupt is used.
+      Optional out-of-band wake interrupt from the controller. The interrupt
+      trigger describes the active polarity of the selected controller output.
+      Rising-edge and high-level interrupts select active high; falling-edge
+      and low-level interrupts select active low. If it is absent, the SDIO
+      in-band interrupt is used for wakeup.
 
   interrupt-names:
-    const: host-wake
+    enum:
+      - bt-host-wake
+      - wlan-host-wake
+    description:
+      Selects the controller wake output connected to the host. Wake events
+      from both radio functions are routed to that output.
+
+  sprd,host-wake-duration-ms:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description:
+      Time for which the firmware holds the selected host-wake output active.
+    minimum: 10
+    maximum: 310
+    multipleOf: 10
+    default: 20
 
   bluetooth-enable-gpios:
     maxItems: 1
@@ -60,6 +77,7 @@ unevaluatedProperties: false
 examples:
   - |
     #include <dt-bindings/gpio/gpio.h>
+    #include <dt-bindings/interrupt-controller/irq.h>
 
     mmc {
         #address-cells = <1>;
@@ -71,6 +89,9 @@ examples:
         wifi@1 {
             compatible = "sprd,uwe5622";
             reg = <1>;
+            interrupt-parent = <&gpio>;
+            interrupts = <4 IRQ_TYPE_EDGE_RISING>;
+            interrupt-names = "bt-host-wake";
             bluetooth-enable-gpios = <&gpio 4 4 GPIO_ACTIVE_HIGH>;
             device-wake-gpios = <&gpio 4 2 GPIO_ACTIVE_HIGH>;
             wakeup-source;
