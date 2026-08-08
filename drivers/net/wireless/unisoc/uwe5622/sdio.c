@@ -10,9 +10,9 @@
 #include <linux/mmc/sdio_func.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_irq.h>
 #include <linux/pm.h>
 #include <linux/pm_wakeirq.h>
+#include <linux/property.h>
 #include <linux/skbuff.h>
 #include <linux/slab.h>
 #include <linux/sizes.h>
@@ -44,10 +44,17 @@
 /* SDMA RX, 840-byte blocks, and an in-band DATA1 interrupt. */
 #define UWE5622_SDIO_CONFIG_ENABLE	BIT(0)
 #define UWE5622_SDIO_CONFIG_SDMA_RX	BIT(4)
-#define UWE5622_SDIO_CONFIG_BT_WAKE	BIT(8)
+#define UWE5622_SDIO_CONFIG_BT_WAKE_EN	BIT(8)
 #define UWE5622_SDIO_CONFIG_BT_TRIGGER	GENMASK(10, 9)
 #define UWE5622_SDIO_CONFIG_INBAND_IRQ	BIT(11)
-#define UWE5622_SDIO_CONFIG_WAKE_TIME	GENMASK(22, 18)
+#define UWE5622_SDIO_CONFIG_WLAN_WAKE_EN	BIT(15)
+#define UWE5622_SDIO_CONFIG_WLAN_TRIGGER	GENMASK(17, 16)
+#define UWE5622_SDIO_CONFIG_WAKE_DURATION GENMASK(22, 18)
+
+#define UWE5622_WAKE_TRIGGER_LOW		0
+#define UWE5622_WAKE_TRIGGER_HIGH	3
+#define UWE5622_WAKE_DURATION_STEP_MS	10
+#define UWE5622_WAKE_DURATION_DEFAULT_MS	20
 
 #define UWE5622_PUH_PAD		GENMASK(5, 0)
 #define UWE5622_PUH_CHECKSUM		BIT(6)
@@ -69,6 +76,7 @@ struct uwe5622_sdio {
 	bool enabled;
 	bool irq_claimed;
 	bool wake_irq_set;
+	u32 wake_config;
 };
 
 static irqreturn_t uwe5622_host_wake_irq(int irq, void *data)
@@ -240,15 +248,7 @@ static int uwe5622_sdio_wait_ready(struct uwe5622_sdio *sdio)
 	u32 status;
 	int ret;
 
-	/*
-	 * The Orange Pi host-wake input is shared by Wi-Fi and Bluetooth.
-	 * Ask the firmware to hold it high for 20 ms; the rising-edge IRQ then
-	 * wakes Linux for either service.
-	 */
-	if (sdio->wake_irq_set)
-		config |= UWE5622_SDIO_CONFIG_BT_WAKE |
-			  FIELD_PREP(UWE5622_SDIO_CONFIG_BT_TRIGGER, 3) |
-			  FIELD_PREP(UWE5622_SDIO_CONFIG_WAKE_TIME, 2);
+	config |= sdio->wake_config;
 
 	do {
 		ret = uwe5622_sdio_direct_read_locked(sdio, UWE5622_SYNC_ADDR,
@@ -520,8 +520,9 @@ static int uwe5622_sdio_suspend_bus(struct uwe5622 *wcn, bool wake)
 
 	flush_work(&sdio->tx_work);
 
-	/* An out-of-band host-wake GPIO does not need SDIO IRQ wake support. */
-	if (wake && !sdio->wake_irq_set)
+	/* An out-of-band host-wake interrupt replaces SDIO IRQ wake support. */
+	if (wake && device_may_wakeup(&sdio->func->dev) &&
+	    !sdio->wake_irq_set)
 		required |= MMC_PM_WAKE_SDIO_IRQ;
 
 	caps = sdio_get_host_pm_caps(sdio->func);
@@ -544,11 +545,100 @@ static const struct uwe5622_bus_ops uwe5622_sdio_bus_ops = {
 	.resume = uwe5622_sdio_resume_bus,
 };
 
+static int uwe5622_sdio_set_wake_config(struct uwe5622_sdio *sdio, int irq,
+					bool bluetooth)
+{
+	u32 duration, trigger;
+	int ret;
+
+	duration = UWE5622_WAKE_DURATION_DEFAULT_MS;
+	if (device_property_present(&sdio->func->dev,
+				    "sprd,host-wake-duration-ms")) {
+		ret = device_property_read_u32(&sdio->func->dev,
+					       "sprd,host-wake-duration-ms",
+					       &duration);
+		if (ret)
+			return dev_err_probe(&sdio->func->dev, ret,
+					     "failed to read host-wake duration\n");
+	}
+	if (!duration || duration % UWE5622_WAKE_DURATION_STEP_MS ||
+	    duration / UWE5622_WAKE_DURATION_STEP_MS >
+		FIELD_MAX(UWE5622_SDIO_CONFIG_WAKE_DURATION))
+		return dev_err_probe(&sdio->func->dev, -EINVAL,
+				     "host-wake duration is invalid\n");
+
+	switch (irq_get_trigger_type(irq)) {
+	case IRQ_TYPE_EDGE_RISING:
+	case IRQ_TYPE_LEVEL_HIGH:
+		trigger = UWE5622_WAKE_TRIGGER_HIGH;
+		break;
+	case IRQ_TYPE_EDGE_FALLING:
+	case IRQ_TYPE_LEVEL_LOW:
+		trigger = UWE5622_WAKE_TRIGGER_LOW;
+		break;
+	default:
+		return dev_err_probe(&sdio->func->dev, -EINVAL,
+				     "host-wake interrupt polarity is invalid\n");
+	}
+
+	if (bluetooth)
+		sdio->wake_config = UWE5622_SDIO_CONFIG_BT_WAKE_EN |
+			FIELD_PREP(UWE5622_SDIO_CONFIG_BT_TRIGGER, trigger);
+	else
+		sdio->wake_config = UWE5622_SDIO_CONFIG_WLAN_WAKE_EN |
+			FIELD_PREP(UWE5622_SDIO_CONFIG_WLAN_TRIGGER, trigger);
+	sdio->wake_config |= FIELD_PREP(UWE5622_SDIO_CONFIG_WAKE_DURATION,
+			     duration / UWE5622_WAKE_DURATION_STEP_MS);
+
+	return 0;
+}
+
+static int uwe5622_sdio_get_wake_irq(struct uwe5622_sdio *sdio)
+{
+	struct fwnode_handle *fwnode = dev_fwnode(&sdio->func->dev);
+	bool bluetooth = true;
+	int irq, ret;
+
+	irq = fwnode_irq_get_byname(fwnode, "bt-host-wake");
+	if (irq == -EPROBE_DEFER)
+		return irq;
+	if (irq < 0) {
+		if (irq != -EINVAL && irq != -ENXIO)
+			return irq;
+		bluetooth = false;
+		irq = fwnode_irq_get_byname(fwnode, "wlan-host-wake");
+	}
+	if (irq == -EPROBE_DEFER)
+		return irq;
+	if (irq < 0) {
+		if (irq == -EINVAL || irq == -ENXIO)
+			return 0;
+		return irq;
+	}
+
+	ret = uwe5622_sdio_set_wake_config(sdio, irq, bluetooth);
+	if (ret)
+		return ret;
+	ret = devm_request_threaded_irq(&sdio->func->dev, irq, NULL,
+					uwe5622_host_wake_irq, IRQF_ONESHOT,
+					dev_name(&sdio->func->dev), sdio);
+	if (ret)
+		return dev_err_probe(&sdio->func->dev, ret,
+				     "failed to request host-wake IRQ\n");
+	ret = dev_pm_set_wake_irq(&sdio->func->dev, irq);
+	if (ret)
+		return dev_err_probe(&sdio->func->dev, ret,
+				     "failed to set host-wake IRQ\n");
+	sdio->wake_irq_set = true;
+
+	return 0;
+}
+
 static int uwe5622_sdio_probe(struct sdio_func *func,
 			      const struct sdio_device_id *id)
 {
 	struct uwe5622_sdio *sdio;
-	int irq, ret;
+	int ret;
 
 	if (func->num != 1 ||
 	    !of_device_is_compatible(func->dev.of_node, "sprd,uwe5622"))
@@ -591,33 +681,22 @@ static int uwe5622_sdio_probe(struct sdio_func *func,
 		return dev_err_probe(&func->dev, PTR_ERR(sdio->wcn.device_wake),
 				     "failed to acquire device-wake GPIO\n");
 	sdio_set_drvdata(func, sdio);
-	device_init_wakeup(&func->dev, true);
-	irq = of_irq_get(func->dev.of_node, 0);
-	if (irq == -EPROBE_DEFER)
-		return irq;
-	if (irq > 0) {
-		ret = devm_request_threaded_irq(&func->dev, irq, NULL,
-				uwe5622_host_wake_irq,
-				IRQF_ONESHOT | IRQF_NO_SUSPEND,
-				dev_name(&func->dev), sdio);
-		if (ret)
-			return dev_err_probe(&func->dev, ret,
-					     "failed to request host-wake IRQ\n");
-		ret = dev_pm_set_wake_irq(&func->dev, irq);
-		if (ret)
-			return dev_err_probe(&func->dev, ret,
-					     "failed to set host-wake IRQ\n");
-		sdio->wake_irq_set = true;
-	} else if (irq != -ENXIO && irq != -EINVAL) {
-		return dev_err_probe(&func->dev, irq,
-				     "failed to resolve host-wake IRQ\n");
-	}
+	ret = device_init_wakeup(&func->dev,
+				 device_property_read_bool(&func->dev,
+							   "wakeup-source"));
+	if (ret)
+		return ret;
+	ret = uwe5622_sdio_get_wake_irq(sdio);
+	if (ret)
+		goto err_wakeup;
 
 	ret = uwe5622_core_probe(&sdio->wcn);
-	if (ret && sdio->wake_irq_set) {
+	if (!ret)
+		return 0;
+	if (sdio->wake_irq_set)
 		dev_pm_clear_wake_irq(&func->dev);
-		sdio->wake_irq_set = false;
-	}
+err_wakeup:
+	device_init_wakeup(&func->dev, false);
 	return ret;
 }
 
