@@ -25,7 +25,7 @@ int uwe5622_wifi_cmd(struct uwe5622_wifi *wifi, u8 ctx_id, u8 id,
 	int ret;
 
 	if (ctx_id >= UWE5622_WIFI_MAX_CTX ||
-	    len > U16_MAX - sizeof(*hdr))
+	    len > UWE5622_WIFI_CMD_TX_MAX - sizeof(*hdr))
 		return -EINVAL;
 
 	mutex_lock(&wifi->cmd_mutex);

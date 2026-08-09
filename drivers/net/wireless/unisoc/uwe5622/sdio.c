@@ -28,6 +28,7 @@
 #define UWE5622_FW_LOAD_ADDR		0x40500000
 #define UWE5622_FW_MAX_SIZE		0x000e7400
 #define UWE5622_FW_CHUNK_SIZE		SZ_32K
+#define UWE5622_FW_READY_TIMEOUT_MS	10000
 #define UWE5622_CP_RESET_REG		0x40088288
 #define UWE5622_CP_RESET_BIT		BIT(0)
 
@@ -66,6 +67,7 @@
 #define UWE5622_RX_FIRST_SIZE		(2 * UWE5622_SDIO_BLOCK_SIZE)
 #define UWE5622_RX_MAX_SIZE		(156 * UWE5622_SDIO_BLOCK_SIZE)
 #define UWE5622_RX_CHANNEL_BASE		12
+#define UWE5622_SDIO_MAX_PAYLOAD		1676
 
 struct uwe5622_sdio {
 	struct sdio_func *func;
@@ -241,7 +243,8 @@ static int uwe5622_sdio_answer_bind(struct uwe5622_sdio *sdio,
 static int uwe5622_sdio_wait_ready(struct uwe5622_sdio *sdio)
 {
 	u8 sync[UWE5622_SYNC_INFO_SIZE];
-	unsigned long deadline = jiffies + msecs_to_jiffies(5000);
+	unsigned long deadline = jiffies +
+		msecs_to_jiffies(UWE5622_FW_READY_TIMEOUT_MS);
 	u32 config = UWE5622_SDIO_CONFIG_ENABLE |
 		     UWE5622_SDIO_CONFIG_SDMA_RX |
 		     UWE5622_SDIO_CONFIG_INBAND_IRQ;
@@ -326,7 +329,8 @@ static int uwe5622_sdio_queue_rx(struct uwe5622_sdio *sdio, size_t read_len,
 
 		payload_len = FIELD_GET(UWE5622_PUH_LENGTH, header);
 		record_len = sizeof(__le32) + ALIGN(payload_len, 4);
-		if (!payload_len || record_len > limit - offset)
+		if (!payload_len || payload_len > UWE5622_SDIO_MAX_PAYLOAD ||
+		    record_len > limit - offset)
 			return -EPROTO;
 
 		channel = UWE5622_RX_CHANNEL_BASE +
@@ -491,7 +495,8 @@ static int uwe5622_sdio_tx(struct uwe5622 *wcn, u8 channel,
 	struct sk_buff *transfer;
 	u32 header;
 
-	if (channel >= UWE5622_RX_CHANNEL_BASE || skb->len > 0xffff)
+	if (channel >= UWE5622_RX_CHANNEL_BASE ||
+	    skb->len > UWE5622_SDIO_MAX_PAYLOAD)
 		return -EINVAL;
 	if (skb_queue_len(&sdio->tx_queue) >= 256)
 		return -ENOBUFS;

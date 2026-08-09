@@ -12,6 +12,7 @@
 
 #define UWE5622_WIFI_MAX_CTX		8
 #define UWE5622_WIFI_CMD_TIMEOUT		msecs_to_jiffies(3000)
+#define UWE5622_WIFI_CMD_TX_MAX		1596
 #define UWE5622_WIFI_RSP_MAX		2048
 
 enum uwe5622_wifi_cmd_id {
@@ -39,6 +40,8 @@ enum uwe5622_wifi_event_id {
 	UWE5622_EVENT_SCAN_DONE = 0x82,
 	UWE5622_EVENT_MGMT_FRAME = 0x83,
 	UWE5622_EVENT_NEW_STATION = 0xa0,
+	UWE5622_EVENT_SDIO_FLOW_CONTROL = 0xb3,
+	UWE5622_EVENT_SDIO_SEQ_NUM = 0xe0,
 	UWE5622_EVENT_STA_LUT = 0xf5,
 	UWE5622_EVENT_HANG = 0xf6,
 };
@@ -110,6 +113,10 @@ struct uwe5622_wifi {
 	/* Protects the outstanding cfg80211 scan request. */
 	spinlock_t scan_lock;
 	struct cfg80211_scan_request *scan_request;
+	/* Protects the four firmware-owned SDIO transmit credit pools. */
+	spinlock_t credit_lock;
+	u32 tx_credits[4];
+	bool tx_with_credit;
 
 	struct sk_buff_head eapol_queue;
 	struct work_struct eapol_work;

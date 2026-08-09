@@ -15,10 +15,18 @@
 
 #define UWE5622_VALID_CONFIG	BIT(7)
 #define UWE5622_TX_DESC_LEN	11
+#define UWE5622_DATA_TX_MAX	1672
 #define UWE5622_RX_DESC_LEN	28
+#define UWE5622_RX_CREDIT_OFFSET	24
+#define UWE5622_CREDIT_COLORS	4
+#define UWE5622_CREDIT_MAX	U16_MAX
 #define UWE5622_RX_MH_DESC_LEN	28
 #define UWE5622_EAPOL_QUEUE_MAX	64
 #define UWE5622_WIFI_CONFIG_NAME	"unisoc/uwe5622/wifi_config.bin"
+#define UWE5622_WIFI_CONFIG_SEC1_LEN 328
+#define UWE5622_WIFI_CONFIG_SEC2_LEN 1464
+#define UWE5622_WIFI_CONFIG_SEC3_MAX 1500
+#define UWE5622_WIFI_CONFIG_MAGIC_OFFSET 251
 
 #define UWE5622_GET_INFO_CAP_5G	BIT(0)
 #define UWE5622_GET_INFO_CAP_AP_SME BIT(3)
@@ -260,7 +268,8 @@ static int uwe5622_ndev_stop(struct net_device *ndev)
 }
 
 static struct sk_buff *uwe5622_build_tx(struct uwe5622_vif *vif,
-					const struct sk_buff *skb, u8 type)
+					const struct sk_buff *skb, u8 type,
+					u8 color)
 {
 	struct uwe5622_wifi *wifi = vif->wifi;
 	struct sk_buff *tx;
@@ -301,8 +310,87 @@ static struct sk_buff *uwe5622_build_tx(struct uwe5622_vif *vif,
 	desc[1] = UWE5622_TX_DESC_LEN;
 	put_unaligned_le16(skb->len, desc + 3);
 	desc[6] = sta_lut;
+	desc[7] = color;
 	skb_put_data(tx, skb->data, skb->len);
 	return tx;
+}
+
+static void uwe5622_wake_queues(struct uwe5622_wifi *wifi)
+{
+	struct net_device *ndev;
+	int i;
+
+	for (i = 0; i < UWE5622_WIFI_MAX_CTX; i++) {
+		ndev = uwe5622_get_ndev(wifi, i);
+		if (!ndev)
+			continue;
+		if (netif_running(ndev) && netif_queue_stopped(ndev))
+			netif_wake_queue(ndev);
+		dev_put(ndev);
+	}
+}
+
+static void uwe5622_add_tx_credits(struct uwe5622_wifi *wifi,
+				   const u8 credits[UWE5622_CREDIT_COLORS],
+				   bool reset)
+{
+	bool added = false;
+	int i;
+
+	spin_lock_bh(&wifi->credit_lock);
+	if (reset) {
+		memset(wifi->tx_credits, 0, sizeof(wifi->tx_credits));
+	} else {
+		for (i = 0; i < UWE5622_CREDIT_COLORS; i++) {
+			if (!credits[i])
+				continue;
+			wifi->tx_credits[i] =
+				min_t(u32, wifi->tx_credits[i] + credits[i],
+				      UWE5622_CREDIT_MAX);
+			added = true;
+		}
+	}
+	spin_unlock_bh(&wifi->credit_lock);
+
+	if (added)
+		uwe5622_wake_queues(wifi);
+}
+
+static bool uwe5622_take_tx_credit(struct uwe5622_wifi *wifi,
+				   struct net_device *ndev, u8 *color)
+{
+	int i;
+
+	*color = 0;
+	if (!READ_ONCE(wifi->tx_with_credit))
+		return true;
+
+	spin_lock_bh(&wifi->credit_lock);
+	for (i = 0; i < UWE5622_CREDIT_COLORS; i++) {
+		if (!wifi->tx_credits[i])
+			continue;
+		wifi->tx_credits[i]--;
+		*color = i;
+		spin_unlock_bh(&wifi->credit_lock);
+		return true;
+	}
+	netif_stop_queue(ndev);
+	spin_unlock_bh(&wifi->credit_lock);
+	return false;
+}
+
+static void uwe5622_return_tx_credit(struct uwe5622_wifi *wifi,
+				     struct net_device *ndev, u8 color)
+{
+	if (!READ_ONCE(wifi->tx_with_credit))
+		return;
+
+	spin_lock_bh(&wifi->credit_lock);
+	if (wifi->tx_credits[color] < UWE5622_CREDIT_MAX)
+		wifi->tx_credits[color]++;
+	spin_unlock_bh(&wifi->credit_lock);
+	if (netif_queue_stopped(ndev))
+		netif_wake_queue(ndev);
 }
 
 static netdev_tx_t uwe5622_ndev_xmit(struct sk_buff *skb,
@@ -311,6 +399,7 @@ static netdev_tx_t uwe5622_ndev_xmit(struct sk_buff *skb,
 	struct uwe5622_vif *vif = netdev_priv(ndev);
 	struct uwe5622_wifi *wifi = vif->wifi;
 	struct sk_buff *tx;
+	u8 color;
 	int ret;
 
 	if (unlikely(skb->protocol == htons(ETH_P_PAE))) {
@@ -322,20 +411,30 @@ static netdev_tx_t uwe5622_ndev_xmit(struct sk_buff *skb,
 		return NETDEV_TX_OK;
 	}
 
-	tx = uwe5622_build_tx(vif, skb, 2);
+	if (!uwe5622_take_tx_credit(wifi, ndev, &color))
+		return NETDEV_TX_BUSY;
+	tx = uwe5622_build_tx(vif, skb, 2, color);
 	if (!tx)
-		goto drop;
+		goto return_credit;
+	if (tx->len > UWE5622_DATA_TX_MAX) {
+		kfree_skb(tx);
+		goto return_credit;
+	}
 	ret = uwe5622_client_send(wifi->data_client, tx);
 	kfree_skb(tx);
-	if (ret == -ENOBUFS)
-		return NETDEV_TX_BUSY;
-	if (ret)
+	if (ret) {
+		uwe5622_return_tx_credit(wifi, ndev, color);
+		if (ret == -ENOBUFS)
+			return NETDEV_TX_BUSY;
 		goto drop;
+	}
 
 	ndev->stats.tx_packets++;
 	ndev->stats.tx_bytes += skb->len;
 	dev_kfree_skb_any(skb);
 	return NETDEV_TX_OK;
+return_credit:
+	uwe5622_return_tx_credit(wifi, ndev, color);
 drop:
 	ndev->stats.tx_dropped++;
 	dev_kfree_skb_any(skb);
@@ -365,7 +464,7 @@ static void uwe5622_eapol_work(struct work_struct *work)
 			continue;
 		}
 		vif = netdev_priv(ndev);
-		tx = uwe5622_build_tx(vif, skb, 0);
+		tx = uwe5622_build_tx(vif, skb, 0, 0);
 		if (!tx) {
 			ndev->stats.tx_dropped++;
 			goto free;
@@ -1068,6 +1167,14 @@ void uwe5622_wifi_event(struct uwe5622_wifi *wifi,
 	case UWE5622_EVENT_NEW_STATION:
 		uwe5622_event_new_station(wifi, ctx, data, len);
 		break;
+	case UWE5622_EVENT_SDIO_FLOW_CONTROL:
+		if (len >= UWE5622_CREDIT_COLORS)
+			uwe5622_add_tx_credits(wifi, data,
+					       !(data[0] | data[1] |
+						 data[2] | data[3]));
+		break;
+	case UWE5622_EVENT_SDIO_SEQ_NUM:
+		break;
 	case UWE5622_EVENT_STA_LUT:
 		if (len < sizeof(*lut))
 			break;
@@ -1153,6 +1260,7 @@ static void uwe5622_wifi_data_rx(void *priv, struct sk_buff *skb)
 
 	if (left < UWE5622_RX_DESC_LEN)
 		goto out;
+	uwe5622_add_tx_credits(wifi, pos + UWE5622_RX_CREDIT_OFFSET, false);
 	count = pos[8];
 	if (count <= 1) {
 		uwe5622_rx_one_frame(wifi, pos, left);
@@ -1203,6 +1311,38 @@ static const struct uwe5622_client_ops uwe5622_data_client_ops = {
 	.reset = uwe5622_wifi_data_reset,
 };
 
+static bool uwe5622_wifi_config_valid(const struct firmware *config,
+				      u16 section_len[3])
+{
+	const u8 *section;
+	u16 major, minor;
+	size_t config_len;
+	int i;
+
+	if (config->size < 12 || memcmp(config->data, "UWEI", 4) ||
+	    get_unaligned_le16(config->data + 4) != 1)
+		return false;
+
+	for (i = 0; i < 3; i++)
+		section_len[i] = get_unaligned_le16(config->data + 6 + 2 * i);
+	config_len = 12 + section_len[0] + section_len[1] + section_len[2];
+	if (section_len[0] != UWE5622_WIFI_CONFIG_SEC1_LEN ||
+	    section_len[1] != UWE5622_WIFI_CONFIG_SEC2_LEN ||
+	    section_len[2] > UWE5622_WIFI_CONFIG_SEC3_MAX ||
+	    config_len != config->size)
+		return false;
+
+	section = config->data + 12;
+	major = get_unaligned_le16(section);
+	minor = get_unaligned_le16(section + 2);
+	if (major < 2 || major > 128 || minor > 128)
+		return false;
+	if (major > 2 && section[UWE5622_WIFI_CONFIG_MAGIC_OFFSET] != 0xaa)
+		return false;
+
+	return true;
+}
+
 static int uwe5622_wifi_init_firmware(struct uwe5622_wifi *wifi)
 {
 	struct {
@@ -1216,12 +1356,12 @@ static int uwe5622_wifi_init_firmware(struct uwe5622_wifi *wifi)
 	size_t len = sizeof(info);
 	static const u8 api_ids[] = {
 		1, 3, 4, 5, 7, 9, 10, 11, 13, 14, 17, 18, 25, 72,
-		76, 83, 0x80, 0x81, 0x82, 0x83, 0xa0, 0xf5, 0xf6,
+		76, 83, 0x80, 0x81, 0x82, 0x83, 0xa0, 0xb3, 0xe0,
+		0xf5, 0xf6,
 	};
 	const struct firmware *config;
 	const u8 *section;
 	u16 section_len[3];
-	size_t config_len;
 	u8 *download;
 	int i, ret;
 
@@ -1236,15 +1376,7 @@ static int uwe5622_wifi_init_firmware(struct uwe5622_wifi *wifi)
 	if (ret)
 		return dev_err_probe(wifi->dev, ret, "failed to load %s\n",
 				     UWE5622_WIFI_CONFIG_NAME);
-	if (config->size < 12 || memcmp(config->data, "UWEI", 4) ||
-	    get_unaligned_le16(config->data + 4) != 1) {
-		ret = -EINVAL;
-		goto out_config;
-	}
-	for (i = 0; i < ARRAY_SIZE(section_len); i++)
-		section_len[i] = get_unaligned_le16(config->data + 6 + 2 * i);
-	config_len = 12 + section_len[0] + section_len[1] + section_len[2];
-	if (!section_len[0] || !section_len[1] || config_len != config->size) {
+	if (!uwe5622_wifi_config_valid(config, section_len)) {
 		ret = -EINVAL;
 		goto out_config;
 	}
@@ -1284,6 +1416,7 @@ out_config:
 	if (len < 83)
 		return -EPROTO;
 	wifi->fw_capa = get_unaligned_le32(info + 16);
+	wifi->tx_with_credit = info[82] == 0;
 	sec2 = info + 24;
 	ampdu = get_unaligned_le16(sec2 + 2);
 	wifi->band_2ghz.ht_cap.cap = get_unaligned_le16(sec2);
@@ -1324,6 +1457,7 @@ static int uwe5622_wifi_probe(struct auxiliary_device *adev,
 	init_completion(&wifi->cmd_done);
 	spin_lock_init(&wifi->vif_lock);
 	spin_lock_init(&wifi->scan_lock);
+	spin_lock_init(&wifi->credit_lock);
 	skb_queue_head_init(&wifi->eapol_queue);
 	INIT_WORK(&wifi->eapol_work, uwe5622_eapol_work);
 	set_wiphy_dev(wiphy, &adev->dev);
