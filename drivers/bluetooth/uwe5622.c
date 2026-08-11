@@ -341,6 +341,17 @@ static int uwe5622_bt_probe(struct auxiliary_device *adev,
 	hdev->close = uwe5622_bt_close;
 	hdev->flush = uwe5622_bt_flush;
 	hdev->send = uwe5622_bt_send;
+	/*
+	 * The firmware claims the hold, sniff and park link policy modes in its
+	 * features and then rejects being configured with all of them at once,
+	 * which fails controller setup outright. Nothing else needs the command,
+	 * so skip it and keep the supported command bitmap, which the controller
+	 * does report correctly and which the core needs to see that extended
+	 * scanning is available here: reading how many advertising sets the
+	 * controller has puts it in extended mode, after which it answers the
+	 * legacy scan commands with Command Disallowed, as it should.
+	 */
+	hci_set_quirk(hdev, HCI_QUIRK_BROKEN_WRITE_DEF_LINK_POLICY);
 	hci_set_drvdata(hdev, bt);
 	SET_HCIDEV_DEV(hdev, &adev->dev);
 	ret = hci_register_dev(hdev);
