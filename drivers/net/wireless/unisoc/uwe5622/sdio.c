@@ -4,7 +4,10 @@
 #include <linux/bitfield.h>
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
+#include <linux/kthread.h>
 #include <linux/interrupt.h>
+#include <linux/mmc/card.h>
+#include <linux/mmc/core.h>
 #include <linux/mmc/host.h>
 #include <linux/mmc/sdio.h>
 #include <linux/mmc/sdio_func.h>
@@ -13,6 +16,7 @@
 #include <linux/pm.h>
 #include <linux/pm_wakeirq.h>
 #include <linux/property.h>
+#include <linux/scatterlist.h>
 #include <linux/skbuff.h>
 #include <linux/slab.h>
 #include <linux/sizes.h>
@@ -21,6 +25,7 @@
 #include "core.h"
 
 #define UWE5622_SDIO_BLOCK_SIZE		840
+#define UWE5622_SDIO_BLOCK_SIZE_ALT	512
 #define UWE5622_SDIO_PACKET_ADDR	0x20
 #define UWE5622_SDIO_DIRECT_ADDR	0x0f
 #define UWE5622_SDIO_TARGET_ADDR0	0x15c
@@ -30,6 +35,9 @@
 #define UWE5622_FW_CHUNK_SIZE		SZ_32K
 #define UWE5622_FW_READY_TIMEOUT_MS	10000
 #define UWE5622_CP_RESET_REG		0x40088288
+/* Bit 22 forces the Bluetooth memory off. */
+#define UWE5622_WIFI_MEM_CFG1		0x4083c130
+#define UWE5622_BTRAM_SHUTDOWN		BIT(22)
 #define UWE5622_CP_RESET_BIT		BIT(0)
 
 #define UWE5622_SYNC_ADDR		0x405e73b0
@@ -45,6 +53,7 @@
 /* SDMA RX, 840-byte blocks, and an in-band DATA1 interrupt. */
 #define UWE5622_SDIO_CONFIG_ENABLE	BIT(0)
 #define UWE5622_SDIO_CONFIG_SDMA_RX	BIT(4)
+#define UWE5622_SDIO_CONFIG_BLK_SIZE	GENMASK(7, 5)
 #define UWE5622_SDIO_CONFIG_BT_WAKE_EN	BIT(8)
 #define UWE5622_SDIO_CONFIG_BT_TRIGGER	GENMASK(10, 9)
 #define UWE5622_SDIO_CONFIG_INBAND_IRQ	BIT(11)
@@ -64,29 +73,117 @@
 #define UWE5622_PUH_SUBTYPE		GENMASK(27, 24)
 #define UWE5622_PUH_TYPE		GENMASK(31, 28)
 
-#define UWE5622_RX_FIRST_SIZE		(2 * UWE5622_SDIO_BLOCK_SIZE)
 #define UWE5622_RX_MAX_SIZE		(156 * UWE5622_SDIO_BLOCK_SIZE)
+/*
+ * A packet buffer has to hold the largest record the firmware can produce, so
+ * it is two 840-byte blocks or four 512-byte ones depending on the block size
+ * the controller was configured with.
+ */
+#define UWE5622_RX_PAC_SIZE		2048
+#define UWE5622_RX_PAC_MAX		32
+#define UWE5622_RX_PASS_LIMIT		1024
+/*
+ * How many frames may wait for the delivery thread before the receive loop
+ * starts passing them up itself. Reads then throttle to the rate the stack
+ * consumes, which is what should happen, instead of the backlog growing.
+ */
+#define UWE5622_RX_QUEUE_LIMIT		512
+
+/* Function 0 register holding the controller's sleep request in bit 0. */
+#define UWE5622_F0_SLEEP_CTL		0x1a2
 #define UWE5622_RX_CHANNEL_BASE		12
 #define UWE5622_SDIO_MAX_PAYLOAD		1676
+#define UWE5622_TX_ERROR_LIMIT		4
+/*
+ * Transmit aggregation budget. Several records go out in one transfer, the same
+ * way they arrive in one on the receive side, because a transfer costs far more
+ * than the bytes in it.
+ */
+#define UWE5622_TX_MAX_SIZE		(16 * UWE5622_SDIO_BLOCK_SIZE)
+
+static bool uwe5622_rx_aggregation = true;
+module_param_named(rx_aggregation, uwe5622_rx_aggregation, bool, 0444);
+MODULE_PARM_DESC(rx_aggregation,
+		 "use the firmware's scatter-gather receive mode");
+
+static bool uwe5622_rx_thread_enable = true;
+module_param_named(rx_thread, uwe5622_rx_thread_enable, bool, 0644);
+MODULE_PARM_DESC(rx_thread,
+		 "pass received frames up from a separate thread");
+
+static bool uwe5622_rx_poll;
+module_param_named(rx_poll, uwe5622_rx_poll, bool, 0644);
+MODULE_PARM_DESC(rx_poll,
+		 "read from a dedicated thread instead of the interrupt thread");
+
+static bool uwe5622_rx_debug;
+module_param_named(rx_debug, uwe5622_rx_debug, bool, 0644);
+MODULE_PARM_DESC(rx_debug, "report receive path timing");
+
+static bool uwe5622_blksz_512;
+module_param_named(blksz_512, uwe5622_blksz_512, bool, 0444);
+MODULE_PARM_DESC(blksz_512,
+		 "use 512-byte transfer blocks instead of 840-byte ones");
+
+static bool uwe5622_cp_sleep_dance;
+module_param_named(cp_sleep_dance, uwe5622_cp_sleep_dance, bool, 0644);
+MODULE_PARM_DESC(cp_sleep_dance,
+		 "wake the controller for each transfer and let it sleep after");
+
+static bool uwe5622_cp_keep_awake = true;
+module_param_named(cp_keep_awake, uwe5622_cp_keep_awake, bool, 0444);
+MODULE_PARM_DESC(cp_keep_awake,
+		 "hold the controller out of its low power state");
+
 
 struct uwe5622_sdio {
 	struct sdio_func *func;
 	struct uwe5622 wcn;
 	struct sk_buff_head tx_queue;
 	struct work_struct tx_work;
+	struct sk_buff_head rx_queue;
+	struct task_struct *rx_thread;
 	u8 *rx_buf;
 	bool enabled;
 	bool irq_claimed;
 	bool wake_irq_set;
 	u32 wake_config;
+	/* Aggregated receive: one buffer per packet plus the transfer trailer. */
+	void *rx_pac[UWE5622_RX_PAC_MAX];
+	void *rx_trailer;
+	void *tx_buf;
+	unsigned int tx_writes;
+	unsigned int tx_records;
+	unsigned int tx_qmax;
+	unsigned int rx_reads;
+	unsigned int rx_frames;
+	unsigned int rx_inline;
+	unsigned int rx_qmax;
+	unsigned int rx_drains;
+	u64 rx_read_ns;
+	u64 rx_deliver_ns;
+	u64 rx_gap_ns;
+	u64 rx_drain_end;
+	struct scatterlist rx_sg[UWE5622_RX_PAC_MAX + 1];
+	unsigned int rx_pac_num;
+	/* Consecutive failed transmit transfers, reset by every success. */
+	unsigned int tx_errors;
 };
 
-static irqreturn_t uwe5622_host_wake_irq(int irq, void *data)
+static unsigned int uwe5622_blk_size(void)
 {
-	struct uwe5622_sdio *sdio = data;
+	return uwe5622_blksz_512 ? UWE5622_SDIO_BLOCK_SIZE_ALT :
+				   UWE5622_SDIO_BLOCK_SIZE;
+}
 
-	pm_wakeup_event(&sdio->func->dev, 0);
-	return IRQ_HANDLED;
+/*
+ * A packet buffer holds one record and is two blocks of 840 bytes or four of
+ * 512, which is also the smallest transfer that can carry a full record.
+ */
+static unsigned int uwe5622_pac_size(void)
+{
+	return uwe5622_blksz_512 ? 4 * UWE5622_SDIO_BLOCK_SIZE_ALT :
+				   2 * UWE5622_SDIO_BLOCK_SIZE;
 }
 
 static int uwe5622_sdio_set_target(struct uwe5622_sdio *sdio, u32 address)
@@ -246,8 +343,13 @@ static int uwe5622_sdio_wait_ready(struct uwe5622_sdio *sdio)
 	unsigned long deadline = jiffies +
 		msecs_to_jiffies(UWE5622_FW_READY_TIMEOUT_MS);
 	u32 config = UWE5622_SDIO_CONFIG_ENABLE |
-		     UWE5622_SDIO_CONFIG_SDMA_RX |
 		     UWE5622_SDIO_CONFIG_INBAND_IRQ;
+
+	if (!uwe5622_rx_aggregation)
+		config |= UWE5622_SDIO_CONFIG_SDMA_RX;
+	if (uwe5622_blksz_512)
+		config |= FIELD_PREP(UWE5622_SDIO_CONFIG_BLK_SIZE, 1);
+	bool config_written = false;
 	u32 status;
 	int ret;
 
@@ -262,6 +364,16 @@ static int uwe5622_sdio_wait_ready(struct uwe5622_sdio *sdio)
 		status = get_unaligned_le32(sync);
 		switch (status) {
 		case UWE5622_SYNC_ALL_FINISHED:
+			/*
+			 * Without its SDIO configuration the firmware keeps the
+			 * receive mode it defaults to, which does not match the
+			 * transfers this driver issues: it would answer as ready
+			 * and then hand over transfers full of padding while its
+			 * interrupt stays asserted. Fail the boot instead.
+			 */
+			if (!config_written)
+				return dev_err_probe(&sdio->func->dev, -EIO,
+						     "firmware finished before its SDIO configuration was written\n");
 			return 0;
 		case UWE5622_SYNC_CAL_WAITING:
 			ret = uwe5622_sdio_write_u32_locked(sdio,
@@ -273,6 +385,7 @@ static int uwe5622_sdio_wait_ready(struct uwe5622_sdio *sdio)
 						UWE5622_SYNC_CAL_WRITE_DONE);
 			if (ret)
 				return ret;
+			config_written = true;
 			break;
 		case UWE5622_SYNC_VERIFY_WAITING:
 			ret = uwe5622_sdio_answer_bind(sdio, sync + 0x40);
@@ -283,7 +396,13 @@ static int uwe5622_sdio_wait_ready(struct uwe5622_sdio *sdio)
 			break;
 		}
 
-		usleep_range(18000, 22000);
+		/*
+		 * The window in which the firmware waits for its calibration
+		 * data is only open for a moment, and missing it leaves the
+		 * SDIO configuration unwritten, so poll much faster than the
+		 * second the whole handshake takes.
+		 */
+		usleep_range(800, 1200);
 	} while (time_before(jiffies, deadline));
 
 	return dev_err_probe(&sdio->func->dev, -ETIMEDOUT,
@@ -296,127 +415,504 @@ static size_t uwe5622_sdio_rx_size(u32 pending)
 	size_t length;
 
 	if (!pending)
-		return UWE5622_RX_FIRST_SIZE;
+		return uwe5622_pac_size();
 
 	overhead = 8 * ((pending >> 10) + 1) + 64;
-	length = roundup(pending + overhead, UWE5622_SDIO_BLOCK_SIZE);
+	length = roundup(max_t(size_t, pending + overhead,
+			       uwe5622_pac_size()), uwe5622_blk_size());
 	return min_t(size_t, length, UWE5622_RX_MAX_SIZE);
 }
 
-static int uwe5622_sdio_queue_rx(struct uwe5622_sdio *sdio, size_t read_len,
+/*
+ * One transfer carries several records, each introduced by a four-byte public
+ * header. The aggregate ends at the first EOF header or once the payload
+ * accounted for reaches the valid length reported in the transfer trailer,
+ * whichever comes first. Type 0xf marks padding the firmware inserts between
+ * records; the receive channel comes from the subtype alone. A single damaged
+ * record is skipped rather than discarding the rest of the transfer.
+ */
+static void uwe5622_sdio_queue_rx(struct uwe5622_sdio *sdio, size_t read_len,
 				  u32 valid_len, struct sk_buff_head *queue)
 {
 	size_t payload_total = 0;
 	size_t limit = read_len - 8;
 	size_t offset = 0;
-	bool eof = false;
 
-	while (offset + sizeof(__le32) <= limit) {
+	while (payload_total < valid_len && offset + sizeof(__le32) <= limit) {
 		struct sk_buff *skb;
 		u32 header = get_unaligned_le32(sdio->rx_buf + offset);
-		u32 record_len;
+		size_t record_len;
 		u16 payload_len;
+		u16 copy_len;
 		u8 channel;
 
-		if (header & UWE5622_PUH_EOF) {
-			eof = true;
+		if (header & UWE5622_PUH_EOF)
 			break;
-		}
-		if (FIELD_GET(UWE5622_PUH_TYPE, header) != 0)
-			return -EPROTO;
-		if (header & UWE5622_PUH_CHECKSUM)
-			return -EOPNOTSUPP;
 
 		payload_len = FIELD_GET(UWE5622_PUH_LENGTH, header);
-		record_len = sizeof(__le32) + ALIGN(payload_len, 4);
-		if (!payload_len || payload_len > UWE5622_SDIO_MAX_PAYLOAD ||
-		    record_len > limit - offset)
-			return -EPROTO;
+		copy_len = payload_len;
+		if (header & UWE5622_PUH_CHECKSUM)
+			copy_len += 2;
+		record_len = sizeof(__le32) + ALIGN(copy_len, 4);
+
+		if (!payload_len || record_len > limit - offset) {
+			dev_dbg(&sdio->func->dev,
+				"RX record truncated at offset %zu\n", offset);
+			break;
+		}
+
+		payload_total += payload_len;
+
+		if (FIELD_GET(UWE5622_PUH_TYPE, header) == 0xf ||
+		    payload_len > UWE5622_SDIO_MAX_PAYLOAD) {
+			offset += record_len;
+			continue;
+		}
 
 		channel = UWE5622_RX_CHANNEL_BASE +
 			  FIELD_GET(UWE5622_PUH_SUBTYPE, header);
 		skb = alloc_skb(payload_len, GFP_KERNEL);
 		if (!skb)
-			return -ENOMEM;
+			break;
 		skb_put_data(skb, sdio->rx_buf + offset + sizeof(__le32),
 			     payload_len);
 		skb->cb[0] = channel;
 		__skb_queue_tail(queue, skb);
 
-		payload_total += payload_len;
 		offset += record_len;
 	}
+}
 
-	if (!eof || payload_total < valid_len)
-		return -EPROTO;
+
+/*
+ * Aggregated receive. In this mode the firmware hands over a batch of packets
+ * in one transfer, writing each into its own buffer and the trailer into a
+ * final one, so a single CMD53 replaces one transaction per packet. The
+ * alternative single buffer mode only ever carries one packet per transfer,
+ * which caps throughput well below the negotiated link rate.
+ */
+static int uwe5622_sdio_read_aggregated(struct uwe5622_sdio *sdio,
+					unsigned int pac_num, u32 *valid_len,
+					u32 *pending)
+{
+	struct sdio_func *func = sdio->func;
+	struct mmc_host *host = func->card->host;
+	struct mmc_request mrq = {};
+	struct mmc_command cmd = {};
+	struct mmc_data data = {};
+	unsigned int i, blocks;
+	const u8 *trailer;
+
+	pac_num = clamp_t(unsigned int, pac_num, 1, UWE5622_RX_PAC_MAX);
+
+	sg_init_table(sdio->rx_sg, pac_num + 1);
+	for (i = 0; i < pac_num; i++)
+		sg_set_buf(&sdio->rx_sg[i], sdio->rx_pac[i],
+			   uwe5622_pac_size());
+	sg_set_buf(&sdio->rx_sg[pac_num], sdio->rx_trailer,
+		   uwe5622_blk_size());
+
+	blocks = pac_num * (uwe5622_pac_size() / uwe5622_blk_size()) + 1;
+
+	data.sg = sdio->rx_sg;
+	data.sg_len = pac_num + 1;
+	data.blksz = uwe5622_blk_size();
+	data.blocks = blocks;
+	data.flags = MMC_DATA_READ;
+
+	/* CMD53, function 1, block mode, fixed address at the packet window. */
+	cmd.opcode = SD_IO_RW_EXTENDED;
+	cmd.arg = (func->num & 0x7) << 28 | BIT(27) |
+		  (UWE5622_SDIO_PACKET_ADDR & 0x1ffff) << 9 |
+		  (blocks & 0x1ff);
+	cmd.flags = MMC_RSP_SPI_R5 | MMC_RSP_R5 | MMC_CMD_ADTC;
+
+	mrq.cmd = &cmd;
+	mrq.data = &data;
+	mmc_set_data_timeout(&data, func->card);
+	mmc_wait_for_req(host, &mrq);
+
+	if (cmd.error)
+		return cmd.error;
+	if (data.error)
+		return data.error;
+
+	trailer = sdio->rx_trailer;
+	*valid_len = get_unaligned_le32(trailer + uwe5622_blk_size() - 8);
+	*pending = get_unaligned_le32(trailer + uwe5622_blk_size() - 4);
+
+	return pac_num;
+}
+
+static void uwe5622_sdio_drain(struct uwe5622_sdio *sdio);
+
+static int uwe5622_sdio_rx_thread(void *data)
+{
+	struct uwe5622_sdio *sdio = data;
+	struct sk_buff *skb;
+
+	/*
+	 * Low real time priority, like the vendor driver gives its transport
+	 * threads: a late read costs a whole transfer's worth of bus time, and
+	 * the firmware's queue drains no faster than this thread runs.
+	 */
+	sched_set_fifo_low(current);
+
+	while (!kthread_should_stop()) {
+		if (uwe5622_rx_poll) {
+			uwe5622_sdio_drain(sdio);
+			/*
+			 * Sleep rather than spin: at real time priority a busy
+			 * loop would starve everything else on this CPU.
+			 */
+			usleep_range(50, 100);
+			continue;
+		}
+
+		set_current_state(TASK_INTERRUPTIBLE);
+		if (skb_queue_empty(&sdio->rx_queue)) {
+			schedule();
+			continue;
+		}
+		__set_current_state(TASK_RUNNING);
+
+		while ((skb = skb_dequeue(&sdio->rx_queue)))
+			uwe5622_core_rx(&sdio->wcn, skb->cb[0], skb);
+	}
+	__set_current_state(TASK_RUNNING);
 
 	return 0;
+}
+
+/*
+ * Hand a batch to the delivery thread instead of passing it up from the read
+ * loop. Delivery costs more than the transfer that fetched the frames, and
+ * every microsecond spent in it is a microsecond the controller spends holding
+ * a queue nobody is draining, so the loop should get back to reading at once.
+ */
+static void uwe5622_sdio_deliver(struct uwe5622_sdio *sdio,
+				 struct sk_buff_head *queue)
+{
+	struct sk_buff *skb;
+
+	unsigned int len = skb_queue_len(queue);
+	u64 start = uwe5622_rx_debug ? ktime_get_ns() : 0;
+
+	sdio->rx_frames += len;
+	if (skb_queue_len(&sdio->rx_queue) > sdio->rx_qmax)
+		sdio->rx_qmax = skb_queue_len(&sdio->rx_queue);
+
+	if (uwe5622_rx_thread_enable && sdio->rx_thread &&
+	    sdio->rx_thread != current &&
+	    skb_queue_len(&sdio->rx_queue) < UWE5622_RX_QUEUE_LIMIT) {
+		spin_lock_bh(&sdio->rx_queue.lock);
+		skb_queue_splice_tail_init(queue, &sdio->rx_queue);
+		spin_unlock_bh(&sdio->rx_queue.lock);
+		wake_up_process(sdio->rx_thread);
+		if (uwe5622_rx_debug)
+			sdio->rx_deliver_ns += ktime_get_ns() - start;
+		return;
+	}
+
+	sdio->rx_inline += len;
+	while ((skb = __skb_dequeue(queue)))
+		uwe5622_core_rx(&sdio->wcn, skb->cb[0], skb);
+	if (uwe5622_rx_debug)
+		sdio->rx_deliver_ns += ktime_get_ns() - start;
+}
+
+static void uwe5622_sdio_rx_account(struct uwe5622_sdio *sdio, u64 read_ns)
+{
+	sdio->rx_reads++;
+	sdio->rx_read_ns += read_ns;
+	if (!uwe5622_rx_debug || sdio->rx_reads % 4096)
+		return;
+
+	dev_info(&sdio->func->dev,
+		 "rx reads=%u frames=%u inline=%u qmax=%u drains=%u read=%lluns deliver=%lluns gap=%lluns\n",
+		 sdio->rx_reads, sdio->rx_frames, sdio->rx_inline, sdio->rx_qmax,
+		 sdio->rx_drains, sdio->rx_read_ns / sdio->rx_reads,
+		 sdio->rx_deliver_ns / sdio->rx_reads,
+		 sdio->rx_gap_ns / max(sdio->rx_drains, 1U));
+}
+
+static void uwe5622_sdio_drain_rx_aggregated(struct uwe5622_sdio *sdio)
+{
+	struct sdio_func *func = sdio->func;
+	struct sk_buff_head queue;
+	struct sk_buff *skb;
+	u32 valid_len, pending;
+	unsigned int pass = 0;
+	u64 read_ns;
+	int i, got;
+
+	do {
+		__skb_queue_head_init(&queue);
+
+		read_ns = uwe5622_rx_debug ? ktime_get_ns() : 0;
+		sdio_claim_host(func);
+		got = uwe5622_sdio_read_aggregated(sdio, sdio->rx_pac_num,
+						   &valid_len, &pending);
+		sdio_release_host(func);
+		read_ns = uwe5622_rx_debug ? ktime_get_ns() - read_ns : 0;
+		uwe5622_sdio_rx_account(sdio, read_ns);
+		if (got < 0) {
+			dev_err_ratelimited(&func->dev,
+					    "aggregated RX failed: %d\n", got);
+			return;
+		}
+
+		for (i = 0; i < got; i++) {
+			const u8 *pac = sdio->rx_pac[i];
+			u32 header = get_unaligned_le32(pac);
+			u16 payload_len;
+			u8 channel;
+
+			if (header & UWE5622_PUH_EOF)
+				break;
+			payload_len = FIELD_GET(UWE5622_PUH_LENGTH, header);
+			if (!payload_len ||
+			    payload_len > UWE5622_SDIO_MAX_PAYLOAD ||
+			    FIELD_GET(UWE5622_PUH_TYPE, header) == 0xf)
+				continue;
+
+			channel = UWE5622_RX_CHANNEL_BASE +
+				  FIELD_GET(UWE5622_PUH_SUBTYPE, header);
+			skb = alloc_skb(payload_len, GFP_KERNEL);
+			if (!skb)
+				break;
+			skb_put_data(skb, pac + sizeof(__le32), payload_len);
+			skb->cb[0] = channel;
+			__skb_queue_tail(&queue, skb);
+		}
+
+		sdio->rx_pac_num = clamp_t(unsigned int, pending, 1,
+					   UWE5622_RX_PAC_MAX);
+
+		uwe5622_sdio_deliver(sdio, &queue);
+
+		cond_resched();
+		/*
+		 * Drain until the controller reports nothing left: stopping
+		 * early strands the backlog, and the interrupt that would have
+		 * fetched it has already been consumed. The cap only exists so
+		 * a misreported count cannot spin here forever.
+		 */
+		if (++pass == UWE5622_RX_PASS_LIMIT) {
+			dev_warn_ratelimited(&func->dev,
+					     "aggregated RX still reports %u pending after %u passes\n",
+					     pending, pass);
+			return;
+		}
+	} while (pending);
+}
+
+static void uwe5622_sdio_drain_rx(struct uwe5622_sdio *sdio)
+{
+	struct sdio_func *func = sdio->func;
+	struct sk_buff_head queue;
+	size_t read_len = uwe5622_sdio_rx_size(0);
+	u32 pending;
+	u32 valid_len;
+	int ret = 0;
+
+	/*
+	 * The transfer trailer reports how much the controller still holds, and
+	 * it has to be read out completely: stopping early leaves the backlog
+	 * unread and the stream stalls until unrelated traffic arrives.
+	 */
+	do {
+		__skb_queue_head_init(&queue);
+
+		sdio_claim_host(func);
+		ret = sdio_readsb(func, sdio->rx_buf,
+				  UWE5622_SDIO_PACKET_ADDR, read_len);
+		sdio_release_host(func);
+		if (ret) {
+			dev_err_ratelimited(&func->dev,
+					    "RX transfer failed: %d\n", ret);
+			return;
+		}
+
+		valid_len = get_unaligned_le32(sdio->rx_buf + read_len - 8);
+		pending = get_unaligned_le32(sdio->rx_buf + read_len - 4);
+		if (valid_len > read_len - 8) {
+			dev_err_ratelimited(&func->dev,
+					    "RX valid length %u exceeds transfer %zu\n",
+					    valid_len, read_len - 8);
+			return;
+		}
+		uwe5622_sdio_queue_rx(sdio, read_len, valid_len, &queue);
+		read_len = uwe5622_sdio_rx_size(pending);
+
+		uwe5622_sdio_deliver(sdio, &queue);
+
+		cond_resched();
+	} while (pending);
+}
+
+/*
+ * This callback runs on the host's SDIO interrupt thread, which is nice -16.
+ * The in-band interrupt is only deasserted once the queued data has been read,
+ * so the transfer itself has to be drained here rather than handed to a worker,
+ * which would leave the interrupt asserted and spin the thread instead. Only
+ * the delivery of what was read is handed off, by uwe5622_sdio_deliver().
+ * UWE5622_RX_MAX_BURST bounds one pass so a chatty firmware cannot hold the
+ * CPU indefinitely.
+ */
+/*
+ * Registers outside the always-on domain only answer while the controller is
+ * awake, so its sleep request has to be cleared for the transfer rather than
+ * once at boot: the firmware puts it back.
+ */
+static int uwe5622_sdio_wake_locked(struct uwe5622_sdio *sdio)
+{
+	int ret = 0;
+
+	sdio_f0_writeb(sdio->func, 0, UWE5622_F0_SLEEP_CTL, &ret);
+
+	return ret;
+}
+
+static void uwe5622_sdio_allow_sleep_locked(struct uwe5622_sdio *sdio)
+{
+	int ret = 0;
+
+	sdio_f0_writeb(sdio->func, 1, UWE5622_F0_SLEEP_CTL, &ret);
+}
+
+static void uwe5622_sdio_drain(struct uwe5622_sdio *sdio)
+{
+	if (uwe5622_rx_debug) {
+		u64 now = ktime_get_ns();
+
+		if (sdio->rx_drain_end)
+			sdio->rx_gap_ns += now - sdio->rx_drain_end;
+		sdio->rx_drains++;
+	}
+
+	if (uwe5622_cp_sleep_dance) {
+		sdio_claim_host(sdio->func);
+		uwe5622_sdio_wake_locked(sdio);
+		sdio_release_host(sdio->func);
+	}
+
+	if (uwe5622_rx_aggregation)
+		uwe5622_sdio_drain_rx_aggregated(sdio);
+	else
+		uwe5622_sdio_drain_rx(sdio);
+
+	if (uwe5622_cp_sleep_dance) {
+		sdio_claim_host(sdio->func);
+		uwe5622_sdio_allow_sleep_locked(sdio);
+		sdio_release_host(sdio->func);
+	}
+
+	if (uwe5622_rx_debug)
+		sdio->rx_drain_end = ktime_get_ns();
 }
 
 static void uwe5622_sdio_irq(struct sdio_func *func)
 {
 	struct uwe5622_sdio *sdio = sdio_get_drvdata(func);
-	struct sk_buff_head queue;
-	struct sk_buff *skb;
-	size_t read_len = UWE5622_RX_FIRST_SIZE;
-	u32 pending;
-	u32 valid_len;
-	int ret = 0;
 	int err = 0;
 
-	__skb_queue_head_init(&queue);
-	sdio_claim_host(func);
 	sdio_f0_readb(func, SDIO_CCCR_INTx, &err);
 	if (err) {
-		ret = err;
-		goto out_release;
+		dev_err_ratelimited(&func->dev, "RX status read failed: %d\n",
+				    err);
+		return;
 	}
 
-	do {
-		ret = sdio_readsb(func, sdio->rx_buf,
-				  UWE5622_SDIO_PACKET_ADDR, read_len);
-		if (ret)
-			break;
+	if (uwe5622_rx_poll) {
+		wake_up_process(sdio->rx_thread);
+		return;
+	}
 
-		valid_len = get_unaligned_le32(sdio->rx_buf + read_len - 8);
-		pending = get_unaligned_le32(sdio->rx_buf + read_len - 4);
-		ret = uwe5622_sdio_queue_rx(sdio, read_len, valid_len, &queue);
-		if (ret)
-			break;
-		read_len = uwe5622_sdio_rx_size(pending);
-	} while (pending);
-
-out_release:
-	sdio_release_host(func);
-	if (ret)
-		dev_err_ratelimited(&func->dev, "RX transfer failed: %d\n", ret);
-
-	while ((skb = __skb_dequeue(&queue)))
-		uwe5622_core_rx(&sdio->wcn, skb->cb[0], skb);
+	uwe5622_sdio_drain(sdio);
 }
 
 static void uwe5622_sdio_tx_work(struct work_struct *work)
 {
 	struct uwe5622_sdio *sdio = container_of(work, struct uwe5622_sdio,
 						 tx_work);
+	struct sk_buff_head batch;
 	struct sk_buff *skb;
+	size_t used;
 	int ret;
 
-	while ((skb = skb_dequeue(&sdio->tx_queue))) {
+	__skb_queue_head_init(&batch);
+
+	while (!skb_queue_empty(&sdio->tx_queue)) {
+		used = 0;
+		while ((skb = skb_dequeue(&sdio->tx_queue))) {
+			if (used + skb->len + sizeof(__le32) >
+			    UWE5622_TX_MAX_SIZE) {
+				skb_queue_head(&sdio->tx_queue, skb);
+				break;
+			}
+			memcpy(sdio->tx_buf + used, skb->data, skb->len);
+			used += skb->len;
+			__skb_queue_tail(&batch, skb);
+		}
+		if (!used)
+			break;
+
+		put_unaligned_le32(UWE5622_PUH_EOF, sdio->tx_buf + used);
+		used += sizeof(__le32);
+		used = roundup(used, uwe5622_blk_size());
+
 		sdio_claim_host(sdio->func);
+		if (uwe5622_cp_sleep_dance)
+			uwe5622_sdio_wake_locked(sdio);
 		ret = sdio_writesb(sdio->func, UWE5622_SDIO_PACKET_ADDR,
-				   skb->data, skb->len);
+				   sdio->tx_buf, used);
+		if (uwe5622_cp_sleep_dance)
+			uwe5622_sdio_allow_sleep_locked(sdio);
 		sdio_release_host(sdio->func);
-		if (ret)
-			dev_err_ratelimited(&sdio->func->dev,
-					    "TX transfer failed: %d\n", ret);
-		kfree_skb(skb);
+
+		if (!ret) {
+			sdio->tx_errors = 0;
+			sdio->tx_writes++;
+			sdio->tx_records += skb_queue_len(&batch);
+			if (!(sdio->tx_writes % 2048))
+				dev_info(&sdio->func->dev,
+					 "tx writes=%u records=%u qmax=%u\n",
+					 sdio->tx_writes, sdio->tx_records,
+					 sdio->tx_qmax);
+			__skb_queue_purge(&batch);
+			continue;
+		}
+
+		dev_err_ratelimited(&sdio->func->dev,
+				    "TX transfer failed: %d\n", ret);
+		/*
+		 * The firmware never saw this transfer, so hand every tag in it
+		 * back and let the client release what it reserved. Without
+		 * this a failed write silently consumes firmware transmit
+		 * credits for good.
+		 */
+		while ((skb = __skb_dequeue(&batch))) {
+			uwe5622_core_tx_error(&sdio->wcn, skb->cb[0],
+					      skb->cb[1]);
+			kfree_skb(skb);
+		}
+		if (++sdio->tx_errors < UWE5622_TX_ERROR_LIMIT)
+			continue;
+
+		dev_err(&sdio->func->dev,
+			"%u consecutive transmit failures, recovering\n",
+			sdio->tx_errors);
+		sdio->tx_errors = 0;
+		skb_queue_purge(&sdio->tx_queue);
+		uwe5622_core_request_recovery(&sdio->wcn);
+		return;
 	}
 }
 
-static int uwe5622_sdio_start(struct uwe5622 *wcn, const struct firmware *fw)
+static int uwe5622_sdio_boot(struct uwe5622_sdio *sdio,
+			     const struct firmware *fw)
 {
-	struct uwe5622_sdio *sdio = wcn->bus_priv;
 	int ret;
 
 	sdio_claim_host(sdio->func);
@@ -425,16 +921,46 @@ static int uwe5622_sdio_start(struct uwe5622 *wcn, const struct firmware *fw)
 		goto out_release;
 	sdio->enabled = true;
 
-	ret = sdio_set_block_size(sdio->func, UWE5622_SDIO_BLOCK_SIZE);
+	ret = sdio_set_block_size(sdio->func, uwe5622_blk_size());
 	if (ret)
 		goto out_disable;
+
+	if (uwe5622_cp_keep_awake) {
+		/*
+		 * Clear the controller's sleep request before anything else.
+		 * Left set, the core powers down between packets and has to be
+		 * woken for each one; and a core that went to sleep under a
+		 * previous instance of this driver has to be woken here or it
+		 * will not run the firmware about to be downloaded at all.
+		 */
+		sdio_f0_writeb(sdio->func, 0, UWE5622_F0_SLEEP_CTL, &ret);
+		if (ret)
+			dev_warn(&sdio->func->dev,
+				 "failed to clear the sleep request: %d\n", ret);
+	}
 
 	ret = uwe5622_sdio_download_firmware(sdio, fw);
 	if (ret)
 		goto out_disable;
+
+	/*
+	 * Clear the handshake word the previous firmware left behind while the
+	 * core is still held in reset. Its memory survives the reset, so a
+	 * reload would otherwise read the old "all finished" state and skip the
+	 * whole handshake; clearing it once the core runs is worse still,
+	 * because it races with the firmware posting the state in which it waits
+	 * for its SDIO configuration and can drop that request, leaving the
+	 * controller answering as ready with a receive mode the host does not
+	 * use.
+	 */
+	ret = uwe5622_sdio_write_u32_locked(sdio, UWE5622_SYNC_ADDR, 0);
+	if (ret)
+		goto out_disable;
+
 	ret = uwe5622_sdio_release_cpu(sdio);
 	if (ret)
 		goto out_disable;
+
 	ret = uwe5622_sdio_wait_ready(sdio);
 	if (ret)
 		goto out_disable;
@@ -456,20 +982,29 @@ out_release:
 	return ret;
 }
 
+static int uwe5622_sdio_start(struct uwe5622 *wcn, const struct firmware *fw)
+{
+	struct uwe5622_sdio *sdio = wcn->bus_priv;
+
+	return uwe5622_sdio_boot(sdio, fw);
+}
+
 static void uwe5622_sdio_stop(struct uwe5622 *wcn)
 {
 	struct uwe5622_sdio *sdio = wcn->bus_priv;
-	u32 reset;
 	int ret;
 
 	cancel_work_sync(&sdio->tx_work);
 	skb_queue_purge(&sdio->tx_queue);
+	skb_queue_purge(&sdio->rx_queue);
 	sdio_claim_host(sdio->func);
 	if (sdio->irq_claimed) {
 		sdio_release_irq(sdio->func);
 		sdio->irq_claimed = false;
 	}
 	if (sdio->enabled) {
+		u32 reset;
+
 		ret = uwe5622_sdio_read_u32_locked(sdio, UWE5622_CP_RESET_REG,
 						   &reset);
 		if (!ret)
@@ -485,14 +1020,50 @@ static void uwe5622_sdio_stop(struct uwe5622 *wcn)
 	sdio_release_host(sdio->func);
 }
 
+static int uwe5622_sdio_bt_ram(struct uwe5622 *wcn, bool on)
+{
+	struct uwe5622_sdio *sdio = wcn->bus_priv;
+	u32 value;
+	int ret;
+
+	sdio_claim_host(sdio->func);
+	ret = uwe5622_sdio_wake_locked(sdio);
+	if (ret) {
+		sdio_release_host(sdio->func);
+		return ret;
+	}
+	ret = uwe5622_sdio_read_u32_locked(sdio, UWE5622_WIFI_MEM_CFG1, &value);
+	if (!ret && !value) {
+		/*
+		 * The whole register reading as zero means the window does not
+		 * reach it rather than that every bit in it is clear, and a
+		 * write would then put a zero into a live configuration
+		 * register, so leave it alone.
+		 */
+		dev_info(&sdio->func->dev,
+			 "memory configuration register is not reachable\n");
+		ret = -ENODEV;
+	} else if (!ret) {
+		if (on)
+			value &= ~UWE5622_BTRAM_SHUTDOWN;
+		else
+			value |= UWE5622_BTRAM_SHUTDOWN;
+		ret = uwe5622_sdio_write_u32_locked(sdio, UWE5622_WIFI_MEM_CFG1,
+						    value);
+		dev_info(&sdio->func->dev, "bt memory %s, cfg1 %#010x (%d)\n",
+			 on ? "on" : "off", value, ret);
+	}
+	sdio_release_host(sdio->func);
+
+	return ret;
+}
+
 static int uwe5622_sdio_tx(struct uwe5622 *wcn, u8 channel,
-			   struct sk_buff *skb)
+			   struct sk_buff *skb, u8 tag)
 {
 	struct uwe5622_sdio *sdio = wcn->bus_priv;
 	size_t record_len = sizeof(__le32) + ALIGN(skb->len, 4);
-	size_t transfer_len = roundup(record_len + sizeof(__le32),
-				       UWE5622_SDIO_BLOCK_SIZE);
-	struct sk_buff *transfer;
+	struct sk_buff *record;
 	u32 header;
 
 	if (channel >= UWE5622_RX_CHANNEL_BASE ||
@@ -501,17 +1072,25 @@ static int uwe5622_sdio_tx(struct uwe5622 *wcn, u8 channel,
 	if (skb_queue_len(&sdio->tx_queue) >= 256)
 		return -ENOBUFS;
 
-	transfer = alloc_skb(transfer_len, GFP_ATOMIC);
-	if (!transfer)
+	/*
+	 * Only the record is built here, without the end marker or the padding
+	 * to a whole transfer: several of these are packed into one transfer
+	 * when the queue is drained.
+	 */
+	record = alloc_skb(record_len, GFP_ATOMIC);
+	if (!record)
 		return -ENOMEM;
-	skb_put_zero(transfer, transfer_len);
+	skb_put_zero(record, record_len);
 
 	header = FIELD_PREP(UWE5622_PUH_LENGTH, skb->len) |
 		 FIELD_PREP(UWE5622_PUH_SUBTYPE, channel);
-	put_unaligned_le32(header, transfer->data);
-	skb_copy_bits(skb, 0, transfer->data + sizeof(__le32), skb->len);
-	put_unaligned_le32(UWE5622_PUH_EOF, transfer->data + record_len);
-	skb_queue_tail(&sdio->tx_queue, transfer);
+	put_unaligned_le32(header, record->data);
+	skb_copy_bits(skb, 0, record->data + sizeof(__le32), skb->len);
+	record->cb[0] = channel;
+	record->cb[1] = tag;
+	skb_queue_tail(&sdio->tx_queue, record);
+	if (skb_queue_len(&sdio->tx_queue) > sdio->tx_qmax)
+		sdio->tx_qmax = skb_queue_len(&sdio->tx_queue);
 	schedule_work(&sdio->tx_work);
 
 	return 0;
@@ -546,6 +1125,7 @@ static const struct uwe5622_bus_ops uwe5622_sdio_bus_ops = {
 	.start = uwe5622_sdio_start,
 	.stop = uwe5622_sdio_stop,
 	.tx = uwe5622_sdio_tx,
+	.bt_ram = uwe5622_sdio_bt_ram,
 	.suspend = uwe5622_sdio_suspend_bus,
 	.resume = uwe5622_sdio_resume_bus,
 };
@@ -624,13 +1204,15 @@ static int uwe5622_sdio_get_wake_irq(struct uwe5622_sdio *sdio)
 	ret = uwe5622_sdio_set_wake_config(sdio, irq, bluetooth);
 	if (ret)
 		return ret;
-	ret = devm_request_threaded_irq(&sdio->func->dev, irq, NULL,
-					uwe5622_host_wake_irq, IRQF_ONESHOT,
-					dev_name(&sdio->func->dev), sdio);
-	if (ret)
-		return dev_err_probe(&sdio->func->dev, ret,
-				     "failed to request host-wake IRQ\n");
-	ret = dev_pm_set_wake_irq(&sdio->func->dev, irq);
+	/*
+	 * The firmware drives this output whenever it hands a transfer to the
+	 * host, not only to wake the system, so the interrupt must stay masked
+	 * while the system is running. A dedicated wake interrupt is enabled by
+	 * the PM core for the duration of suspend only; requesting it as a
+	 * normal interrupt instead lets the firmware's per-transfer pulses
+	 * saturate the CPU with interrupts as soon as traffic starts.
+	 */
+	ret = dev_pm_set_dedicated_wake_irq(&sdio->func->dev, irq);
 	if (ret)
 		return dev_err_probe(&sdio->func->dev, ret,
 				     "failed to set host-wake IRQ\n");
@@ -638,6 +1220,8 @@ static int uwe5622_sdio_get_wake_irq(struct uwe5622_sdio *sdio)
 
 	return 0;
 }
+
+
 
 static int uwe5622_sdio_probe(struct sdio_func *func,
 			      const struct sdio_device_id *id)
@@ -657,10 +1241,48 @@ static int uwe5622_sdio_probe(struct sdio_func *func,
 				      GFP_KERNEL);
 	if (!sdio->rx_buf)
 		return -ENOMEM;
+	/* Room for the aggregation budget plus its end marker and padding. */
+	sdio->tx_buf = devm_kmalloc(&func->dev,
+				    UWE5622_TX_MAX_SIZE + UWE5622_SDIO_BLOCK_SIZE,
+				    GFP_KERNEL);
+	if (!sdio->tx_buf)
+		return -ENOMEM;
+
+	/*
+	 * The firmware download window is reached through function 0 registers
+	 * at 0x15c, outside the vendor CCCR range that sdio_f0_writeb() allows
+	 * by default, so every access would fail with -EINVAL without this.
+	 */
+	func->card->quirks |= MMC_QUIRK_LENIENT_FN0;
+
+	if (uwe5622_rx_aggregation) {
+		int pac;
+
+		for (pac = 0; pac < UWE5622_RX_PAC_MAX; pac++) {
+			sdio->rx_pac[pac] = devm_kmalloc(&func->dev,
+							 UWE5622_RX_PAC_SIZE,
+							 GFP_KERNEL);
+			if (!sdio->rx_pac[pac])
+				return -ENOMEM;
+		}
+		sdio->rx_trailer = devm_kmalloc(&func->dev,
+						UWE5622_SDIO_BLOCK_SIZE,
+						GFP_KERNEL);
+		/* The largest of the two block sizes covers both. */
+		if (!sdio->rx_trailer)
+			return -ENOMEM;
+		sdio->rx_pac_num = 1;
+	}
 
 	sdio->func = func;
 	skb_queue_head_init(&sdio->tx_queue);
 	INIT_WORK(&sdio->tx_work, uwe5622_sdio_tx_work);
+	skb_queue_head_init(&sdio->rx_queue);
+	sdio->rx_thread = kthread_run(uwe5622_sdio_rx_thread, sdio, "%s-rx",
+				      dev_name(&func->dev));
+	if (IS_ERR(sdio->rx_thread))
+		return dev_err_probe(&func->dev, PTR_ERR(sdio->rx_thread),
+				     "failed to start the receive thread\n");
 	sdio->wcn.dev = &func->dev;
 	sdio->wcn.bus_ops = &uwe5622_sdio_bus_ops;
 	sdio->wcn.bus_priv = sdio;
@@ -673,6 +1295,8 @@ static int uwe5622_sdio_probe(struct sdio_func *func,
 		(struct uwe5622_channel_pair) { 8, 23 };
 	sdio->wcn.services[UWE5622_SERVICE_BLUETOOTH] =
 		(struct uwe5622_channel_pair) { 3, 17 };
+	sdio->wcn.services[UWE5622_SERVICE_BLUETOOTH_DATA] =
+		(struct uwe5622_channel_pair) { 3, 15 };
 	sdio->wcn.bluetooth_enable = devm_gpiod_get_optional(&func->dev,
 					"bluetooth-enable", GPIOD_OUT_LOW);
 	if (IS_ERR(sdio->wcn.bluetooth_enable))
@@ -710,6 +1334,8 @@ static void uwe5622_sdio_remove(struct sdio_func *func)
 	struct uwe5622_sdio *sdio = sdio_get_drvdata(func);
 
 	uwe5622_core_remove(&sdio->wcn);
+	kthread_stop(sdio->rx_thread);
+	skb_queue_purge(&sdio->rx_queue);
 	if (sdio->wake_irq_set)
 		dev_pm_clear_wake_irq(&func->dev);
 	device_init_wakeup(&func->dev, false);

@@ -119,7 +119,8 @@ void uwe5622_client_unregister(struct uwe5622_client *client)
 }
 EXPORT_SYMBOL_GPL(uwe5622_client_unregister);
 
-int uwe5622_client_send(struct uwe5622_client *client, struct sk_buff *skb)
+int uwe5622_client_send_tagged(struct uwe5622_client *client,
+			       struct sk_buff *skb, u8 tag)
 {
 	struct uwe5622 *wcn;
 
@@ -130,9 +131,47 @@ int uwe5622_client_send(struct uwe5622_client *client, struct sk_buff *skb)
 	if (READ_ONCE(wcn->state) != UWE5622_READY)
 		return -ESHUTDOWN;
 
-	return wcn->bus_ops->tx(wcn, client->tx_channel, skb);
+	return wcn->bus_ops->tx(wcn, client->tx_channel, skb, tag);
+}
+EXPORT_SYMBOL_GPL(uwe5622_client_send_tagged);
+
+int uwe5622_client_send(struct uwe5622_client *client, struct sk_buff *skb)
+{
+	return uwe5622_client_send_tagged(client, skb, 0);
 }
 EXPORT_SYMBOL_GPL(uwe5622_client_send);
+
+/*
+ * Report a transfer that the bus accepted but never delivered. The owning
+ * client is found by transmit channel so it can undo whatever it committed when
+ * the transfer was queued.
+ */
+void uwe5622_core_tx_error(struct uwe5622 *wcn, u8 tx_channel, u8 tag)
+{
+	struct uwe5622_client *client;
+	int idx, i;
+
+	idx = srcu_read_lock(&wcn->channel_srcu);
+	for (i = 0; i < UWE5622_MAX_CHANNELS; i++) {
+		client = srcu_dereference(wcn->channels[i], &wcn->channel_srcu);
+		if (!client || client->tx_channel != tx_channel)
+			continue;
+		if (client->ops->tx_error)
+			client->ops->tx_error(client->priv, tag);
+		break;
+	}
+	srcu_read_unlock(&wcn->channel_srcu, idx);
+}
+
+void uwe5622_core_request_recovery(struct uwe5622 *wcn)
+{
+	mutex_lock(&wcn->state_mutex);
+	if (wcn->state == UWE5622_READY && !wcn->removing) {
+		wcn->state = UWE5622_RECOVERING;
+		schedule_work(&wcn->recovery_work);
+	}
+	mutex_unlock(&wcn->state_mutex);
+}
 
 int uwe5622_power_get(struct uwe5622_client *client)
 {
@@ -295,6 +334,20 @@ void uwe5622_bluetooth_enable(struct uwe5622_client *client, bool enabled)
 }
 EXPORT_SYMBOL_GPL(uwe5622_bluetooth_enable);
 
+/*
+ * The controller keeps the Bluetooth memory powered down until asked, and a
+ * Bluetooth core without its memory answers commands from the host while its
+ * radio receives nothing at all.
+ */
+int uwe5622_bluetooth_ram(struct uwe5622_client *client, bool on)
+{
+	if (!client || !client->wcn->bus_ops->bt_ram)
+		return 0;
+
+	return client->wcn->bus_ops->bt_ram(client->wcn, on);
+}
+EXPORT_SYMBOL_GPL(uwe5622_bluetooth_ram);
+
 void uwe5622_bluetooth_wake(struct uwe5622_client *client, bool enabled)
 {
 	if (client && client->wcn->device_wake)
@@ -321,10 +374,14 @@ void uwe5622_core_rx(struct uwe5622 *wcn, u8 channel, struct sk_buff *skb)
 
 	idx = srcu_read_lock(&wcn->channel_srcu);
 	client = srcu_dereference(wcn->channels[channel], &wcn->channel_srcu);
-	if (client)
+	if (client) {
 		client->ops->rx(client->priv, skb);
-	else
+	} else {
+		dev_dbg_ratelimited(wcn->dev,
+				    "dropping %u bytes on unclaimed channel %u\n",
+				    skb->len, channel);
 		kfree_skb(skb);
+	}
 	srcu_read_unlock(&wcn->channel_srcu, idx);
 }
 

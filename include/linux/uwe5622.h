@@ -14,6 +14,11 @@ enum uwe5622_service {
 	UWE5622_SERVICE_WIFI_DATA,
 	UWE5622_SERVICE_WIFI_LOG,
 	UWE5622_SERVICE_BLUETOOTH,
+	/*
+	 * The controller answers commands on the Bluetooth channel but delivers
+	 * received traffic, advertising reports among it, on a second one.
+	 */
+	UWE5622_SERVICE_BLUETOOTH_DATA,
 	UWE5622_SERVICE_COUNT,
 };
 
@@ -27,10 +32,13 @@ enum uwe5622_bus_type {
  * struct uwe5622_client_ops - callbacks for one WCN logical channel pair
  * @rx: consume one complete payload; ownership of the skb is transferred
  * @reset: notify the client that firmware state was lost
+ * @tx_error: a queued transfer was never handed to the firmware; @tag is the
+ *	value passed to uwe5622_client_send_tagged()
  */
 struct uwe5622_client_ops {
 	void (*rx)(void *priv, struct sk_buff *skb);
 	void (*reset)(void *priv);
+	void (*tx_error)(void *priv, u8 tag);
 };
 
 struct uwe5622_client *
@@ -39,12 +47,20 @@ uwe5622_client_register(struct device *dev, enum uwe5622_service service,
 void uwe5622_client_unregister(struct uwe5622_client *client);
 /* The caller retains ownership of @skb, including after a successful send. */
 int uwe5622_client_send(struct uwe5622_client *client, struct sk_buff *skb);
+/*
+ * As uwe5622_client_send(), but @tag is handed back through
+ * uwe5622_client_ops::tx_error if the transfer fails on the bus after this
+ * call has already returned success.
+ */
+int uwe5622_client_send_tagged(struct uwe5622_client *client,
+			       struct sk_buff *skb, u8 tag);
 
 int uwe5622_power_get(struct uwe5622_client *client);
 void uwe5622_power_put(struct uwe5622_client *client);
 void uwe5622_set_wake(struct uwe5622_client *client, bool enabled);
 void uwe5622_recover(struct uwe5622_client *client);
 void uwe5622_bluetooth_enable(struct uwe5622_client *client, bool enabled);
+int uwe5622_bluetooth_ram(struct uwe5622_client *client, bool on);
 void uwe5622_bluetooth_wake(struct uwe5622_client *client, bool enabled);
 enum uwe5622_bus_type uwe5622_client_bus(struct uwe5622_client *client);
 

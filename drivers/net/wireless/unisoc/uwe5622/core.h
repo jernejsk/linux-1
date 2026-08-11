@@ -29,7 +29,9 @@ enum uwe5622_state {
 struct uwe5622_bus_ops {
 	int (*start)(struct uwe5622 *wcn, const struct firmware *fw);
 	void (*stop)(struct uwe5622 *wcn);
-	int (*tx)(struct uwe5622 *wcn, u8 channel, struct sk_buff *skb);
+	int (*tx)(struct uwe5622 *wcn, u8 channel, struct sk_buff *skb,
+		  u8 tag);
+	int (*bt_ram)(struct uwe5622 *wcn, bool on);
 	int (*suspend)(struct uwe5622 *wcn, bool wake);
 	int (*resume)(struct uwe5622 *wcn);
 };
@@ -84,6 +86,8 @@ void uwe5622_core_shutdown(struct uwe5622 *wcn);
 int uwe5622_core_suspend(struct uwe5622 *wcn);
 int uwe5622_core_resume(struct uwe5622 *wcn);
 void uwe5622_core_rx(struct uwe5622 *wcn, u8 channel, struct sk_buff *skb);
+void uwe5622_core_tx_error(struct uwe5622 *wcn, u8 tx_channel, u8 tag);
+void uwe5622_core_request_recovery(struct uwe5622 *wcn);
 int uwe5622_bind_verify(const u8 challenge[16], u8 response[16]);
 
 #endif
