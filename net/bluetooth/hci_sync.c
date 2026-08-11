@@ -4327,7 +4327,8 @@ static int hci_setup_link_policy_sync(struct hci_dev *hdev)
 	struct hci_cp_write_def_link_policy cp;
 	u16 link_policy = 0;
 
-	if (!(hdev->commands[5] & 0x10))
+	if (!(hdev->commands[5] & 0x10) ||
+	    hci_test_quirk(hdev, HCI_QUIRK_BROKEN_WRITE_DEF_LINK_POLICY))
 		return 0;
 
 	memset(&cp, 0, sizeof(cp));
