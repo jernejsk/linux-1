@@ -17,6 +17,7 @@
 
 enum uwe5622_wifi_cmd_id {
 	UWE5622_CMD_GET_INFO = 1,
+	UWE5622_CMD_SET_REGDOM = 2,
 	UWE5622_CMD_OPEN = 3,
 	UWE5622_CMD_CLOSE = 4,
 	UWE5622_CMD_POWER_SAVE = 5,
@@ -26,9 +27,13 @@ enum uwe5622_wifi_cmd_id {
 	UWE5622_CMD_SCAN = 11,
 	UWE5622_CMD_DISCONNECT = 13,
 	UWE5622_CMD_KEY = 14,
+	UWE5622_CMD_GET_STATION = 16,
 	UWE5622_CMD_START_AP = 17,
 	UWE5622_CMD_DEL_STATION = 18,
 	UWE5622_CMD_SET_IE = 25,
+	UWE5622_CMD_NOTIFY_IP_ACQUIRED = 26,
+	UWE5622_CMD_ADDBA_REQ = 40,
+	UWE5622_CMD_BA = 68,
 	UWE5622_CMD_TX_DATA = 72,
 	UWE5622_CMD_DOWNLOAD_INI = 76,
 	UWE5622_CMD_SET_WOWLAN = 83,
@@ -42,6 +47,7 @@ enum uwe5622_wifi_event_id {
 	UWE5622_EVENT_NEW_STATION = 0xa0,
 	UWE5622_EVENT_SDIO_FLOW_CONTROL = 0xb3,
 	UWE5622_EVENT_SDIO_SEQ_NUM = 0xe0,
+	UWE5622_EVENT_BA = 0xf3,
 	UWE5622_EVENT_STA_LUT = 0xf5,
 	UWE5622_EVENT_HANG = 0xf6,
 };
@@ -66,6 +72,8 @@ struct uwe5622_wifi;
 
 struct uwe5622_wifi_skb_cb {
 	u8 ctx_id;
+	/* Which block acknowledgement command a queued payload belongs to. */
+	u8 ba_cmd;
 };
 
 #define UWE5622_SKB_CB(_skb) ((struct uwe5622_wifi_skb_cb *)(_skb)->cb)
@@ -76,6 +84,8 @@ struct uwe5622_vif {
 	u8 ctx_id;
 	u8 mode;
 	u8 sta_lut;
+	/* Exclusive transmit credit pool, UWE5622_CREDIT_NO_POOL when unassigned. */
+	u8 credit_pool;
 	bool opened;
 	bool connected;
 };
@@ -85,6 +95,39 @@ struct uwe5622_peer {
 	u8 sta_lut;
 	u8 address[ETH_ALEN];
 	bool valid;
+	/* Transmit block acknowledgement sessions asked for, one bit per tid. */
+	unsigned long ba_tx;
+	unsigned int frames;
+	unsigned long ba_retry;
+};
+
+/* Fields of the receive descriptor the reorder window needs. */
+#define UWE5622_RX_STA_OFFSET		10
+#define UWE5622_RX_STA_LUT_VALID	BIT(10)
+#define UWE5622_RX_STA_LUT		GENMASK(15, 11)
+#define UWE5622_RX_INFO_OFFSET		12
+#define UWE5622_RX_INFO_QOS		BIT(13)
+#define UWE5622_RX_INFO_TID		GENMASK(19, 16)
+#define UWE5622_RX_INFO_SEQ		GENMASK(31, 20)
+
+#define UWE5622_REORDER_SESSIONS	8
+#define UWE5622_REORDER_WINDOW		64
+
+/*
+ * One receive block acknowledgement session. The peer may hand over frames out
+ * of order within its window, so they are held here until the gaps ahead of the
+ * head are filled, or until the head has waited long enough that releasing with
+ * a gap beats stalling the stream.
+ */
+struct uwe5622_reorder {
+	bool active;
+	u8 sta_lut;
+	u8 tid;
+	u16 head;
+	u16 size;
+	unsigned int stored;
+	unsigned long deadline;
+	struct sk_buff *frame[UWE5622_REORDER_WINDOW];
 };
 
 struct uwe5622_wifi {
@@ -116,13 +159,23 @@ struct uwe5622_wifi {
 	/* Protects the four firmware-owned SDIO transmit credit pools. */
 	spinlock_t credit_lock;
 	u32 tx_credits[4];
+	/* Owning context of each pool plus one, zero when the pool is shared. */
+	u8 credit_owner[4];
 	bool tx_with_credit;
 
 	struct sk_buff_head eapol_queue;
 	struct work_struct eapol_work;
+	struct sk_buff_head ba_queue;
+	struct work_struct ba_work;
+	/* Protects every reorder session and its stored frames. */
+	spinlock_t reorder_lock;
+	struct uwe5622_reorder reorder[UWE5622_REORDER_SESSIONS];
+	struct delayed_work reorder_work;
+	struct notifier_block inetaddr_notifier;
 	bool stopping;
 	u8 perm_addr[ETH_ALEN];
 	u32 fw_capa;
+	u32 fw_std;
 };
 
 static inline struct uwe5622_vif *uwe5622_vif_from_wdev(struct wireless_dev *wdev)
