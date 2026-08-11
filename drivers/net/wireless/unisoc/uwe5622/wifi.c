@@ -521,6 +521,34 @@ static const struct net_device_ops uwe5622_netdev_ops = {
  */
 #define UWE5622_SEQ_MASK	0xfff
 
+static struct {
+	unsigned int frames;
+	unsigned int stored;
+	unsigned int expired;
+	unsigned int ahead;
+	unsigned int dup;
+	unsigned int nosession;
+	unsigned int jumps;
+	u64 ns;
+} uwe5622_reorder_stats;
+
+static bool uwe5622_reorder_debug;
+module_param_named(reorder_debug, uwe5622_reorder_debug, bool, 0644);
+MODULE_PARM_DESC(reorder_debug, "report reorder window statistics");
+
+static bool uwe5622_tx_block_ack = true;
+module_param_named(tx_block_ack, uwe5622_tx_block_ack, bool, 0644);
+MODULE_PARM_DESC(tx_block_ack, "ask peers for a transmit block ack session");
+
+/*
+ * Off by default: the window as it stands mislabels a fifth of the stream as
+ * arriving from behind the head, and passing those on late costs a third of the
+ * throughput against delivering everything in arrival order.
+ */
+static bool uwe5622_reorder_enable;
+module_param_named(reorder, uwe5622_reorder_enable, bool, 0644);
+MODULE_PARM_DESC(reorder, "reorder received frames inside the block ack window");
+
 static unsigned int uwe5622_reorder_timeout_ms = 50;
 module_param_named(reorder_timeout_ms, uwe5622_reorder_timeout_ms, uint, 0644);
 MODULE_PARM_DESC(reorder_timeout_ms,
@@ -681,27 +709,60 @@ static bool uwe5622_reorder_rx(struct uwe5622_wifi *wifi, u8 sta_lut, u8 tid,
 	struct uwe5622_reorder *session;
 	bool pending;
 	u16 delta;
+	u64 start = ktime_get_ns();
+	unsigned int before;
 
+	if (!uwe5622_reorder_enable)
+		return false;
+
+	uwe5622_reorder_stats.frames++;
 	spin_lock_bh(&wifi->reorder_lock);
 	session = uwe5622_reorder_find(wifi, sta_lut, tid);
 	if (!session) {
 		spin_unlock_bh(&wifi->reorder_lock);
+		uwe5622_reorder_stats.nosession++;
+		uwe5622_reorder_stats.ns += ktime_get_ns() - start;
+		if (uwe5622_reorder_debug &&
+		    !(uwe5622_reorder_stats.frames % 16384))
+			dev_info(wifi->dev,
+				 "reorder frames=%u none=%u held=%u expired=%u ahead=%u dup=%u cost=%lluns\n",
+				 uwe5622_reorder_stats.frames,
+				 uwe5622_reorder_stats.nosession,
+				 uwe5622_reorder_stats.stored,
+				 uwe5622_reorder_stats.expired,
+				 uwe5622_reorder_stats.ahead,
+				 uwe5622_reorder_stats.dup,
+				 uwe5622_reorder_stats.ns /
+				 uwe5622_reorder_stats.frames);
 		return false;
 	}
 
 	delta = uwe5622_seq_delta(seq, session->head);
 	if (delta >= session->size) {
 		/*
-		 * Either the peer has moved well ahead, in which case the head
-		 * follows it and whatever is held goes up as it is, or this is
-		 * a frame from behind the head that has to be passed straight
-		 * on rather than dropped.
+		 * A frame from behind the head has to be passed straight on
+		 * rather than dropped. It looks like a retransmission of
+		 * something already delivered, but dropping these costs
+		 * everything: about a fifth of the stream arrives this way once
+		 * a session is running, the stack then has real holes to fill,
+		 * and the link falls to a quarter of a megabyte a second. So
+		 * the head is tracking the stream wrongly rather than the peer
+		 * repeating itself, and until that is understood the frame is
+		 * worth more delivered late than discarded.
 		 */
 		if (delta > UWE5622_SEQ_MASK / 2) {
 			spin_unlock_bh(&wifi->reorder_lock);
 			__skb_queue_tail(done, skb);
+			uwe5622_reorder_stats.ahead++;
 			return true;
 		}
+
+		/* The peer has moved well ahead: follow it. */
+		if (uwe5622_reorder_debug && uwe5622_reorder_stats.jumps++ < 30)
+			dev_info(wifi->dev,
+				 "jump: sta %u tid %u seq %u head %u delta %u stored %u\n",
+				 sta_lut, tid, seq, session->head, delta,
+				 session->stored);
 		uwe5622_reorder_flush(session, done);
 		session->head = (seq - session->size + 1) & UWE5622_SEQ_MASK;
 		delta = uwe5622_seq_delta(seq, session->head);
@@ -711,12 +772,14 @@ static bool uwe5622_reorder_rx(struct uwe5622_wifi *wifi, u8 sta_lut, u8 tid,
 		/* A retransmission of something already held. */
 		spin_unlock_bh(&wifi->reorder_lock);
 		dev_kfree_skb_any(skb);
+		uwe5622_reorder_stats.dup++;
 		return true;
 	}
 
 	session->frame[seq % session->size] = skb;
 	if (!session->stored++)
 		session->deadline = jiffies + UWE5622_REORDER_TIMEOUT;
+	before = session->stored;
 	uwe5622_reorder_release(session, done);
 	pending = session->stored;
 	spin_unlock_bh(&wifi->reorder_lock);
@@ -726,6 +789,19 @@ static bool uwe5622_reorder_rx(struct uwe5622_wifi *wifi, u8 sta_lut, u8 tid,
 	 * The timer only has to be armed while something is held, and rearming
 	 * it for every frame costs more than the wait it guards.
 	 */
+	if (pending)
+		uwe5622_reorder_stats.stored++;
+	uwe5622_reorder_stats.ns += ktime_get_ns() - start;
+	if (uwe5622_reorder_debug && !(uwe5622_reorder_stats.frames % 16384))
+		dev_info(wifi->dev,
+			 "reorder frames=%u none=%u held=%u expired=%u ahead=%u dup=%u depth=%u cost=%lluns\n",
+			 uwe5622_reorder_stats.frames,
+			 uwe5622_reorder_stats.nosession,
+			 uwe5622_reorder_stats.stored,
+			 uwe5622_reorder_stats.expired, uwe5622_reorder_stats.ahead,
+			 uwe5622_reorder_stats.dup, before,
+			 uwe5622_reorder_stats.ns / uwe5622_reorder_stats.frames);
+
 	if (pending && !delayed_work_pending(&wifi->reorder_work))
 		schedule_delayed_work(&wifi->reorder_work,
 				      UWE5622_REORDER_TIMEOUT);
@@ -753,6 +829,7 @@ static void uwe5622_reorder_expire(struct work_struct *work)
 		if (!session->active || !session->stored)
 			continue;
 		if (time_after(jiffies, session->deadline)) {
+			uwe5622_reorder_stats.expired++;
 			uwe5622_reorder_flush(session, &done);
 		} else {
 			pending = true;
@@ -880,7 +957,7 @@ static void uwe5622_request_tx_ba(struct uwe5622_wifi *wifi, u8 ctx_id,
 	struct uwe5622_peer *peer;
 	bool ask = false;
 
-	if (sta_lut >= ARRAY_SIZE(wifi->peers))
+	if (sta_lut >= ARRAY_SIZE(wifi->peers) || !uwe5622_tx_block_ack)
 		return;
 
 	spin_lock_bh(&wifi->vif_lock);
