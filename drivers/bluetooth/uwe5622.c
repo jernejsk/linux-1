@@ -180,7 +180,12 @@ static int uwe5622_bt_open(struct hci_dev *hdev)
 		return ret;
 	uwe5622_bluetooth_enable(bt->client, true);
 	uwe5622_bluetooth_wake(bt->client, true);
-	msleep(20);
+	ret = uwe5622_bluetooth_ram(bt->client, true);
+	if (ret && ret != -ENODEV)
+		bt_dev_warn(hdev, "failed to power the Bluetooth memory: %d",
+			    ret);
+	/* The firmware's Bluetooth stack needs time before it answers HCI. */
+	msleep(100);
 	spin_lock_bh(&bt->rx_lock);
 	bt->opened = true;
 	spin_unlock_bh(&bt->rx_lock);
