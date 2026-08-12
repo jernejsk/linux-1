@@ -631,12 +631,34 @@ static void uwe5622_reorder_flush(struct uwe5622_reorder *session,
 	session->head = (session->head + next) & UWE5622_SEQ_MASK;
 }
 
+/*
+ * Hand a batch to the stack in one call rather than one frame at a time. At the
+ * rates the bus now allows this is thousands of calls a second, and the list form
+ * lets the stack amortise its own per-batch work; it wants softirqs off, which the
+ * receive thread this runs on does not otherwise provide.
+ */
+static void uwe5622_deliver(struct sk_buff_head *done)
+{
+	struct sk_buff *skb;
+	struct list_head list;
+
+	if (skb_queue_empty(done))
+		return;
+
+	INIT_LIST_HEAD(&list);
+	while ((skb = __skb_dequeue(done)))
+		list_add_tail(&skb->list, &list);
+
+	local_bh_disable();
+	netif_receive_skb_list(&list);
+	local_bh_enable();
+}
+
 static void uwe5622_reorder_open(struct uwe5622_wifi *wifi, u8 sta_lut, u8 tid,
 				 u16 win_start, u16 win_size)
 {
 	struct sk_buff_head done;
 	struct uwe5622_reorder *session;
-	struct sk_buff *skb;
 	int i;
 
 	__skb_queue_head_init(&done);
@@ -673,8 +695,7 @@ static void uwe5622_reorder_open(struct uwe5622_wifi *wifi, u8 sta_lut, u8 tid,
 	}
 	spin_unlock_bh(&wifi->reorder_lock);
 
-	while ((skb = __skb_dequeue(&done)))
-		netif_rx(skb);
+	uwe5622_deliver(&done);
 
 	if (!session)
 		dev_warn(wifi->dev, "no room for another reorder session\n");
@@ -684,7 +705,6 @@ static void uwe5622_reorder_close(struct uwe5622_wifi *wifi, u8 sta_lut,
 				  int tid)
 {
 	struct sk_buff_head done;
-	struct sk_buff *skb;
 	int i;
 
 	__skb_queue_head_init(&done);
@@ -699,14 +719,12 @@ static void uwe5622_reorder_close(struct uwe5622_wifi *wifi, u8 sta_lut,
 	}
 	spin_unlock_bh(&wifi->reorder_lock);
 
-	while ((skb = __skb_dequeue(&done)))
-		netif_rx(skb);
+	uwe5622_deliver(&done);
 }
 
 static void uwe5622_reorder_close_all(struct uwe5622_wifi *wifi)
 {
 	struct sk_buff_head done;
-	struct sk_buff *skb;
 	int i;
 
 	__skb_queue_head_init(&done);
@@ -719,8 +737,7 @@ static void uwe5622_reorder_close_all(struct uwe5622_wifi *wifi)
 	}
 	spin_unlock_bh(&wifi->reorder_lock);
 
-	while ((skb = __skb_dequeue(&done)))
-		netif_rx(skb);
+	uwe5622_deliver(&done);
 }
 
 /*
@@ -842,7 +859,6 @@ static void uwe5622_reorder_expire(struct work_struct *work)
 	struct uwe5622_wifi *wifi = container_of(work, struct uwe5622_wifi,
 						 reorder_work.work);
 	struct sk_buff_head done;
-	struct sk_buff *skb;
 	bool pending = false;
 	int i;
 
@@ -862,8 +878,7 @@ static void uwe5622_reorder_expire(struct work_struct *work)
 	}
 	spin_unlock_bh(&wifi->reorder_lock);
 
-	while ((skb = __skb_dequeue(&done)))
-		netif_rx(skb);
+	uwe5622_deliver(&done);
 
 	if (pending)
 		schedule_delayed_work(&wifi->reorder_work,
@@ -2243,8 +2258,7 @@ static void uwe5622_rx_one_frame(struct uwe5622_wifi *wifi,
 	    !uwe5622_reorder_rx(wifi, sta_lut, tid, seq, skb, &done))
 		__skb_queue_tail(&done, skb);
 
-	while ((skb = __skb_dequeue(&done)))
-		netif_rx(skb);
+	uwe5622_deliver(&done);
 out:
 	dev_put(ndev);
 }
