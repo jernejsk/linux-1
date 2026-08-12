@@ -44,6 +44,13 @@ enum uwe5622_wifi_event_id {
 	UWE5622_EVENT_DISCONNECT = 0x81,
 	UWE5622_EVENT_SCAN_DONE = 0x82,
 	UWE5622_EVENT_MGMT_FRAME = 0x83,
+	/*
+	 * The firmware can report whether Bluetooth is active so the host can
+	 * be gentler with the bus. No code in the W21.05.3 image reaches the
+	 * function that builds it, so treat its arrival as evidence rather than
+	 * something to depend on.
+	 */
+	UWE5622_EVENT_COEX_BT_ON_OFF = 0x90,
 	UWE5622_EVENT_NEW_STATION = 0xa0,
 	UWE5622_EVENT_SDIO_FLOW_CONTROL = 0xb3,
 	UWE5622_EVENT_SDIO_SEQ_NUM = 0xe0,

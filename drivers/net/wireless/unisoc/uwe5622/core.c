@@ -5,6 +5,8 @@
 #include <linux/err.h>
 #include <linux/firmware.h>
 #include <linux/module.h>
+#include <crypto/sha2.h>
+#include <linux/unaligned.h>
 #include <linux/of.h>
 #include <linux/slab.h>
 
@@ -361,6 +363,89 @@ enum uwe5622_bus_type uwe5622_client_bus(struct uwe5622_client *client)
 }
 EXPORT_SYMBOL_GPL(uwe5622_client_bus);
 
+/*
+ * Which image the controller is actually running, recorded next to whatever is
+ * being diagnosed: a stale firmware invalidates every conclusion drawn from a
+ * capture, and the file name alone does not say what is in it.
+ */
+static void uwe5622_report_firmware(struct uwe5622 *wcn,
+				    const struct firmware *fw)
+{
+	u8 digest[SHA256_DIGEST_SIZE];
+
+	sha256(fw->data, fw->size, digest);
+	dev_info(wcn->dev, "firmware %s, %zu bytes, sha256 %*phN\n",
+		 UWE5622_FIRMWARE_NAME, fw->size, 8, digest);
+}
+
+static bool uwe5622_trace;
+module_param_named(wcn_trace, uwe5622_trace, bool, 0644);
+MODULE_PARM_DESC(wcn_trace,
+		 "log the controller's debug trace ring, coexistence among it");
+
+/*
+ * Tags seen in the trace ring that describe how the controller shares one
+ * antenna between Wi-Fi and Bluetooth. They are the difference between the
+ * arbiter never running and the arbiter running but granting nothing useful,
+ * which is not a distinction the host can otherwise make.
+ */
+static const char *uwe5622_trace_tag(u16 tag)
+{
+	switch (tag) {
+	case 0xd410:
+		return "channel overlap";
+	case 0xd452:
+	case 0xd46c:
+		return "schedule timing";
+	case 0xd481:
+	case 0xd482:
+	case 0xd483:
+		return "RF profile change";
+	case 0xd494:
+		return "RF owner";
+	default:
+		return NULL;
+	}
+}
+
+/*
+ * The ring is a diagnostic path with no client of its own, so the records are
+ * reported here rather than dropped as an unclaimed channel. They are kept raw:
+ * the layout beyond the leading tag is not known well enough to parse, and a
+ * capture is worth more than a guess at its meaning.
+ */
+static void uwe5622_core_trace_rx(struct uwe5622 *wcn, struct sk_buff *skb)
+{
+	const char *what = NULL;
+	u16 tag = 0;
+	size_t i;
+
+	if (!uwe5622_trace)
+		return;
+
+	/*
+	 * A record opens with a sync pattern rather than its subject, so the
+	 * tags that say what the coexistence engine did appear somewhere inside
+	 * it. Scan for one rather than guessing an offset, and keep the record
+	 * raw either way: the layout is not known well enough to parse, and a
+	 * capture is worth more than a wrong reading of it.
+	 */
+	for (i = 0; what == NULL && i + sizeof(__le16) <= skb->len; i += 2) {
+		tag = get_unaligned_le16(skb->data + i);
+		what = uwe5622_trace_tag(tag);
+	}
+
+	wcn->trace_records++;
+	if (what)
+		dev_info(wcn->dev, "coexistence trace %#06x (%s): %*ph\n",
+			 tag, what, (int)min(skb->len, 48u), skb->data);
+	else
+		dev_info_ratelimited(wcn->dev,
+				     "controller trace, record %u: %*ph\n",
+				     wcn->trace_records,
+				     (int)min(skb->len, 48u), skb->data);
+}
+
 void uwe5622_core_rx(struct uwe5622 *wcn, u8 channel, struct sk_buff *skb)
 {
 	struct uwe5622_client *client;
@@ -376,6 +461,9 @@ void uwe5622_core_rx(struct uwe5622 *wcn, u8 channel, struct sk_buff *skb)
 	client = srcu_dereference(wcn->channels[channel], &wcn->channel_srcu);
 	if (client) {
 		client->ops->rx(client->priv, skb);
+	} else if (channel == wcn->services[UWE5622_SERVICE_WCN_TRACE].rx) {
+		uwe5622_core_trace_rx(wcn, skb);
+		kfree_skb(skb);
 	} else {
 		dev_dbg_ratelimited(wcn->dev,
 				    "dropping %u bytes on unclaimed channel %u\n",
@@ -402,6 +490,7 @@ int uwe5622_core_probe(struct uwe5622 *wcn)
 	if (ret)
 		goto err_firmware;
 
+	uwe5622_report_firmware(wcn, fw);
 	ret = wcn->bus_ops->start(wcn, fw);
 	release_firmware(fw);
 	if (ret)

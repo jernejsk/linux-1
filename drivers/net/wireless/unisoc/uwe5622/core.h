@@ -75,6 +75,7 @@ struct uwe5622 {
 	struct mutex channel_mutex;
 	struct srcu_struct channel_srcu;
 	struct uwe5622_client __rcu *channels[UWE5622_MAX_CHANNELS];
+	unsigned int trace_records;
 
 	struct uwe5622_auxdev *wifi_auxdev;
 	struct uwe5622_auxdev *bt_auxdev;

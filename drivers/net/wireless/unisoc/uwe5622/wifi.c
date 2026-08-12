@@ -28,6 +28,14 @@
 #define UWE5622_WIFI_CONFIG_SEC1_LEN 328
 #define UWE5622_WIFI_CONFIG_SEC2_LEN 1464
 #define UWE5622_WIFI_CONFIG_SEC3_MAX 1500
+/*
+ * The coexistence engine's configuration is the last 84 bytes of section two:
+ * twenty-one words, of which the antenna and isolation settings are the two the
+ * firmware is known to act on.
+ */
+#define UWE5622_WIFI_COEX_OFFSET 1380
+#define UWE5622_WIFI_COEX_ANT_CFG0 36
+#define UWE5622_WIFI_COEX_ISOLATION_CFG0 44
 #define UWE5622_WIFI_CONFIG_MAGIC_OFFSET 251
 
 #define UWE5622_GET_INFO_CAP_5G	BIT(0)
@@ -2117,6 +2125,10 @@ void uwe5622_wifi_event(struct uwe5622_wifi *wifi,
 	case UWE5622_EVENT_MGMT_FRAME:
 		uwe5622_event_scan_frame(wifi, data, len);
 		break;
+	case UWE5622_EVENT_COEX_BT_ON_OFF:
+		dev_info(wifi->dev, "firmware reports Bluetooth %s\n",
+			 len && data[0] ? "active" : "idle");
+		break;
 	case UWE5622_EVENT_NEW_STATION:
 		uwe5622_event_new_station(wifi, ctx, data, len);
 		break;
@@ -2361,7 +2373,7 @@ static int uwe5622_wifi_init_firmware(struct uwe5622_wifi *wifi)
 		0xf5, 0xf6,
 	};
 	const struct firmware *config;
-	const u8 *section;
+	const u8 *section, *coex;
 	u16 section_len[3];
 	u8 *download;
 	int i, ret;
@@ -2403,6 +2415,20 @@ static int uwe5622_wifi_init_firmware(struct uwe5622_wifi *wifi)
 			goto out_config;
 		section += section_len[i];
 	}
+
+	/*
+	 * Report what the controller accepted. A stale image or a rejected
+	 * upload is otherwise indistinguishable from an arbiter that ran and
+	 * granted no airtime, and that distinction is the whole question when
+	 * Bluetooth and 2.4 GHz Wi-Fi will not share the antenna.
+	 */
+	coex = config->data + 12 + section_len[0] + UWE5622_WIFI_COEX_OFFSET;
+	dev_info(wifi->dev,
+		 "configuration v%u.%u accepted, antenna %#x isolation %#x\n",
+		 get_unaligned_le16(config->data + 12),
+		 get_unaligned_le16(config->data + 14),
+		 get_unaligned_le32(coex + UWE5622_WIFI_COEX_ANT_CFG0),
+		 get_unaligned_le32(coex + UWE5622_WIFI_COEX_ISOLATION_CFG0));
 	ret = 0;
 out_config:
 	release_firmware(config);
