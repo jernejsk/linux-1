@@ -107,18 +107,24 @@ MODULE_PARM_DESC(rx_aggregation,
 		 "use the firmware's scatter-gather receive mode");
 
 /*
- * Off by default. Handing frames to a separate thread was worth a fifth of the
- * throughput while the bus ran at 50 MHz and every microsecond away from reading
- * cost data; with the bus at 150 MHz it only costs the hop. Delivering from the
- * read loop uses 2.0 percent of a core per MB/s against the thread's 2.7 at the
- * same rate, which is what the vendor driver costs, while still carrying half
- * again as much as the vendor can. The thread remains for anyone whose bus is the
- * limit again, where it buys about a fifth more at a third more CPU.
+ * How received frames reach the stack. Delivering from the read loop costs the
+ * least per byte, 2.0 percent of a core per MB/s, which is what the vendor driver
+ * costs; handing them to a thread instead reaches about a fifth more throughput
+ * but costs a third more, because the loop stops waiting on the stack and starts
+ * waiting on a wakeup. Neither is right all the time: the hop is worth paying only
+ * while the controller still has a backlog, which is exactly when the loop needs
+ * to get back to reading. So by default pay it then and not otherwise.
  */
-static bool uwe5622_rx_thread_enable;
-module_param_named(rx_thread, uwe5622_rx_thread_enable, bool, 0644);
+enum {
+	UWE5622_RX_DELIVER_INLINE,
+	UWE5622_RX_DELIVER_BEHIND,
+	UWE5622_RX_DELIVER_THREAD,
+};
+
+static unsigned int uwe5622_rx_thread_enable = UWE5622_RX_DELIVER_BEHIND;
+module_param_named(rx_thread, uwe5622_rx_thread_enable, uint, 0644);
 MODULE_PARM_DESC(rx_thread,
-		 "pass received frames up from a separate thread");
+		 "deliver received frames from the read loop (0), from a thread while the controller is behind (1), or always from a thread (2)");
 
 static bool uwe5622_rx_poll;
 module_param_named(rx_poll, uwe5622_rx_poll, bool, 0644);
@@ -624,7 +630,7 @@ static int uwe5622_sdio_rx_thread(void *data)
  * a queue nobody is draining, so the loop should get back to reading at once.
  */
 static void uwe5622_sdio_deliver(struct uwe5622_sdio *sdio,
-				 struct sk_buff_head *queue)
+				 struct sk_buff_head *queue, bool behind)
 {
 	struct sk_buff *skb;
 
@@ -635,8 +641,9 @@ static void uwe5622_sdio_deliver(struct uwe5622_sdio *sdio,
 	if (skb_queue_len(&sdio->rx_queue) > sdio->rx_qmax)
 		sdio->rx_qmax = skb_queue_len(&sdio->rx_queue);
 
-	if (uwe5622_rx_thread_enable && sdio->rx_thread &&
-	    sdio->rx_thread != current &&
+	if (sdio->rx_thread && sdio->rx_thread != current &&
+	    (uwe5622_rx_thread_enable == UWE5622_RX_DELIVER_THREAD ||
+	     (uwe5622_rx_thread_enable == UWE5622_RX_DELIVER_BEHIND && behind)) &&
 	    skb_queue_len(&sdio->rx_queue) < UWE5622_RX_QUEUE_LIMIT) {
 		spin_lock_bh(&sdio->rx_queue.lock);
 		skb_queue_splice_tail_init(queue, &sdio->rx_queue);
@@ -727,7 +734,7 @@ static void uwe5622_sdio_drain_rx_aggregated(struct uwe5622_sdio *sdio)
 		sdio->rx_pac_num = clamp_t(unsigned int, pending, 1,
 					   UWE5622_RX_PAC_MAX);
 
-		uwe5622_sdio_deliver(sdio, &queue);
+		uwe5622_sdio_deliver(sdio, &queue, pending);
 
 		cond_resched();
 		/*
@@ -785,7 +792,7 @@ static void uwe5622_sdio_drain_rx(struct uwe5622_sdio *sdio)
 		uwe5622_sdio_queue_rx(sdio, read_len, valid_len, &queue);
 		read_len = uwe5622_sdio_rx_size(pending);
 
-		uwe5622_sdio_deliver(sdio, &queue);
+		uwe5622_sdio_deliver(sdio, &queue, pending);
 
 		cond_resched();
 	} while (pending);
