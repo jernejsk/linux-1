@@ -172,6 +172,8 @@
 	vqmmc-supply = <&reg_bldo3>;
 	mmc-pwrseq = <&wifi_pwrseq>;
 	bus-width = <4>;
+	sd-uhs-sdr50;
+	sd-uhs-sdr104;
 	keep-power-in-suspend;
 	non-removable;
 	status = "okay";
