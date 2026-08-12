@@ -77,6 +77,17 @@ static void uwe5622_bt_rx(void *priv, struct sk_buff *wire)
 		if (!bt->rx_skb) {
 			type = *data++;
 			len--;
+			/*
+			 * The controller pads what it sends, and the padding
+			 * arrives after a complete frame. Zero is not a packet
+			 * type, so between frames it is padding rather than a
+			 * receive error, and counting it as one only makes the
+			 * controller look unhealthy.
+			 */
+			if (!type) {
+				spin_unlock(&bt->rx_lock);
+				continue;
+			}
 			bt->rx_header_len = uwe5622_bt_header_len(type);
 			if (!bt->rx_header_len) {
 				bt->hdev->stat.err_rx++;
@@ -293,6 +304,14 @@ static int uwe5622_bt_resume(struct device *dev)
 	bt->suspended = false;
 	ret = uwe5622_bt_sleep_mode(bt, false, false);
 	if (ret) {
+		/*
+		 * The controller never acknowledged being woken, so put the
+		 * transport back where it was instead of accepting packets it
+		 * cannot answer: stay suspended, drop the wake line, and leave
+		 * HCI stopped for the core to resume later.
+		 */
+		bt->suspended = true;
+		uwe5622_bluetooth_wake(bt->client, false);
 		uwe5622_set_wake(bt->client, false);
 		return ret;
 	}

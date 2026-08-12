@@ -14,11 +14,6 @@ enum uwe5622_service {
 	UWE5622_SERVICE_WIFI_DATA,
 	UWE5622_SERVICE_WIFI_LOG,
 	UWE5622_SERVICE_BLUETOOTH,
-	/*
-	 * The controller answers commands on the Bluetooth channel but delivers
-	 * received traffic, advertising reports among it, on a second one.
-	 */
-	UWE5622_SERVICE_BLUETOOTH_DATA,
 	UWE5622_SERVICE_COUNT,
 };
 

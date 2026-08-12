@@ -181,6 +181,15 @@ static const struct ieee80211_supported_band uwe5622_band_5ghz = {
  * for, so advertising the cipher only makes userspace negotiate protected
  * management frames and then fail to install the key.
  */
+static const u32 uwe5622_akm_suites[] = {
+	WLAN_AKM_SUITE_8021X,
+	WLAN_AKM_SUITE_PSK,
+	WLAN_AKM_SUITE_FT_8021X,
+	WLAN_AKM_SUITE_FT_PSK,
+	WLAN_AKM_SUITE_8021X_SHA256,
+	WLAN_AKM_SUITE_PSK_SHA256,
+};
+
 static const u32 uwe5622_cipher_suites[] = {
 	WLAN_CIPHER_SUITE_WEP40,
 	WLAN_CIPHER_SUITE_WEP104,
@@ -600,18 +609,18 @@ static void uwe5622_reorder_flush(struct uwe5622_reorder *session,
 				  struct sk_buff_head *done)
 {
 	struct sk_buff *skb;
-	u16 i;
+	u16 i, next;
 
-	for (i = 0; i < session->size && session->stored; i++) {
+	for (i = 0, next = 0; i < session->size; i++) {
 		skb = session->frame[(session->head + i) % session->size];
 		if (!skb)
 			continue;
 		session->frame[(session->head + i) % session->size] = NULL;
 		session->stored--;
 		__skb_queue_tail(done, skb);
-		session->head = (session->head + i + 1) & UWE5622_SEQ_MASK;
-		i = 0;
+		next = i + 1;
 	}
+	session->head = (session->head + next) & UWE5622_SEQ_MASK;
 }
 
 static void uwe5622_reorder_open(struct uwe5622_wifi *wifi, u8 sta_lut, u8 tid,
@@ -639,6 +648,14 @@ static void uwe5622_reorder_open(struct uwe5622_wifi *wifi, u8 sta_lut, u8 tid,
 		}
 	}
 	if (session) {
+		/*
+		 * A session that was closed with frames still held left them in
+		 * its slots, and the window is about to describe a different
+		 * range, so empty it rather than only resetting the count: a
+		 * frame left behind is leaked and makes a later one at the same
+		 * index look like a duplicate.
+		 */
+		uwe5622_reorder_flush(session, &done);
 		session->active = true;
 		session->sta_lut = sta_lut;
 		session->tid = tid;
@@ -1226,6 +1243,76 @@ static void uwe5622_vif_address(struct uwe5622_wifi *wifi,
 	}
 }
 
+static struct net_device *uwe5622_first_ndev(struct uwe5622_wifi *wifi)
+{
+	struct net_device *ndev = NULL;
+	int i;
+
+	spin_lock_bh(&wifi->vif_lock);
+	for (i = 0; i < UWE5622_WIFI_MAX_CTX; i++) {
+		if (!wifi->vifs[i])
+			continue;
+		ndev = wifi->vifs[i];
+		dev_hold(ndev);
+		break;
+	}
+	spin_unlock_bh(&wifi->vif_lock);
+	return ndev;
+}
+
+static void uwe5622_set_vif_type(struct uwe5622_vif *vif,
+				 enum nl80211_iftype type, u8 address[ETH_ALEN])
+{
+	vif->mode = type == NL80211_IFTYPE_AP ? UWE5622_MODE_AP :
+						UWE5622_MODE_STATION;
+	vif->sta_lut = type == NL80211_IFTYPE_AP ? 4 : 0;
+	uwe5622_vif_address(vif->wifi, type, address);
+}
+
+static void uwe5622_forget_vif(struct uwe5622_vif *vif)
+{
+	struct uwe5622_wifi *wifi = vif->wifi;
+
+	spin_lock_bh(&wifi->vif_lock);
+	if (wifi->vifs[vif->ctx_id] == vif->wdev.netdev)
+		wifi->vifs[vif->ctx_id] = NULL;
+	spin_unlock_bh(&wifi->vif_lock);
+}
+
+static int uwe5622_remember_vif(struct uwe5622_vif *vif)
+{
+	struct uwe5622_wifi *wifi = vif->wifi;
+
+	spin_lock_bh(&wifi->vif_lock);
+	if (wifi->vifs[vif->ctx_id]) {
+		spin_unlock_bh(&wifi->vif_lock);
+		uwe5622_close_firmware(vif);
+		return -EBUSY;
+	}
+	wifi->vifs[vif->ctx_id] = vif->wdev.netdev;
+	spin_unlock_bh(&wifi->vif_lock);
+
+	return 0;
+}
+
+/*
+ * Replace a context with a fresh one describing the same interface. The
+ * firmware picks the context number, so the mapping has to be dropped before
+ * the old context is closed and taken again once the new one is open.
+ */
+static int uwe5622_reopen_firmware(struct uwe5622_vif *vif)
+{
+	int ret;
+
+	uwe5622_forget_vif(vif);
+	uwe5622_close_firmware(vif);
+	ret = uwe5622_open_firmware(vif);
+	if (ret)
+		return ret;
+
+	return uwe5622_remember_vif(vif);
+}
+
 static struct wireless_dev *
 uwe5622_add_virtual_intf(struct wiphy *wiphy, const char *name,
 			unsigned char name_assign_type,
@@ -1240,14 +1327,24 @@ uwe5622_add_virtual_intf(struct wiphy *wiphy, const char *name,
 	if (type != NL80211_IFTYPE_STATION && type != NL80211_IFTYPE_AP)
 		return ERR_PTR(-EOPNOTSUPP);
 
+	/*
+	 * Only one interface at a time. The wiphy describes no interface
+	 * combinations, both types are derived from the one permanent address,
+	 * and the system sleep callbacks only ever reach the first interface, so
+	 * a second one would open a context sharing an address with the first
+	 * and then be left behind on suspend.
+	 */
+	ndev = uwe5622_first_ndev(wifi);
+	if (ndev) {
+		dev_put(ndev);
+		return ERR_PTR(-EOPNOTSUPP);
+	}
+
 	ndev = alloc_etherdev(sizeof(*vif));
 	if (!ndev)
 		return ERR_PTR(-ENOMEM);
 	vif = netdev_priv(ndev);
 	vif->wifi = wifi;
-	vif->mode = type == NL80211_IFTYPE_AP ? UWE5622_MODE_AP :
-						 UWE5622_MODE_STATION;
-	vif->sta_lut = type == NL80211_IFTYPE_AP ? 4 : 0;
 	vif->credit_pool = UWE5622_CREDIT_NO_POOL;
 	vif->wdev.wiphy = wiphy;
 	vif->wdev.iftype = type;
@@ -1256,7 +1353,7 @@ uwe5622_add_virtual_intf(struct wiphy *wiphy, const char *name,
 	ndev->netdev_ops = &uwe5622_netdev_ops;
 	ndev->needs_free_netdev = true;
 	SET_NETDEV_DEV(ndev, wiphy_dev(wiphy));
-	uwe5622_vif_address(wifi, type, address);
+	uwe5622_set_vif_type(vif, type, address);
 	eth_hw_addr_set(ndev, address);
 	strscpy(ndev->name, name, IFNAMSIZ);
 	ndev->name_assign_type = name_assign_type;
@@ -1268,18 +1365,13 @@ uwe5622_add_virtual_intf(struct wiphy *wiphy, const char *name,
 	if (ret)
 		goto err_close;
 
-	spin_lock_bh(&wifi->vif_lock);
-	if (wifi->vifs[vif->ctx_id]) {
-		spin_unlock_bh(&wifi->vif_lock);
-		ret = -EBUSY;
+	ret = uwe5622_remember_vif(vif);
+	if (ret)
 		goto err_unregister;
-	}
-	wifi->vifs[vif->ctx_id] = ndev;
-	spin_unlock_bh(&wifi->vif_lock);
+
 	return &vif->wdev;
 
 err_unregister:
-	uwe5622_close_firmware(vif);
 	cfg80211_unregister_netdevice(ndev);
 	return ERR_PTR(ret);
 err_close:
@@ -1332,6 +1424,7 @@ static int uwe5622_change_virtual_intf(struct wiphy *wiphy,
 {
 	struct uwe5622_wifi *wifi = wiphy_priv(wiphy);
 	struct uwe5622_vif *vif = netdev_priv(ndev);
+	enum nl80211_iftype old_type;
 	u8 address[ETH_ALEN];
 	int ret;
 
@@ -1342,30 +1435,29 @@ static int uwe5622_change_virtual_intf(struct wiphy *wiphy,
 	if (netif_running(ndev))
 		return -EBUSY;
 
-	spin_lock_bh(&wifi->vif_lock);
-	if (wifi->vifs[vif->ctx_id] == ndev)
-		wifi->vifs[vif->ctx_id] = NULL;
-	spin_unlock_bh(&wifi->vif_lock);
-	uwe5622_close_firmware(vif);
-
-	vif->mode = type == NL80211_IFTYPE_AP ? UWE5622_MODE_AP :
-						 UWE5622_MODE_STATION;
-	vif->sta_lut = type == NL80211_IFTYPE_AP ? 4 : 0;
-	uwe5622_vif_address(wifi, type, address);
+	old_type = ndev->ieee80211_ptr->iftype;
+	uwe5622_set_vif_type(vif, type, address);
 	eth_hw_addr_set(ndev, address);
 
-	ret = uwe5622_open_firmware(vif);
-	if (ret)
+	ret = uwe5622_reopen_firmware(vif);
+	if (ret) {
+		/*
+		 * cfg80211 still describes the interface the way it was, so put
+		 * everything back rather than leaving a netdev whose mode and
+		 * address describe a type it has no context for. A retry would
+		 * otherwise return success at the same-type check above with the
+		 * firmware holding nothing at all.
+		 */
+		uwe5622_set_vif_type(vif, old_type, address);
+		eth_hw_addr_set(ndev, address);
+		if (uwe5622_reopen_firmware(vif))
+			dev_err(wifi->dev,
+				"failed to restore the %s context: %d\n",
+				old_type == NL80211_IFTYPE_AP ? "access point" :
+								"station",
+				ret);
 		return ret;
-
-	spin_lock_bh(&wifi->vif_lock);
-	if (wifi->vifs[vif->ctx_id]) {
-		spin_unlock_bh(&wifi->vif_lock);
-		uwe5622_close_firmware(vif);
-		return -EBUSY;
 	}
-	wifi->vifs[vif->ctx_id] = ndev;
-	spin_unlock_bh(&wifi->vif_lock);
 	ndev->ieee80211_ptr->iftype = type;
 
 	return 0;
@@ -1469,9 +1561,18 @@ static int uwe5622_connect(struct wiphy *wiphy, struct net_device *ndev,
 			return -EOPNOTSUPP;
 		connect.group_cipher = cipher | UWE5622_VALID_CONFIG;
 	}
-	if (sme->crypto.n_akm_suites)
-		connect.key_mgmt = uwe5622_akm(sme->crypto.akm_suites[0]) |
-					 UWE5622_VALID_CONFIG;
+	if (sme->crypto.n_akm_suites) {
+		u8 akm = uwe5622_akm(sme->crypto.akm_suites[0]);
+
+		/*
+		 * The firmware takes the valid bit as permission to use the
+		 * number beside it, so an unsupported suite must be refused
+		 * here rather than sent as a valid zero.
+		 */
+		if (!akm)
+			return -EOPNOTSUPP;
+		connect.key_mgmt = akm | UWE5622_VALID_CONFIG;
+	}
 	connect.mfp = sme->mfp;
 	connect.ssid_len = sme->ssid_len;
 	memcpy(connect.ssid, sme->ssid, sme->ssid_len);
@@ -1643,10 +1744,26 @@ static int uwe5622_change_beacon(struct wiphy *wiphy, struct net_device *ndev,
 static int uwe5622_stop_ap(struct wiphy *wiphy, struct net_device *ndev,
 			   unsigned int link_id)
 {
+	struct uwe5622_vif *vif = netdev_priv(ndev);
+	int ret;
+
 	if (link_id)
 		return -EINVAL;
 	netif_carrier_off(ndev);
-	return 0;
+
+	/*
+	 * There is no command that stops an access point: starting one brings
+	 * its context up and only closing the context takes it down again.
+	 * Returning here would leave the firmware beaconing after cfg80211 has
+	 * told everyone the access point stopped, and the next start would find
+	 * the context already running, so trade it for a fresh one.
+	 */
+	ret = uwe5622_reopen_firmware(vif);
+	if (ret)
+		dev_err(vif->wifi->dev,
+			"failed to close the access point context: %d\n", ret);
+
+	return ret;
 }
 
 static int uwe5622_del_station(struct wiphy *wiphy, struct wireless_dev *wdev,
@@ -1663,23 +1780,6 @@ static int uwe5622_del_station(struct wiphy *wiphy, struct wireless_dev *wdev,
 	return uwe5622_wifi_cmd(vif->wifi, vif->ctx_id,
 				UWE5622_CMD_DEL_STATION, &data, sizeof(data),
 				NULL, NULL, NULL);
-}
-
-static struct net_device *uwe5622_first_ndev(struct uwe5622_wifi *wifi)
-{
-	struct net_device *ndev = NULL;
-	int i;
-
-	spin_lock_bh(&wifi->vif_lock);
-	for (i = 0; i < UWE5622_WIFI_MAX_CTX; i++) {
-		if (!wifi->vifs[i])
-			continue;
-		ndev = wifi->vifs[i];
-		dev_hold(ndev);
-		break;
-	}
-	spin_unlock_bh(&wifi->vif_lock);
-	return ndev;
 }
 
 /*
@@ -2398,6 +2498,8 @@ static int uwe5622_wifi_probe(struct auxiliary_device *adev,
 	wiphy->signal_type = CFG80211_SIGNAL_TYPE_MBM;
 	wiphy->max_scan_ssids = 9;
 	wiphy->max_scan_ie_len = 255;
+	wiphy->akm_suites = uwe5622_akm_suites;
+	wiphy->n_akm_suites = ARRAY_SIZE(uwe5622_akm_suites);
 	wiphy->cipher_suites = uwe5622_cipher_suites;
 	wiphy->n_cipher_suites = ARRAY_SIZE(uwe5622_cipher_suites);
 	wiphy->max_num_pmkids = 4;

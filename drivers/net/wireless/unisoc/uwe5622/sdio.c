@@ -824,7 +824,7 @@ static void uwe5622_sdio_irq(struct sdio_func *func)
 		return;
 	}
 
-	if (uwe5622_rx_poll) {
+	if (uwe5622_rx_poll && sdio->rx_thread) {
 		wake_up_process(sdio->rx_thread);
 		return;
 	}
@@ -1278,11 +1278,6 @@ static int uwe5622_sdio_probe(struct sdio_func *func,
 	skb_queue_head_init(&sdio->tx_queue);
 	INIT_WORK(&sdio->tx_work, uwe5622_sdio_tx_work);
 	skb_queue_head_init(&sdio->rx_queue);
-	sdio->rx_thread = kthread_run(uwe5622_sdio_rx_thread, sdio, "%s-rx",
-				      dev_name(&func->dev));
-	if (IS_ERR(sdio->rx_thread))
-		return dev_err_probe(&func->dev, PTR_ERR(sdio->rx_thread),
-				     "failed to start the receive thread\n");
 	sdio->wcn.dev = &func->dev;
 	sdio->wcn.bus_ops = &uwe5622_sdio_bus_ops;
 	sdio->wcn.bus_priv = sdio;
@@ -1295,8 +1290,6 @@ static int uwe5622_sdio_probe(struct sdio_func *func,
 		(struct uwe5622_channel_pair) { 8, 23 };
 	sdio->wcn.services[UWE5622_SERVICE_BLUETOOTH] =
 		(struct uwe5622_channel_pair) { 3, 17 };
-	sdio->wcn.services[UWE5622_SERVICE_BLUETOOTH_DATA] =
-		(struct uwe5622_channel_pair) { 3, 15 };
 	sdio->wcn.bluetooth_enable = devm_gpiod_get_optional(&func->dev,
 					"bluetooth-enable", GPIOD_OUT_LOW);
 	if (IS_ERR(sdio->wcn.bluetooth_enable))
@@ -1319,9 +1312,27 @@ static int uwe5622_sdio_probe(struct sdio_func *func,
 	if (ret)
 		goto err_wakeup;
 
+	/*
+	 * Last, because everything above can still fail and only the remove
+	 * callback stops this thread, which a failed probe never reaches: the
+	 * device memory would be freed underneath a thread still holding it.
+	 */
+	sdio->rx_thread = kthread_run(uwe5622_sdio_rx_thread, sdio, "%s-rx",
+				      dev_name(&func->dev));
+	if (IS_ERR(sdio->rx_thread)) {
+		ret = dev_err_probe(&func->dev, PTR_ERR(sdio->rx_thread),
+				    "failed to start the receive thread\n");
+		sdio->rx_thread = NULL;
+		goto err_wake_irq;
+	}
+
 	ret = uwe5622_core_probe(&sdio->wcn);
 	if (!ret)
 		return 0;
+
+	kthread_stop(sdio->rx_thread);
+	skb_queue_purge(&sdio->rx_queue);
+err_wake_irq:
 	if (sdio->wake_irq_set)
 		dev_pm_clear_wake_irq(&func->dev);
 err_wakeup:
