@@ -10,7 +10,11 @@
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
 #include <linux/unaligned.h>
+#include <linux/if_vlan.h>
+#include <linux/ip.h>
+#include <linux/ipv6.h>
 #include <net/cfg80211.h>
+#include <net/ip6_checksum.h>
 
 #include "wifi.h"
 
@@ -637,6 +641,130 @@ static void uwe5622_reorder_flush(struct uwe5622_reorder *session,
  * lets the stack amortise its own per-batch work; it wants softirqs off, which the
  * receive thread this runs on does not otherwise provide.
  */
+static bool uwe5622_rx_csum_debug;
+module_param_named(rx_csum_debug, uwe5622_rx_csum_debug, bool, 0644);
+MODULE_PARM_DESC(rx_csum_debug, "report receive checksum verification");
+
+static struct {
+	unsigned int checked;
+	unsigned int good;
+	unsigned int swapped;
+	unsigned int bad;
+	unsigned int skipped;
+} uwe5622_csum_stats;
+
+/*
+ * The receive engine hands up the raw Internet accumulator over the transport
+ * segment, not a verdict. Whether it can be believed is decided here, by adding
+ * the pseudo header the hardware does not cover and seeing whether the result
+ * comes out zero, which is what a correct checksum means. Until that has been
+ * shown over live traffic there is nothing to trust: a wrong sum accepted as
+ * CHECKSUM_COMPLETE makes the stack take corrupted packets in silence.
+ *
+ * Returns the ip_summed to use, and reports what the sum looked like either way.
+ */
+static u8 uwe5622_rx_csum(const u8 *frame, u16 len, u16 raw)
+{
+	const u8 *net = frame + ETH_HLEN;
+	u16 proto = get_unaligned_be16(frame + 2 * ETH_ALEN);
+	u16 netlen = len - ETH_HLEN;
+	__wsum sum = (__force __wsum)raw;
+	__wsum swapped = (__force __wsum)swab16(raw);
+	u16 l4len, verdict = 0, verdict_swapped = 0;
+	u8 l4proto;
+
+	if (len < ETH_HLEN)
+		goto skip;
+	if (proto == ETH_P_8021Q || proto == ETH_P_8021AD) {
+		if (netlen < VLAN_HLEN)
+			goto skip;
+		proto = get_unaligned_be16(net + 2);
+		net += VLAN_HLEN;
+		netlen -= VLAN_HLEN;
+	}
+
+	if (proto == ETH_P_IP) {
+		const struct iphdr *ip = (const struct iphdr *)net;
+		u16 ihl, total;
+
+		if (netlen < sizeof(*ip) || ip->version != 4)
+			goto skip;
+		ihl = ip->ihl * 4;
+		total = ntohs(ip->tot_len);
+		if (ihl < sizeof(*ip) || total < ihl || total > netlen)
+			goto skip;
+		if (ip_is_fragment(ip))
+			goto skip;
+		l4proto = ip->protocol;
+		if (l4proto != IPPROTO_TCP && l4proto != IPPROTO_UDP)
+			goto skip;
+		l4len = total - ihl;
+		verdict = csum_tcpudp_magic(ip->saddr, ip->daddr, l4len,
+					    l4proto, sum);
+		verdict_swapped = csum_tcpudp_magic(ip->saddr, ip->daddr, l4len,
+						    l4proto, swapped);
+	} else if (proto == ETH_P_IPV6) {
+		const struct ipv6hdr *ip6 = (const struct ipv6hdr *)net;
+
+		if (netlen < sizeof(*ip6) || ip6->version != 6)
+			goto skip;
+		l4proto = ip6->nexthdr;
+		if (l4proto != IPPROTO_TCP && l4proto != IPPROTO_UDP)
+			goto skip;
+		l4len = ntohs(ip6->payload_len);
+		if (l4len + sizeof(*ip6) > netlen)
+			goto skip;
+		verdict = csum_ipv6_magic(&ip6->saddr, &ip6->daddr, l4len,
+					  l4proto, sum);
+		verdict_swapped = csum_ipv6_magic(&ip6->saddr, &ip6->daddr,
+						  l4len, l4proto, swapped);
+	} else {
+		goto skip;
+	}
+
+	uwe5622_csum_stats.checked++;
+	if (!verdict) {
+		uwe5622_csum_stats.good++;
+		if (uwe5622_rx_csum_debug &&
+		    !(uwe5622_csum_stats.checked % 65536))
+			pr_info("uwe5622: rx csum checked %u good %u swapped %u bad %u skipped %u\n",
+				uwe5622_csum_stats.checked,
+				uwe5622_csum_stats.good,
+				uwe5622_csum_stats.swapped,
+				uwe5622_csum_stats.bad,
+				uwe5622_csum_stats.skipped);
+		/*
+		 * The sum plus the pseudo header comes out zero, so the segment
+		 * is intact. Say so rather than passing the sum on: the stack
+		 * then has nothing left to check, which is what lets receive
+		 * offload coalesce without touching the payload. Verifying costs
+		 * only the pseudo header, never a pass over the data.
+		 */
+		return CHECKSUM_UNNECESSARY;
+	} else if (!verdict_swapped) {
+		uwe5622_csum_stats.swapped++;
+	} else {
+		uwe5622_csum_stats.bad++;
+		if (uwe5622_rx_csum_debug && uwe5622_csum_stats.bad < 8)
+			pr_info("uwe5622: rx csum raw %#06x fails as %#06x and swapped as %#06x, proto %u l4 %u\n",
+				raw, verdict, verdict_swapped, l4proto, l4len);
+	}
+	if (uwe5622_rx_csum_debug &&
+	    !(uwe5622_csum_stats.checked % 8192))
+		pr_info("uwe5622: rx csum checked %u good %u swapped %u bad %u skipped %u\n",
+			uwe5622_csum_stats.checked, uwe5622_csum_stats.good,
+			uwe5622_csum_stats.swapped, uwe5622_csum_stats.bad,
+			uwe5622_csum_stats.skipped);
+
+	/* Anything unverified reaches the stack unclaimed, as it must. */
+	return CHECKSUM_NONE;
+
+skip:
+	uwe5622_csum_stats.skipped++;
+
+	return CHECKSUM_NONE;
+}
+
 static void uwe5622_deliver(struct sk_buff_head *done)
 {
 	struct sk_buff *skb;
@@ -1066,10 +1194,10 @@ static void uwe5622_eapol_work(struct work_struct *work)
 {
 	struct uwe5622_wifi *wifi = container_of(work, struct uwe5622_wifi,
 						 eapol_work);
-	struct uwe5622_vif *vif;
 	struct net_device *ndev;
 	struct sk_buff *skb, *tx;
 	u8 *data;
+	struct uwe5622_vif *vif;
 	int ret;
 
 	while ((skb = skb_dequeue(&wifi->eapol_queue))) {
@@ -1374,6 +1502,8 @@ uwe5622_add_virtual_intf(struct wiphy *wiphy, const char *name,
 	vif->wdev.netdev = ndev;
 	ndev->ieee80211_ptr = &vif->wdev;
 	ndev->netdev_ops = &uwe5622_netdev_ops;
+	ndev->features |= NETIF_F_RXCSUM;
+	ndev->hw_features |= NETIF_F_RXCSUM;
 	ndev->needs_free_netdev = true;
 	SET_NETDEV_DEV(ndev, wiphy_dev(wiphy));
 	uwe5622_set_vif_type(vif, type, address);
@@ -1395,6 +1525,7 @@ uwe5622_add_virtual_intf(struct wiphy *wiphy, const char *name,
 	return &vif->wdev;
 
 err_unregister:
+	uwe5622_close_firmware(vif);
 	cfg80211_unregister_netdevice(ndev);
 	return ERR_PTR(ret);
 err_close:
@@ -2215,7 +2346,8 @@ void uwe5622_wifi_event(struct uwe5622_wifi *wifi,
 }
 
 static void uwe5622_rx_one_frame(struct uwe5622_wifi *wifi,
-				 const u8 *data, size_t len)
+				 const u8 *data, size_t len,
+				 bool csum_present, u16 csum_raw)
 {
 	struct sk_buff_head done;
 	struct net_device *ndev;
@@ -2242,6 +2374,9 @@ static void uwe5622_rx_one_frame(struct uwe5622_wifi *wifi,
 		goto out;
 	}
 	skb_put_data(skb, data + offset, frame_len);
+	if (csum_present)
+		skb->ip_summed = uwe5622_rx_csum(data + offset, frame_len,
+						 csum_raw);
 	skb->protocol = eth_type_trans(skb, ndev);
 	ndev->stats.rx_packets++;
 	ndev->stats.rx_bytes += frame_len;
@@ -2278,7 +2413,8 @@ static void uwe5622_wifi_data_rx(void *priv, struct sk_buff *skb)
 	uwe5622_add_tx_credits(wifi, pos + UWE5622_RX_CREDIT_OFFSET, false);
 	count = pos[8];
 	if (count <= 1) {
-		uwe5622_rx_one_frame(wifi, pos, left);
+		uwe5622_rx_one_frame(wifi, pos, left, skb->cb[4],
+				     get_unaligned((u16 *)&skb->cb[2]));
 		goto out;
 	}
 
@@ -2288,7 +2424,7 @@ static void uwe5622_wifi_data_rx(void *priv, struct sk_buff *skb)
 		frame_len = FIELD_GET(GENMASK(31, 16), word);
 		if (offset < UWE5622_RX_DESC_LEN || frame_len > left - offset)
 			break;
-		uwe5622_rx_one_frame(wifi, pos, left);
+		uwe5622_rx_one_frame(wifi, pos, left, false, 0);
 		advance = ALIGN(offset + frame_len + UWE5622_RX_MH_DESC_LEN, 8);
 		if (advance > left)
 			break;

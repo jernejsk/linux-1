@@ -68,6 +68,11 @@
 
 #define UWE5622_PUH_PAD		GENMASK(5, 0)
 #define UWE5622_PUH_CHECKSUM		BIT(6)
+/*
+ * Set when the receive engine's checksum accumulator follows the payload, as a
+ * little-endian u16 that the payload length does not count.
+ */
+#define UWE5622_PUH_CHECKSUM		BIT(6)
 #define UWE5622_PUH_LENGTH		GENMASK(22, 7)
 #define UWE5622_PUH_EOF		BIT(23)
 #define UWE5622_PUH_SUBTYPE		GENMASK(27, 24)
@@ -725,6 +730,21 @@ static void uwe5622_sdio_drain_rx_aggregated(struct uwe5622_sdio *sdio)
 				  FIELD_GET(UWE5622_PUH_SUBTYPE, header);
 			skb = sdio->rx_skb[i];
 			sdio->rx_skb[i] = NULL;
+			/*
+			 * The accumulator sits past the payload, so take it
+			 * before the buffer is trimmed to the payload itself,
+			 * and hand it to the client beside the frame.
+			 */
+			if (header & UWE5622_PUH_CHECKSUM) {
+				const u8 *at = skb->data + sizeof(__le32) +
+					       payload_len;
+
+				put_unaligned(get_unaligned_le16(at),
+					      (u16 *)&skb->cb[2]);
+				skb->cb[4] = 1;
+			} else {
+				skb->cb[4] = 0;
+			}
 			skb_put(skb, sizeof(__le32) + payload_len);
 			skb_pull(skb, sizeof(__le32));
 			skb->cb[0] = channel;
