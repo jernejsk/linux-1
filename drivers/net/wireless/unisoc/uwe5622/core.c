@@ -6,6 +6,7 @@
 #include <linux/firmware.h>
 #include <linux/module.h>
 #include <crypto/sha2.h>
+#include <linux/debugfs.h>
 #include <linux/unaligned.h>
 #include <linux/of.h>
 #include <linux/slab.h>
@@ -378,10 +379,13 @@ static void uwe5622_report_firmware(struct uwe5622 *wcn,
 		 UWE5622_FIRMWARE_NAME, fw->size, 8, digest);
 }
 
+#define UWE5622_TRACE_RING_SIZE		SZ_512K
+#define UWE5622_TRACE_MAX_RECORD	2048
+
 static bool uwe5622_trace;
 module_param_named(wcn_trace, uwe5622_trace, bool, 0644);
 MODULE_PARM_DESC(wcn_trace,
-		 "log the controller's debug trace ring, coexistence among it");
+		 "capture the controller's debug trace ring, coexistence among it");
 
 /*
  * Tags seen in the trace ring that describe how the controller shares one
@@ -409,42 +413,99 @@ static const char *uwe5622_trace_tag(u16 tag)
 }
 
 /*
- * The ring is a diagnostic path with no client of its own, so the records are
- * reported here rather than dropped as an unclaimed channel. They are kept raw:
- * the layout beyond the leading tag is not known well enough to parse, and a
- * capture is worth more than a guess at its meaning.
+ * Records go to a ring that userspace drains, length prefixed so the reader can
+ * put the boundaries back. Anything printed instead would be rate limited, and
+ * roughly nineteen records in twenty were lost that way, which is indis-
+ * tinguishable from a firmware that never wrote them. What is dropped here is at
+ * least counted.
  */
 static void uwe5622_core_trace_rx(struct uwe5622 *wcn, struct sk_buff *skb)
 {
-	const char *what = NULL;
-	u16 tag = 0;
+	__le16 len = cpu_to_le16(skb->len);
+	unsigned long flags;
 	size_t i;
 
-	if (!uwe5622_trace)
+	if (!uwe5622_trace || !kfifo_initialized(&wcn->trace_fifo) ||
+	    skb->len > UWE5622_TRACE_MAX_RECORD)
 		return;
 
 	/*
-	 * A record opens with a sync pattern rather than its subject, so the
-	 * tags that say what the coexistence engine did appear somewhere inside
-	 * it. Scan for one rather than guessing an offset, and keep the record
-	 * raw either way: the layout is not known well enough to parse, and a
-	 * capture is worth more than a wrong reading of it.
+	 * A record opens with a sync pattern rather than its subject, so a tag
+	 * naming what the coexistence engine did sits somewhere inside it. Those
+	 * are rare enough to be worth a line each, on top of the capture.
 	 */
-	for (i = 0; what == NULL && i + sizeof(__le16) <= skb->len; i += 2) {
-		tag = get_unaligned_le16(skb->data + i);
-		what = uwe5622_trace_tag(tag);
+	for (i = 0; i + sizeof(__le16) <= skb->len; i += 2) {
+		u16 tag = get_unaligned_le16(skb->data + i);
+		const char *what = uwe5622_trace_tag(tag);
+
+		if (!what)
+			continue;
+		dev_info(wcn->dev, "coexistence trace %#06x (%s) at %zu\n",
+			 tag, what, i);
+		break;
 	}
 
-	wcn->trace_records++;
-	if (what)
-		dev_info(wcn->dev, "coexistence trace %#06x (%s): %*ph\n",
-			 tag, what, (int)min(skb->len, 48u), skb->data);
-	else
-		dev_info_ratelimited(wcn->dev,
-				     "controller trace, record %u: %*ph\n",
-				     wcn->trace_records,
-				     (int)min(skb->len, 48u), skb->data);
+	spin_lock_irqsave(&wcn->trace_lock, flags);
+	if (kfifo_avail(&wcn->trace_fifo) < skb->len + sizeof(len)) {
+		wcn->trace_dropped++;
+	} else {
+		kfifo_in(&wcn->trace_fifo, &len, sizeof(len));
+		kfifo_in(&wcn->trace_fifo, skb->data, skb->len);
+		wcn->trace_records++;
+	}
+	spin_unlock_irqrestore(&wcn->trace_lock, flags);
 }
+
+static ssize_t uwe5622_trace_read(struct file *file, char __user *buf,
+				  size_t count, loff_t *ppos)
+{
+	struct uwe5622 *wcn = file->private_data;
+	unsigned int copied = 0;
+	int ret;
+
+	ret = kfifo_to_user(&wcn->trace_fifo, buf, count, &copied);
+
+	return ret ? ret : copied;
+}
+
+static const struct file_operations uwe5622_trace_fops = {
+	.owner = THIS_MODULE,
+	.open = simple_open,
+	.read = uwe5622_trace_read,
+};
+
+static int uwe5622_trace_stats_show(struct seq_file *m, void *unused)
+{
+	struct uwe5622 *wcn = m->private;
+
+	seq_printf(m, "records %u\ndropped %u\nqueued %u\n",
+		   wcn->trace_records, wcn->trace_dropped,
+		   kfifo_len(&wcn->trace_fifo));
+
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(uwe5622_trace_stats);
+
+static void uwe5622_trace_init(struct uwe5622 *wcn)
+{
+	spin_lock_init(&wcn->trace_lock);
+	if (kfifo_alloc(&wcn->trace_fifo, UWE5622_TRACE_RING_SIZE, GFP_KERNEL))
+		return;
+
+	wcn->trace_dir = debugfs_create_dir(dev_name(wcn->dev), NULL);
+	debugfs_create_file("trace", 0400, wcn->trace_dir, wcn,
+			    &uwe5622_trace_fops);
+	debugfs_create_file("trace_stats", 0400, wcn->trace_dir, wcn,
+			    &uwe5622_trace_stats_fops);
+}
+
+static void uwe5622_trace_exit(struct uwe5622 *wcn)
+{
+	debugfs_remove_recursive(wcn->trace_dir);
+	wcn->trace_dir = NULL;
+	kfifo_free(&wcn->trace_fifo);
+}
+
 
 void uwe5622_core_rx(struct uwe5622 *wcn, u8 channel, struct sk_buff *skb)
 {
@@ -480,6 +541,7 @@ int uwe5622_core_probe(struct uwe5622 *wcn)
 
 	mutex_init(&wcn->state_mutex);
 	mutex_init(&wcn->channel_mutex);
+	uwe5622_trace_init(wcn);
 	INIT_WORK(&wcn->recovery_work, uwe5622_recovery_work);
 	ret = init_srcu_struct(&wcn->channel_srcu);
 	if (ret)
@@ -564,6 +626,7 @@ void uwe5622_core_remove(struct uwe5622 *wcn)
 	wcn->state = UWE5622_OFF;
 	mutex_unlock(&wcn->state_mutex);
 	cleanup_srcu_struct(&wcn->channel_srcu);
+	uwe5622_trace_exit(wcn);
 }
 
 void uwe5622_core_shutdown(struct uwe5622 *wcn)
