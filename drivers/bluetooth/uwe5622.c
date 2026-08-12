@@ -212,10 +212,63 @@ static int uwe5622_bt_flush(struct hci_dev *hdev)
 	return 0;
 }
 
+/*
+ * The controller does not join the firmware's coexistence arbitration until it is
+ * told that Bluetooth is in use. Until then its Wi-Fi side registers as the only
+ * active client, the shared scheduler that divides one antenna between the two is
+ * never entered, and Bluetooth reception dies whenever Wi-Fi holds a 2.4 GHz
+ * channel: on this board discovery finds nothing at all at -28 dBm, and finds its
+ * target as soon as this command has been sent. It is the vendor's dual-mode
+ * enable, sent by its own initialization, and it belongs to bringing the
+ * controller up rather than to any board.
+ */
+#define UWE5622_BT_OP_ENABLE	0xfca1
+
+static int uwe5622_bt_enable(struct hci_dev *hdev, bool on)
+{
+	static const u8 disable[] = { 0x00, 0x00, 0x00 };
+	static const u8 enable[] = { 0x00, 0x00, 0x01 };
+	struct sk_buff *skb;
+
+	skb = __hci_cmd_sync(hdev, UWE5622_BT_OP_ENABLE, sizeof(enable),
+			     on ? enable : disable, HCI_INIT_TIMEOUT);
+	if (IS_ERR(skb))
+		return PTR_ERR(skb);
+
+	/*
+	 * The controller answers with the payload it accepted rather than a bare
+	 * status, so check that what came back is what was asked for instead of
+	 * assuming the usual layout.
+	 */
+	if (skb->len < sizeof(enable) ||
+	    skb->data[skb->len - 1] != (on ? 0x01 : 0x00)) {
+		bt_dev_warn(hdev, "coexistence %s not confirmed: %*ph",
+			    on ? "enable" : "disable", (int)skb->len, skb->data);
+		kfree_skb(skb);
+		return -EIO;
+	}
+	kfree_skb(skb);
+
+	return 0;
+}
+
+static int uwe5622_bt_setup(struct hci_dev *hdev)
+{
+	return uwe5622_bt_enable(hdev, true);
+}
+
 static int uwe5622_bt_close(struct hci_dev *hdev)
 {
 	struct uwe5622_bt *bt = hci_get_drvdata(hdev);
 	struct sk_buff *rx;
+
+	/*
+	 * While the transport is still up, so the firmware stops counting
+	 * Bluetooth as an active coexistence client and gives Wi-Fi the antenna
+	 * back.
+	 */
+	if (bt->opened && !bt->suspended)
+		uwe5622_bt_enable(hdev, false);
 
 	uwe5622_bt_flush(hdev);
 	spin_lock_bh(&bt->rx_lock);
@@ -363,6 +416,7 @@ static int uwe5622_bt_probe(struct auxiliary_device *adev,
 	}
 	hdev->open = uwe5622_bt_open;
 	hdev->close = uwe5622_bt_close;
+	hdev->setup = uwe5622_bt_setup;
 	hdev->flush = uwe5622_bt_flush;
 	hdev->send = uwe5622_bt_send;
 	/*
