@@ -106,7 +106,16 @@ module_param_named(rx_aggregation, uwe5622_rx_aggregation, bool, 0444);
 MODULE_PARM_DESC(rx_aggregation,
 		 "use the firmware's scatter-gather receive mode");
 
-static bool uwe5622_rx_thread_enable = true;
+/*
+ * Off by default. Handing frames to a separate thread was worth a fifth of the
+ * throughput while the bus ran at 50 MHz and every microsecond away from reading
+ * cost data; with the bus at 150 MHz it only costs the hop. Delivering from the
+ * read loop uses 2.0 percent of a core per MB/s against the thread's 2.7 at the
+ * same rate, which is what the vendor driver costs, while still carrying half
+ * again as much as the vendor can. The thread remains for anyone whose bus is the
+ * limit again, where it buys about a fifth more at a third more CPU.
+ */
+static bool uwe5622_rx_thread_enable;
 module_param_named(rx_thread, uwe5622_rx_thread_enable, bool, 0644);
 MODULE_PARM_DESC(rx_thread,
 		 "pass received frames up from a separate thread");
@@ -150,6 +159,12 @@ struct uwe5622_sdio {
 	u32 wake_config;
 	/* Aggregated receive: one buffer per packet plus the transfer trailer. */
 	void *rx_pac[UWE5622_RX_PAC_MAX];
+	/*
+	 * One socket buffer per packet slot, read into directly. A frame that is
+	 * passed up is replaced; a slot the controller left empty is reused as it
+	 * is, so a quiet link allocates nothing at all.
+	 */
+	struct sk_buff *rx_skb[UWE5622_RX_PAC_MAX];
 	void *rx_trailer;
 	void *tx_buf;
 	unsigned int tx_writes;
@@ -491,6 +506,16 @@ static void uwe5622_sdio_queue_rx(struct uwe5622_sdio *sdio, size_t read_len,
  * alternative single buffer mode only ever carries one packet per transfer,
  * which caps throughput well below the negotiated link rate.
  */
+static void uwe5622_sdio_free_rx_skbs(struct uwe5622_sdio *sdio)
+{
+	int i;
+
+	for (i = 0; i < UWE5622_RX_PAC_MAX; i++) {
+		kfree_skb(sdio->rx_skb[i]);
+		sdio->rx_skb[i] = NULL;
+	}
+}
+
 static int uwe5622_sdio_read_aggregated(struct uwe5622_sdio *sdio,
 					unsigned int pac_num, u32 *valid_len,
 					u32 *pending)
@@ -505,9 +530,17 @@ static int uwe5622_sdio_read_aggregated(struct uwe5622_sdio *sdio,
 
 	pac_num = clamp_t(unsigned int, pac_num, 1, UWE5622_RX_PAC_MAX);
 
+	for (i = 0; i < pac_num; i++) {
+		if (sdio->rx_skb[i])
+			continue;
+		sdio->rx_skb[i] = alloc_skb(uwe5622_pac_size(), GFP_KERNEL);
+		if (!sdio->rx_skb[i])
+			return i ? (int)i : -ENOMEM;
+	}
+
 	sg_init_table(sdio->rx_sg, pac_num + 1);
 	for (i = 0; i < pac_num; i++)
-		sg_set_buf(&sdio->rx_sg[i], sdio->rx_pac[i],
+		sg_set_buf(&sdio->rx_sg[i], sdio->rx_skb[i]->data,
 			   uwe5622_pac_size());
 	sg_set_buf(&sdio->rx_sg[pac_num], sdio->rx_trailer,
 		   uwe5622_blk_size());
@@ -669,8 +702,7 @@ static void uwe5622_sdio_drain_rx_aggregated(struct uwe5622_sdio *sdio)
 		}
 
 		for (i = 0; i < got; i++) {
-			const u8 *pac = sdio->rx_pac[i];
-			u32 header = get_unaligned_le32(pac);
+			u32 header = get_unaligned_le32(sdio->rx_skb[i]->data);
 			u16 payload_len;
 			u8 channel;
 
@@ -684,10 +716,10 @@ static void uwe5622_sdio_drain_rx_aggregated(struct uwe5622_sdio *sdio)
 
 			channel = UWE5622_RX_CHANNEL_BASE +
 				  FIELD_GET(UWE5622_PUH_SUBTYPE, header);
-			skb = alloc_skb(payload_len, GFP_KERNEL);
-			if (!skb)
-				break;
-			skb_put_data(skb, pac + sizeof(__le32), payload_len);
+			skb = sdio->rx_skb[i];
+			sdio->rx_skb[i] = NULL;
+			skb_put(skb, sizeof(__le32) + payload_len);
+			skb_pull(skb, sizeof(__le32));
 			skb->cb[0] = channel;
 			__skb_queue_tail(&queue, skb);
 		}
@@ -1340,6 +1372,7 @@ static int uwe5622_sdio_probe(struct sdio_func *func,
 
 	kthread_stop(sdio->rx_thread);
 	skb_queue_purge(&sdio->rx_queue);
+	uwe5622_sdio_free_rx_skbs(sdio);
 err_wake_irq:
 	if (sdio->wake_irq_set)
 		dev_pm_clear_wake_irq(&func->dev);
@@ -1355,6 +1388,7 @@ static void uwe5622_sdio_remove(struct sdio_func *func)
 	uwe5622_core_remove(&sdio->wcn);
 	kthread_stop(sdio->rx_thread);
 	skb_queue_purge(&sdio->rx_queue);
+	uwe5622_sdio_free_rx_skbs(sdio);
 	if (sdio->wake_irq_set)
 		dev_pm_clear_wake_irq(&func->dev);
 	device_init_wakeup(&func->dev, false);
