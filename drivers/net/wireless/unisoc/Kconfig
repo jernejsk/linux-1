@@ -11,20 +11,6 @@ menuconfig WLAN_VENDOR_UNISOC
 
 if WLAN_VENDOR_UNISOC
 
-config UWE5622_CORE
-	tristate "Unisoc UWE5622 connectivity controller"
-	depends on MMC
-	select AUXILIARY_BUS
-	select CRYPTO_LIB_SHA256
-	select FW_LOADER
-	help
-	  This driver supports the common firmware and transport layer of the
-	  Unisoc UWE5622 Wi-Fi and Bluetooth controller. The first supported
-	  transport is SDIO, while child drivers use transport-independent
-	  logical services.
-
-	  Say M here to build the connectivity core as a module.
-
 config UWE5622_WIFI
 	tristate "Unisoc UWE5622 Wi-Fi support"
 	depends on UWE5622_CORE

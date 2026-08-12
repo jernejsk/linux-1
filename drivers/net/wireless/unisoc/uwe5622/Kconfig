@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config UWE5622_CORE
+	tristate "Unisoc UWE5622 connectivity controller"
+	depends on MMC
+	select AUXILIARY_BUS
+	select CRYPTO_LIB_SHA256
+	select FW_LOADER
+	help
+	  This driver supports the common firmware and transport layer of the
+	  Unisoc UWE5622 Wi-Fi and Bluetooth controller. The first supported
+	  transport is SDIO, while child drivers use transport-independent
+	  logical services.
+
+	  It lives outside the WLAN menu because the Bluetooth transport needs
+	  it just as much as the Wi-Fi one, and a Bluetooth-only kernel has to
+	  be able to reach it.
+
+	  Say M here to build the connectivity core as a module.
