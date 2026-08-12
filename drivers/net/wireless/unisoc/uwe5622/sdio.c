@@ -646,20 +646,26 @@ static void uwe5622_sdio_drain_rx_aggregated(struct uwe5622_sdio *sdio)
 	u64 read_ns;
 	int i, got;
 
+	/*
+	 * Claimed once for the whole drain rather than around each read. The
+	 * controller is the only user of this host, and a claim costs a mutex
+	 * and a runtime power reference every time; at these rates that is
+	 * thousands of pairs a second for nothing.
+	 */
+	sdio_claim_host(func);
+
 	do {
 		__skb_queue_head_init(&queue);
 
 		read_ns = uwe5622_rx_debug ? ktime_get_ns() : 0;
-		sdio_claim_host(func);
 		got = uwe5622_sdio_read_aggregated(sdio, sdio->rx_pac_num,
 						   &valid_len, &pending);
-		sdio_release_host(func);
 		read_ns = uwe5622_rx_debug ? ktime_get_ns() - read_ns : 0;
 		uwe5622_sdio_rx_account(sdio, read_ns);
 		if (got < 0) {
 			dev_err_ratelimited(&func->dev,
 					    "aggregated RX failed: %d\n", got);
-			return;
+			goto out;
 		}
 
 		for (i = 0; i < got; i++) {
@@ -702,9 +708,11 @@ static void uwe5622_sdio_drain_rx_aggregated(struct uwe5622_sdio *sdio)
 			dev_warn_ratelimited(&func->dev,
 					     "aggregated RX still reports %u pending after %u passes\n",
 					     pending, pass);
-			return;
+			goto out;
 		}
 	} while (pending);
+out:
+	sdio_release_host(func);
 }
 
 static void uwe5622_sdio_drain_rx(struct uwe5622_sdio *sdio)
@@ -815,15 +823,12 @@ static void uwe5622_sdio_drain(struct uwe5622_sdio *sdio)
 static void uwe5622_sdio_irq(struct sdio_func *func)
 {
 	struct uwe5622_sdio *sdio = sdio_get_drvdata(func);
-	int err = 0;
 
-	sdio_f0_readb(func, SDIO_CCCR_INTx, &err);
-	if (err) {
-		dev_err_ratelimited(&func->dev, "RX status read failed: %d\n",
-				    err);
-		return;
-	}
-
+	/*
+	 * No interrupt status read here. Which function interrupted is already
+	 * known, nothing reads the value, and a command costs bus time on every
+	 * interrupt: the queue itself says what there is to do.
+	 */
 	if (uwe5622_rx_poll && sdio->rx_thread) {
 		wake_up_process(sdio->rx_thread);
 		return;
