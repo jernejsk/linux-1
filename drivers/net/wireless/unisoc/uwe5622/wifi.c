@@ -1389,17 +1389,37 @@ err_free:
 	return ERR_PTR(ret);
 }
 
-static void uwe5622_finish_scan(struct uwe5622_wifi *wifi, bool aborted)
+/*
+ * Completing a scan that cfg80211 is no longer tracking makes it warn, so a scan
+ * is only ever completed once and only for the interface that asked for it. That
+ * matters on interface teardown, which is reached with a scan outstanding when
+ * the firmware stops answering.
+ */
+static void uwe5622_finish_scan_wdev(struct uwe5622_wifi *wifi,
+				     struct wireless_dev *wdev, bool aborted)
 {
 	struct cfg80211_scan_request *request;
 	struct cfg80211_scan_info info = { .aborted = aborted };
 
 	spin_lock_bh(&wifi->scan_lock);
 	request = wifi->scan_request;
-	wifi->scan_request = NULL;
+	if (request && wdev && request->wdev != wdev)
+		request = NULL;
+	else
+		wifi->scan_request = NULL;
 	spin_unlock_bh(&wifi->scan_lock);
 	if (request)
 		cfg80211_scan_done(request, &info);
+}
+
+static void uwe5622_finish_scan(struct uwe5622_wifi *wifi, bool aborted)
+{
+	uwe5622_finish_scan_wdev(wifi, NULL, aborted);
+}
+
+static void uwe5622_abort_scan(struct wiphy *wiphy, struct wireless_dev *wdev)
+{
+	uwe5622_finish_scan_wdev(wiphy_priv(wiphy), wdev, true);
 }
 
 static int uwe5622_del_virtual_intf(struct wiphy *wiphy,
@@ -1409,11 +1429,8 @@ static int uwe5622_del_virtual_intf(struct wiphy *wiphy,
 	struct uwe5622_vif *vif = uwe5622_vif_from_wdev(wdev);
 	struct net_device *ndev = wdev->netdev;
 
-	spin_lock_bh(&wifi->vif_lock);
-	if (wifi->vifs[vif->ctx_id] == ndev)
-		wifi->vifs[vif->ctx_id] = NULL;
-	spin_unlock_bh(&wifi->vif_lock);
-	uwe5622_finish_scan(wifi, true);
+	uwe5622_forget_vif(vif);
+	uwe5622_finish_scan_wdev(wifi, wdev, true);
 	uwe5622_close_firmware(vif);
 	cfg80211_unregister_netdevice(ndev);
 	return 0;
@@ -1968,6 +1985,7 @@ static const struct cfg80211_ops uwe5622_cfg80211_ops = {
 	.change_virtual_intf = uwe5622_change_virtual_intf,
 	.del_virtual_intf = uwe5622_del_virtual_intf,
 	.scan = uwe5622_scan,
+	.abort_scan = uwe5622_abort_scan,
 	.connect = uwe5622_connect,
 	.disconnect = uwe5622_disconnect,
 	.add_key = uwe5622_add_key,
