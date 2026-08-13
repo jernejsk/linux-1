@@ -26,11 +26,50 @@
 #define UWE5622_CREDIT_COLORS	4
 #define UWE5622_CREDIT_MAX	U16_MAX
 
-/* How often transmission had to wait, and for what. */
+/*
+ * How often transmission had to wait, and for what. A grant only counts when
+ * the controller actually handed back credit: every Wi-Fi receive descriptor
+ * carries the four grant bytes whether or not any of them are set, so counting
+ * the field rather than its contents says nothing about how credit arrives.
+ */
 static unsigned int uwe5622_tx_stalls;
 module_param_named(tx_stalls, uwe5622_tx_stalls, uint, 0444);
-static unsigned int uwe5622_tx_credit_events;
-module_param_named(tx_credit_events, uwe5622_tx_credit_events, uint, 0444);
+static unsigned int uwe5622_tx_stalled_ms;
+module_param_named(tx_stalled_ms, uwe5622_tx_stalled_ms, uint, 0444);
+static unsigned int uwe5622_tx_credits_granted;
+module_param_named(tx_credits_granted, uwe5622_tx_credits_granted, uint, 0444);
+static unsigned int uwe5622_tx_grants_rx;
+module_param_named(tx_grants_rx, uwe5622_tx_grants_rx, uint, 0444);
+static unsigned int uwe5622_tx_grants_event;
+module_param_named(tx_grants_event, uwe5622_tx_grants_event, uint, 0444);
+static unsigned int uwe5622_tx_credit_resets;
+module_param_named(tx_credit_resets, uwe5622_tx_credit_resets, uint, 0444);
+/* Grants sized 1, 2, 3, 4, 5-8, 9-16, 17-32 and above. */
+static unsigned int uwe5622_tx_grant_size[8];
+static unsigned int uwe5622_tx_grant_sizes = ARRAY_SIZE(uwe5622_tx_grant_size);
+module_param_array_named(tx_grant_size, uwe5622_tx_grant_size, uint,
+			 &uwe5622_tx_grant_sizes, 0444);
+static unsigned int uwe5622_tx_credits_now[UWE5622_CREDIT_COLORS];
+static unsigned int uwe5622_tx_credits_colors = UWE5622_CREDIT_COLORS;
+module_param_array_named(tx_credits_now, uwe5622_tx_credits_now, uint,
+			 &uwe5622_tx_credits_colors, 0444);
+
+static void uwe5622_count_grant(unsigned int credits)
+{
+	unsigned int bucket;
+
+	if (credits <= 4)
+		bucket = credits - 1;
+	else if (credits <= 8)
+		bucket = 4;
+	else if (credits <= 16)
+		bucket = 5;
+	else if (credits <= 32)
+		bucket = 6;
+	else
+		bucket = 7;
+	uwe5622_tx_grant_size[bucket]++;
+}
 #define UWE5622_CREDIT_NO_POOL	0xff
 #define UWE5622_RX_MH_DESC_LEN	28
 #define UWE5622_EAPOL_QUEUE_MAX	64
@@ -377,15 +416,16 @@ static void uwe5622_wake_queues(struct uwe5622_wifi *wifi)
 
 static void uwe5622_add_tx_credits(struct uwe5622_wifi *wifi,
 				   const u8 credits[UWE5622_CREDIT_COLORS],
-				   bool reset)
+				   bool reset, bool from_event)
 {
+	unsigned int granted = 0;
 	bool added = false;
 	int i;
 
-	uwe5622_tx_credit_events++;
 	spin_lock_bh(&wifi->credit_lock);
 	if (reset) {
 		memset(wifi->tx_credits, 0, sizeof(wifi->tx_credits));
+		uwe5622_tx_credit_resets++;
 	} else {
 		for (i = 0; i < UWE5622_CREDIT_COLORS; i++) {
 			if (!credits[i])
@@ -393,9 +433,25 @@ static void uwe5622_add_tx_credits(struct uwe5622_wifi *wifi,
 			wifi->tx_credits[i] =
 				min_t(u32, wifi->tx_credits[i] + credits[i],
 				      UWE5622_CREDIT_MAX);
+			granted += credits[i];
 			added = true;
 		}
 	}
+	if (added) {
+		uwe5622_tx_credits_granted += granted;
+		uwe5622_count_grant(granted);
+		if (from_event)
+			uwe5622_tx_grants_event++;
+		else
+			uwe5622_tx_grants_rx++;
+		if (wifi->stall_start) {
+			uwe5622_tx_stalled_ms += ktime_ms_delta(ktime_get(),
+								wifi->stall_start);
+			wifi->stall_start = 0;
+		}
+	}
+	for (i = 0; i < UWE5622_CREDIT_COLORS; i++)
+		uwe5622_tx_credits_now[i] = wifi->tx_credits[i];
 	spin_unlock_bh(&wifi->credit_lock);
 
 	if (added)
@@ -477,6 +533,8 @@ static bool uwe5622_take_tx_credit(struct uwe5622_wifi *wifi,
 		return true;
 	}
 	uwe5622_tx_stalls++;
+	if (!wifi->stall_start)
+		wifi->stall_start = ktime_get();
 	netif_stop_queue(ndev);
 	spin_unlock_bh(&wifi->credit_lock);
 	return false;
@@ -2485,7 +2543,7 @@ void uwe5622_wifi_event(struct uwe5622_wifi *wifi,
 		if (len >= UWE5622_CREDIT_COLORS)
 			uwe5622_add_tx_credits(wifi, data,
 					       !(data[0] | data[1] |
-						 data[2] | data[3]));
+						 data[2] | data[3]), true);
 		break;
 	case UWE5622_EVENT_SDIO_SEQ_NUM:
 		break;
@@ -2595,7 +2653,8 @@ static void uwe5622_wifi_data_rx(void *priv, struct sk_buff *skb)
 
 	if (left < UWE5622_RX_DESC_LEN)
 		goto out;
-	uwe5622_add_tx_credits(wifi, pos + UWE5622_RX_CREDIT_OFFSET, false);
+	uwe5622_add_tx_credits(wifi, pos + UWE5622_RX_CREDIT_OFFSET, false,
+			       false);
 	count = pos[8];
 	if (count <= 1) {
 		uwe5622_rx_one_frame(wifi, pos, left, skb->cb[4],

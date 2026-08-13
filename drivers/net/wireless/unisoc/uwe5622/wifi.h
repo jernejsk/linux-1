@@ -176,6 +176,8 @@ struct uwe5622_wifi {
 	/* Owning context of each pool plus one, zero when the pool is shared. */
 	u8 credit_owner[4];
 	bool tx_with_credit;
+	/* When transmission ran out of credit, zero once any came back. */
+	ktime_t stall_start;
 
 	struct sk_buff_head eapol_queue;
 	struct work_struct eapol_work;
