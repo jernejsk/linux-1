@@ -459,3 +459,60 @@ cause into a magic-packet wake whenever that was the only trigger armed.
 Still untested: the disconnect trigger, which needs an access point that can be
 made to deauthenticate the station on demand.  This host has no Wi-Fi interface
 to inject from and the test AP is not under this session's control.
+
+## Access point mode, and what the firmware will and will not do (2026-08-13)
+
+An access point above channel 14 could not start at all. The controller takes
+the channel it beacons on from the beacon body and refuses one it cannot find a
+channel in; the element that carries it, the DS parameter set, is defined for
+2.4 GHz only, so hostapd never puts one in a 5 GHz beacon. `SET_CHANNEL` is
+accepted and ignored for this purpose: with channel 36 accepted, `START_AP`
+still answered `-EIO`, and dropping `ieee80211n` was enough to make it succeed,
+which is what pointed at the beacon rather than the band. Supplying the element
+when it is absent starts a 5 GHz access point at 20, 40 and 80 MHz;
+`hostapd_cli status` reports `freq=5180 secondary_channel=1 vht_oper_chwidth=1`.
+The vendor driver has the same requirement written into a debug helper that
+rewrites DS parameter and HT operation channels, which is the hint that was
+there all along.
+
+5 GHz also needs a regulatory domain. Country 00 marks every 5 GHz range
+passive-scan, so no access point may start there. `regulatory.db` was missing on
+the board, and `iw reg set SI` silently did nothing until `iw reg reload` made
+the database available; after that 5150-5250 is allowed at 80 MHz with no DFS
+and the firmware accepts the domain.
+
+Features added, all exercised on hardware: the stations an access point holds
+can be listed (`dump_station`, built from the lookup entries the controller
+reports); both access-control lists are wired to cfg80211's, with hostapd
+reporting `nl80211: Set Accept ACL (num_mac_acl=2)` for an accept list and no
+error for a deny list; the limits from `GET_INFO` are passed on, so hostapd now
+sees `max_stations=10` where it saw zero; management frames can be registered,
+delivered and sent, which is what silenced twelve `Register frame command
+failed (type=208): ret=-95` per start; and a changed beacon body is handed over
+with `RESET_BEACON` instead of only the elements the controller adds itself.
+
+What the firmware refuses, tested one configuration at a time with the
+interface present: protected management frames and WPA3-SAE. MFP fails when
+hostapd installs the integrity key, because that key lives at index four and
+the key path accepted only zero to three. Widening the range made things worse
+rather than better: the firmware took the key and then died, with four
+consecutive transmit failures, a failed CPU reset, a power cycle, and a module
+unload left in D state needing the power switch. So the cipher advertisement and
+the wider index were both reverted, and this stays a firmware limitation.
+SAE has no path either: hostapd wants to handle authentication frames itself,
+and those are answered by the controller. Open and hidden-SSID access points
+both work, and three stop/start cycles in a row come up cleanly, so the wedge
+was the key rather than the restart.
+
+One thing accepted but not observed: no probe request was ever delivered, in
+60 seconds on a busy 2.4 GHz channel or 18 on 5 GHz, although the registration
+is accepted and hostapd reports `Enable Probe Request reporting`. Either the
+controller does not report them in this mode or the subtype it wants differs
+from the index the vendor passes. Action frames are untested for want of
+something to exchange them with.
+
+No client associated during this session, on either band; the laptop that was
+meant to join never appeared, and the board has no second radio to scan with.
+Association itself is not in doubt - an earlier session completed a WPA2 four-way
+handshake and passed data both ways through this same 2.4 GHz path - so what is
+untested here is throughput and the new station listing with a real client.
