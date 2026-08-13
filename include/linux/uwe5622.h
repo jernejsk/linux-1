@@ -20,6 +20,8 @@ enum uwe5622_service {
 	 * advertising reports among them, arrives on the Bluetooth channel.
 	 */
 	UWE5622_SERVICE_WCN_TRACE,
+	/* The controller's AT command interpreter, which controls its logging. */
+	UWE5622_SERVICE_AT,
 	UWE5622_SERVICE_COUNT,
 };
 

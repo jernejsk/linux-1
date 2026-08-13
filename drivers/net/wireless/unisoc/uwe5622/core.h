@@ -10,7 +10,7 @@
 #include <linux/refcount.h>
 #include <linux/skbuff.h>
 #include <linux/srcu.h>
-#include <linux/kfifo.h>
+#include <linux/completion.h>
 #include <linux/uwe5622.h>
 #include <linux/workqueue.h>
 
@@ -78,16 +78,8 @@ struct uwe5622 {
 	struct mutex channel_mutex;
 	struct srcu_struct channel_srcu;
 	struct uwe5622_client __rcu *channels[UWE5622_MAX_CHANNELS];
-	/*
-	 * The controller's trace ring, drained through debugfs. printk loses
-	 * most of it to rate limiting, and a lost record cannot be told apart
-	 * from a record the firmware never wrote.
-	 */
-	struct kfifo trace_fifo;
-	spinlock_t trace_lock;
-	struct dentry *trace_dir;
-	unsigned int trace_records;
-	unsigned int trace_dropped;
+	/* Answers the controller gives to an AT command sent by the core. */
+	struct completion at_done;
 
 	struct uwe5622_auxdev *wifi_auxdev;
 	struct uwe5622_auxdev *bt_auxdev;

@@ -6,7 +6,6 @@
 #include <linux/firmware.h>
 #include <linux/module.h>
 #include <crypto/sha2.h>
-#include <linux/debugfs.h>
 #include <linux/unaligned.h>
 #include <linux/of.h>
 #include <linux/slab.h>
@@ -287,6 +286,74 @@ static void uwe5622_notify_reset(struct uwe5622 *wcn)
 	srcu_read_unlock(&wcn->channel_srcu, idx);
 }
 
+/*
+ * Turning the controller's logging off has to be asked of the controller, not
+ * worked around on the host. With it on, the firmware formats every message,
+ * builds trace records and requests a transport page for each one, and all of
+ * that arrives on the shared receive FIFO whether or not anything here wants
+ * it. Discarding the result on this side pays the firmware, bus, interrupt and
+ * allocation cost anyway.
+ *
+ * The single byte selects the mode: zero clears the enable that is tested
+ * before the expensive work in the emitters, so nothing is formatted and no
+ * page is requested. It does not stop the receive channel completely, because
+ * a page already queued, a flush, or an exceptional path can still deliver
+ * one, and fatal assertions go out on their own channel regardless. The
+ * channel is therefore still drained; only the ring that captured it is gone.
+ */
+#define UWE5622_AT_ARMLOG_OFF		"at+armlog=0\r\n"
+#define UWE5622_AT_ARMLOG_ON		"at+armlog=1\r\n"
+#define UWE5622_AT_TIMEOUT		msecs_to_jiffies(3000)
+
+/* Leave the controller's logging on, for capturing what it says. */
+static bool uwe5622_firmware_log;
+module_param_named(firmware_log, uwe5622_firmware_log, bool, 0444);
+MODULE_PARM_DESC(firmware_log,
+		 "let the controller keep formatting and sending its debug log");
+
+static unsigned int uwe5622_log_records;
+module_param_named(log_records, uwe5622_log_records, uint, 0444);
+
+static int uwe5622_at_command(struct uwe5622 *wcn, const char *cmd)
+{
+	size_t len = strlen(cmd);
+	struct sk_buff *skb;
+	int ret;
+
+	skb = alloc_skb(UWE5622_BUS_HEADROOM + len, GFP_KERNEL);
+	if (!skb)
+		return -ENOMEM;
+	skb_reserve(skb, UWE5622_BUS_HEADROOM);
+	skb_put_data(skb, cmd, len);
+
+	reinit_completion(&wcn->at_done);
+	ret = wcn->bus_ops->tx(wcn, wcn->services[UWE5622_SERVICE_AT].tx, skb,
+			       0);
+	if (ret) {
+		kfree_skb(skb);
+		return ret;
+	}
+
+	if (!wait_for_completion_timeout(&wcn->at_done, UWE5622_AT_TIMEOUT))
+		return -ETIMEDOUT;
+
+	return 0;
+}
+
+static void uwe5622_quiet_firmware_log(struct uwe5622 *wcn)
+{
+	int ret = uwe5622_at_command(wcn, uwe5622_firmware_log ?
+					  UWE5622_AT_ARMLOG_ON :
+					  UWE5622_AT_ARMLOG_OFF);
+
+	/*
+	 * Worth reporting but not worth failing over: a controller that keeps
+	 * logging still works, it just spends the bus on saying so.
+	 */
+	if (ret)
+		dev_warn(wcn->dev, "controller kept its logging on: %d\n", ret);
+}
+
 static void uwe5622_recovery_work(struct work_struct *work)
 {
 	struct uwe5622 *wcn = container_of(work, struct uwe5622,
@@ -323,6 +390,7 @@ static void uwe5622_recovery_work(struct work_struct *work)
 	release_firmware(fw);
 	if (ret)
 		goto out_failed;
+	uwe5622_quiet_firmware_log(wcn);
 
 	mutex_lock(&wcn->state_mutex);
 	if (wcn->removing) {
@@ -426,134 +494,6 @@ static void uwe5622_report_firmware(struct uwe5622 *wcn,
 		 UWE5622_FIRMWARE_NAME, fw->size, 8, digest);
 }
 
-#define UWE5622_TRACE_RING_SIZE		SZ_512K
-#define UWE5622_TRACE_MAX_RECORD	2048
-
-static bool uwe5622_trace;
-module_param_named(wcn_trace, uwe5622_trace, bool, 0644);
-MODULE_PARM_DESC(wcn_trace,
-		 "capture the controller's debug trace ring, coexistence among it");
-
-/*
- * Tags seen in the trace ring that describe how the controller shares one
- * antenna between Wi-Fi and Bluetooth. They are the difference between the
- * arbiter never running and the arbiter running but granting nothing useful,
- * which is not a distinction the host can otherwise make.
- */
-static const char *uwe5622_trace_tag(u16 tag)
-{
-	switch (tag) {
-	case 0xd410:
-		return "channel overlap";
-	case 0xd452:
-	case 0xd46c:
-		return "schedule timing";
-	case 0xd481:
-	case 0xd482:
-	case 0xd483:
-		return "RF profile change";
-	case 0xd494:
-		return "RF owner";
-	default:
-		return NULL;
-	}
-}
-
-/*
- * Records go to a ring that userspace drains, length prefixed so the reader can
- * put the boundaries back. Anything printed instead would be rate limited, and
- * roughly nineteen records in twenty were lost that way, which is indis-
- * tinguishable from a firmware that never wrote them. What is dropped here is at
- * least counted.
- */
-static void uwe5622_core_trace_rx(struct uwe5622 *wcn, struct sk_buff *skb)
-{
-	__le16 len = cpu_to_le16(skb->len);
-	unsigned long flags;
-	size_t i;
-
-	if (!uwe5622_trace || !kfifo_initialized(&wcn->trace_fifo) ||
-	    skb->len > UWE5622_TRACE_MAX_RECORD)
-		return;
-
-	/*
-	 * A record opens with a sync pattern rather than its subject, so a tag
-	 * naming what the coexistence engine did sits somewhere inside it. Those
-	 * are rare enough to be worth a line each, on top of the capture.
-	 */
-	for (i = 0; i + sizeof(__le16) <= skb->len; i += 2) {
-		u16 tag = get_unaligned_le16(skb->data + i);
-		const char *what = uwe5622_trace_tag(tag);
-
-		if (!what)
-			continue;
-		dev_info(wcn->dev, "coexistence trace %#06x (%s) at %zu\n",
-			 tag, what, i);
-		break;
-	}
-
-	spin_lock_irqsave(&wcn->trace_lock, flags);
-	if (kfifo_avail(&wcn->trace_fifo) < skb->len + sizeof(len)) {
-		wcn->trace_dropped++;
-	} else {
-		kfifo_in(&wcn->trace_fifo, &len, sizeof(len));
-		kfifo_in(&wcn->trace_fifo, skb->data, skb->len);
-		wcn->trace_records++;
-	}
-	spin_unlock_irqrestore(&wcn->trace_lock, flags);
-}
-
-static ssize_t uwe5622_trace_read(struct file *file, char __user *buf,
-				  size_t count, loff_t *ppos)
-{
-	struct uwe5622 *wcn = file->private_data;
-	unsigned int copied = 0;
-	int ret;
-
-	ret = kfifo_to_user(&wcn->trace_fifo, buf, count, &copied);
-
-	return ret ? ret : copied;
-}
-
-static const struct file_operations uwe5622_trace_fops = {
-	.owner = THIS_MODULE,
-	.open = simple_open,
-	.read = uwe5622_trace_read,
-};
-
-static int uwe5622_trace_stats_show(struct seq_file *m, void *unused)
-{
-	struct uwe5622 *wcn = m->private;
-
-	seq_printf(m, "records %u\ndropped %u\nqueued %u\n",
-		   wcn->trace_records, wcn->trace_dropped,
-		   kfifo_len(&wcn->trace_fifo));
-
-	return 0;
-}
-DEFINE_SHOW_ATTRIBUTE(uwe5622_trace_stats);
-
-static void uwe5622_trace_init(struct uwe5622 *wcn)
-{
-	spin_lock_init(&wcn->trace_lock);
-	if (kfifo_alloc(&wcn->trace_fifo, UWE5622_TRACE_RING_SIZE, GFP_KERNEL))
-		return;
-
-	wcn->trace_dir = debugfs_create_dir(dev_name(wcn->dev), NULL);
-	debugfs_create_file("trace", 0400, wcn->trace_dir, wcn,
-			    &uwe5622_trace_fops);
-	debugfs_create_file("trace_stats", 0400, wcn->trace_dir, wcn,
-			    &uwe5622_trace_stats_fops);
-}
-
-static void uwe5622_trace_exit(struct uwe5622 *wcn)
-{
-	debugfs_remove_recursive(wcn->trace_dir);
-	wcn->trace_dir = NULL;
-	kfifo_free(&wcn->trace_fifo);
-}
-
-
 void uwe5622_core_rx(struct uwe5622 *wcn, u8 channel, struct sk_buff *skb)
 {
 	struct uwe5622_client *client;
@@ -570,8 +510,17 @@ void uwe5622_core_rx(struct uwe5622 *wcn, u8 channel, struct sk_buff *skb)
 	if (client) {
 		client->ops->rx(client->priv, skb);
 	} else if (channel == wcn->services[UWE5622_SERVICE_WCN_TRACE].rx) {
-		uwe5622_core_trace_rx(wcn, skb);
+		/*
+		 * Still drained, because the channel shares its FIFO with
+		 * everything else and a page can arrive even with logging off.
+		 */
+		uwe5622_log_records++;
 		kfree_skb(skb);
+	} else if (channel == wcn->services[UWE5622_SERVICE_AT].rx) {
+		dev_dbg(wcn->dev, "AT answer: %*phN\n", (int)skb->len,
+			skb->data);
+		kfree_skb(skb);
+		complete(&wcn->at_done);
 	} else {
 		dev_dbg_ratelimited(wcn->dev,
 				    "dropping %u bytes on unclaimed channel %u\n",
@@ -589,7 +538,7 @@ int uwe5622_core_probe(struct uwe5622 *wcn)
 	mutex_init(&wcn->state_mutex);
 	mutex_init(&wcn->channel_mutex);
 	uwe5622_recovery_target = wcn;
-	uwe5622_trace_init(wcn);
+	init_completion(&wcn->at_done);
 	INIT_WORK(&wcn->recovery_work, uwe5622_recovery_work);
 	ret = init_srcu_struct(&wcn->channel_srcu);
 	if (ret)
@@ -617,6 +566,7 @@ int uwe5622_core_probe(struct uwe5622 *wcn)
 	release_firmware(fw);
 	if (ret)
 		goto err_start;
+	uwe5622_quiet_firmware_log(wcn);
 
 	wcn->state = UWE5622_READY;
 	wcn->wifi_auxdev = uwe5622_auxdev_add(wcn, "wifi");
@@ -686,7 +636,6 @@ void uwe5622_core_remove(struct uwe5622 *wcn)
 	wcn->state = UWE5622_OFF;
 	mutex_unlock(&wcn->state_mutex);
 	cleanup_srcu_struct(&wcn->channel_srcu);
-	uwe5622_trace_exit(wcn);
 }
 
 void uwe5622_core_shutdown(struct uwe5622 *wcn)

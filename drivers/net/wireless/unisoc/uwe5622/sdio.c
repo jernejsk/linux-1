@@ -1411,6 +1411,8 @@ static int uwe5622_sdio_probe(struct sdio_func *func,
 	/* Receive only: nothing is ever sent to the trace ring. */
 	sdio->wcn.services[UWE5622_SERVICE_WCN_TRACE] =
 		(struct uwe5622_channel_pair) { 0, 15 };
+	sdio->wcn.services[UWE5622_SERVICE_AT] =
+		(struct uwe5622_channel_pair) { 0, 13 };
 	sdio->wcn.bluetooth_enable = devm_gpiod_get_optional(&func->dev,
 					"bluetooth-enable", GPIOD_OUT_LOW);
 	if (IS_ERR(sdio->wcn.bluetooth_enable))
