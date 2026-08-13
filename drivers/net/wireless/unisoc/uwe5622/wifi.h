@@ -31,6 +31,7 @@ enum uwe5622_wifi_cmd_id {
 	UWE5622_CMD_START_AP = 17,
 	UWE5622_CMD_DEL_STATION = 18,
 	UWE5622_CMD_SET_IE = 25,
+	UWE5622_CMD_SET_ROAM_OFFLOAD = 28,
 	UWE5622_CMD_NOTIFY_IP_ACQUIRED = 26,
 	UWE5622_CMD_ADDBA_REQ = 40,
 	UWE5622_CMD_BA = 68,
@@ -95,6 +96,9 @@ struct uwe5622_vif {
 	u8 credit_pool;
 	bool opened;
 	bool connected;
+	/* Reopens the firmware context after it refuses an association. */
+	struct delayed_work connect_watchdog;
+	struct work_struct recover_work;
 	struct napi_struct napi;
 	struct sk_buff_head rx_queue;
 	bool napi_ready;

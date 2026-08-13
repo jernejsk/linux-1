@@ -44,6 +44,14 @@
 
 #define UWE5622_GET_INFO_CAP_5G	BIT(0)
 #define UWE5622_GET_INFO_CAP_AP_SME BIT(3)
+/*
+ * The firmware follows access point driven transitions by itself. It is not used
+ * by default: its roam flag latches from scan data and no failure path clears it,
+ * so once a transition is refused the firmware keeps building association requests
+ * with fast transition elements and every later association is rejected. That is
+ * the defect behind Orange Pi issue 98.
+ */
+#define UWE5622_GET_INFO_CAP_11R_ROAM_OFFLOAD BIT(5)
 
 enum uwe5622_cipher {
 	UWE5622_CIPHER_NONE,
@@ -708,6 +716,82 @@ static void uwe5622_deliver_vif(struct uwe5622_vif *vif,
 	while ((skb = __skb_dequeue(done)))
 		skb_queue_tail(&vif->rx_queue, skb);
 	napi_schedule(&vif->napi);
+}
+
+static int uwe5622_reopen_firmware(struct uwe5622_vif *vif);
+
+static bool uwe5622_roam_offload;
+module_param_named(roam_offload, uwe5622_roam_offload, bool, 0644);
+MODULE_PARM_DESC(roam_offload,
+		 "let the firmware follow access point driven transitions itself");
+
+/* Subtypes of the roaming command, from the firmware's own numbering. */
+#define UWE5622_ROAM_SET_FLAG	1
+#define UWE5622_ROAM_SET_FT_IE	2
+#define UWE5622_ROAM_SET_PMK	3
+
+static int uwe5622_set_roam_offload(struct uwe5622_vif *vif, u8 type,
+				    const void *value, u8 len)
+{
+	struct {
+		u8 type;
+		u8 len;
+		u8 value[16];
+	} __packed cmd = { .type = type, .len = len };
+
+	if (len > sizeof(cmd.value))
+		return -EINVAL;
+	if (!(vif->wifi->fw_capa & UWE5622_GET_INFO_CAP_11R_ROAM_OFFLOAD))
+		return -EOPNOTSUPP;
+	memcpy(cmd.value, value, len);
+
+	return uwe5622_wifi_cmd(vif->wifi, vif->ctx_id,
+				UWE5622_CMD_SET_ROAM_OFFLOAD, &cmd,
+				sizeof(cmd) - sizeof(cmd.value) + len,
+				NULL, NULL, NULL);
+}
+
+/*
+ * The firmware latches a roaming flag from what it scanned, puts fast transition
+ * elements into every association request while it is set, and clears it on no
+ * failure path of its own: once a transition is refused, every later association
+ * is refused too, for good. The flag lives in the per-context state, so trading
+ * the context for a fresh one is what clears it. This costs one association and
+ * is the difference between a link that recovers and one that never does.
+ */
+/*
+ * A connect the firmware never answers, in either direction, is the shape the
+ * roaming defect takes here: no refusal arrives, no association happens, and the
+ * interface scans for ever. Nothing in the firmware recovers from it, so give the
+ * attempt a deadline and replace the context when it passes.
+ */
+#define UWE5622_CONNECT_TIMEOUT	msecs_to_jiffies(8000)
+
+static void uwe5622_connect_watchdog(struct work_struct *work)
+{
+	struct uwe5622_vif *vif = container_of(to_delayed_work(work),
+					       struct uwe5622_vif,
+					       connect_watchdog);
+
+	dev_warn(vif->wifi->dev,
+		 "no answer to the association attempt, replacing the context\n");
+	schedule_work(&vif->recover_work);
+}
+
+static void uwe5622_recover_work(struct work_struct *work)
+{
+	struct uwe5622_vif *vif = container_of(work, struct uwe5622_vif,
+					       recover_work);
+	int ret;
+
+	ret = uwe5622_reopen_firmware(vif);
+	if (ret)
+		dev_err(vif->wifi->dev,
+			"failed to replace the context after a refused association: %d\n",
+			ret);
+	else if (uwe5622_roam_offload)
+		uwe5622_set_roam_offload(vif, UWE5622_ROAM_SET_FLAG,
+					 &(u8){ 1 }, 1);
 }
 
 static bool uwe5622_rx_csum_debug;
@@ -1417,6 +1501,9 @@ static int uwe5622_open_firmware(struct uwe5622_vif *vif)
 		return -ERANGE;
 	vif->ctx_id = ctx;
 	vif->opened = true;
+	if (uwe5622_roam_offload)
+		uwe5622_set_roam_offload(vif, UWE5622_ROAM_SET_FLAG,
+					 &(u8){ 1 }, 1);
 	return 0;
 }
 
@@ -1550,6 +1637,8 @@ uwe5622_add_virtual_intf(struct wiphy *wiphy, const char *name,
 	vif->wifi = wifi;
 	vif->credit_pool = UWE5622_CREDIT_NO_POOL;
 	skb_queue_head_init(&vif->rx_queue);
+	INIT_WORK(&vif->recover_work, uwe5622_recover_work);
+	INIT_DELAYED_WORK(&vif->connect_watchdog, uwe5622_connect_watchdog);
 	vif->wdev.wiphy = wiphy;
 	vif->wdev.iftype = type;
 	vif->wdev.netdev = ndev;
@@ -1645,6 +1734,8 @@ static int uwe5622_del_virtual_intf(struct wiphy *wiphy,
 	struct uwe5622_vif *vif = uwe5622_vif_from_wdev(wdev);
 	struct net_device *ndev = wdev->netdev;
 
+	cancel_delayed_work_sync(&vif->connect_watchdog);
+	cancel_work_sync(&vif->recover_work);
 	uwe5622_forget_vif(vif);
 	uwe5622_finish_scan_wdev(wifi, wdev, true);
 	/*
@@ -1827,8 +1918,13 @@ static int uwe5622_connect(struct wiphy *wiphy, struct net_device *ndev,
 	memcpy(connect.ssid, sme->ssid, sme->ssid_len);
 
 	/* PMK offload is deliberately disabled; iwd supplies EAPOL and keys. */
-	return uwe5622_wifi_cmd(vif->wifi, vif->ctx_id, UWE5622_CMD_CONNECT,
-				&connect, sizeof(connect), NULL, NULL, NULL);
+	ret = uwe5622_wifi_cmd(vif->wifi, vif->ctx_id, UWE5622_CMD_CONNECT,
+			       &connect, sizeof(connect), NULL, NULL, NULL);
+	if (!ret)
+		mod_delayed_work(system_wq, &vif->connect_watchdog,
+				 UWE5622_CONNECT_TIMEOUT);
+
+	return ret;
 }
 
 static int uwe5622_disconnect(struct wiphy *wiphy, struct net_device *ndev,
@@ -2260,6 +2356,7 @@ static void uwe5622_event_connect(struct uwe5622_wifi *wifi, u8 ctx,
 	if (!ndev)
 		return;
 	vif = netdev_priv(ndev);
+	cancel_delayed_work(&vif->connect_watchdog);
 	if (len < 1)
 		goto out;
 	if (data[0] != 0 && data[0] != 2) {
@@ -2267,6 +2364,8 @@ static void uwe5622_event_connect(struct uwe5622_wifi *wifi, u8 ctx,
 			status = data[2];
 		cfg80211_connect_result(ndev, NULL, NULL, 0, NULL, 0,
 					status, GFP_ATOMIC);
+		/* Not from here: this arrives in atomic context. */
+		schedule_work(&vif->recover_work);
 		goto out;
 	}
 	if (len < 1 + ETH_ALEN + 2 + 2)
