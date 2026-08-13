@@ -165,38 +165,6 @@ void uwe5622_core_tx_error(struct uwe5622 *wcn, u8 tx_channel, u8 tag)
 	srcu_read_unlock(&wcn->channel_srcu, idx);
 }
 
-static struct uwe5622 *uwe5622_recovery_target;
-
-/*
- * Asking for a recovery by hand. A controller whose core has stopped answering
- * does not necessarily fail a transfer - the writes still land, nothing acts on
- * them - so there are states the driver cannot notice on its own, and this is how
- * they get exercised.
- */
-static int uwe5622_force_recovery_set(const char *val,
-				      const struct kernel_param *kp)
-{
-	struct uwe5622 *wcn = uwe5622_recovery_target;
-	bool ask;
-	int ret;
-
-	ret = kstrtobool(val, &ask);
-	if (ret)
-		return ret;
-	if (!ask || !wcn)
-		return ask ? -ENODEV : 0;
-
-	dev_info(wcn->dev, "recovery requested by hand\n");
-	uwe5622_core_request_recovery(wcn);
-
-	return 0;
-}
-
-static const struct kernel_param_ops uwe5622_force_recovery_ops = {
-	.set = uwe5622_force_recovery_set,
-};
-module_param_cb(force_recovery, &uwe5622_force_recovery_ops, NULL, 0200);
-
 void uwe5622_core_request_recovery(struct uwe5622 *wcn)
 {
 	mutex_lock(&wcn->state_mutex);
@@ -524,7 +492,6 @@ int uwe5622_core_probe(struct uwe5622 *wcn)
 
 	mutex_init(&wcn->state_mutex);
 	mutex_init(&wcn->channel_mutex);
-	uwe5622_recovery_target = wcn;
 	init_completion(&wcn->at_done);
 	INIT_WORK(&wcn->recovery_work, uwe5622_recovery_work);
 	ret = init_srcu_struct(&wcn->channel_srcu);

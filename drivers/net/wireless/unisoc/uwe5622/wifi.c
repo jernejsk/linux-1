@@ -715,10 +715,9 @@ static void uwe5622_deliver_vif(struct uwe5622_vif *vif,
 {
 	struct sk_buff *skb;
 
-
 	if (!vif->napi_ready ||
 	    skb_queue_len(&vif->rx_queue) >= UWE5622_NAPI_QUEUE_LIMIT) {
-			uwe5622_deliver(done);
+		uwe5622_deliver(done);
 		return;
 	}
 
@@ -866,7 +865,7 @@ struct uwe5622_cmd_addba {
 } __packed;
 
 /*
- * Block acknowledgement sessions the peer proposes. The firmware does not accept
+ * Block acknowledgment sessions the peer proposes. The firmware does not accept
  * one by itself and only aggregates once the host answers, so without this the
  * peer sends single frames and the link runs at a fraction of its rate. The
  * answer cannot be sent from the receive path where the request arrives, so it
