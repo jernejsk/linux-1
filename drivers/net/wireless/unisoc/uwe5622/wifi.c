@@ -2491,8 +2491,10 @@ void uwe5622_wowlan_marked_event(struct uwe5622_wifi *wifi, u8 id)
 }
 
 /*
- * The pattern the controller's own matcher looks for: six 0xff bytes and then
- * the interface address sixteen times, anywhere in the frame.
+ * Six 0xff bytes and then one address sixteen times, anywhere in the frame.
+ * Which address is a firmware matter: its matcher compares the associated
+ * access point's own address rather than the interface's, so a frame that woke
+ * the controller carries whichever of the two that firmware asks senders for.
  */
 static bool uwe5622_is_magic_packet(const u8 *frame, u16 len, const u8 *addr)
 {
@@ -2522,13 +2524,19 @@ static void uwe5622_wowlan_marked_frame(struct uwe5622_wifi *wifi,
 					struct net_device *ndev,
 					const u8 *frame, u16 len)
 {
+	struct wireless_dev *wdev = ndev->ieee80211_ptr;
 	unsigned long flags;
+	bool magic;
+
+	magic = uwe5622_is_magic_packet(frame, len, ndev->dev_addr);
+	if (!magic && wdev->iftype == NL80211_IFTYPE_STATION)
+		magic = uwe5622_is_magic_packet(frame, len,
+						wdev->u.client.connected_addr);
 
 	spin_lock_irqsave(&wifi->wowlan_lock, flags);
 	if (uwe5622_wowlan_take(wifi)) {
 		wifi->wowlan.seen = true;
-		wifi->wowlan.woke_magic = wifi->wowlan.magic &&
-			uwe5622_is_magic_packet(frame, len, ndev->dev_addr);
+		wifi->wowlan.woke_magic = wifi->wowlan.magic && magic;
 		/*
 		 * Keep the frame itself. It is the whole of the answer for the
 		 * trigger that wakes for anything, and it is worth having
