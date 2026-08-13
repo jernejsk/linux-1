@@ -75,6 +75,32 @@ struct uwe5622_cmd_hdr {
 	u8 reserved[2];
 } __packed;
 
+/*
+ * Bit 3 of the first byte of every host-bound command, event and receive
+ * descriptor. The firmware sets it on whatever it builds while its power
+ * management state says asleep and clears it once awake, which makes it the
+ * only account of what woke the system that the controller gives.
+ */
+#define UWE5622_HOST_RESUME_MARK	BIT(3)
+
+/* Enough of the frame that woke the system to identify it. */
+#define UWE5622_WOWLAN_PACKET_MAX	256
+
+struct uwe5622_wowlan {
+	/* What this sleep asked the controller to wake for. */
+	bool armed;
+	bool any;
+	bool magic;
+	bool disconnect;
+	/* What the controller marked as responsible, first marked object only. */
+	bool seen;
+	bool woke_disconnect;
+	bool woke_magic;
+	u16 packet_len;
+	u16 packet_present;
+	u8 packet[UWE5622_WOWLAN_PACKET_MAX];
+};
+
 struct uwe5622_wifi;
 
 struct uwe5622_wifi_skb_cb {
@@ -176,6 +202,10 @@ struct uwe5622_wifi {
 	bool stopping;
 	/* Set while the firmware is parked for system sleep. */
 	bool parked;
+	/* Protects the wake-up state below. */
+	spinlock_t wowlan_lock;
+	struct uwe5622_wowlan wowlan;
+	struct delayed_work wowlan_work;
 	u8 perm_addr[ETH_ALEN];
 	u32 fw_capa;
 	u32 fw_std;
@@ -194,5 +224,6 @@ void uwe5622_wifi_cmd_reset(void *priv);
 void uwe5622_wifi_event(struct uwe5622_wifi *wifi,
 			const struct uwe5622_cmd_hdr *hdr,
 			const u8 *data, size_t len);
+void uwe5622_wowlan_marked_event(struct uwe5622_wifi *wifi, u8 id);
 
 #endif

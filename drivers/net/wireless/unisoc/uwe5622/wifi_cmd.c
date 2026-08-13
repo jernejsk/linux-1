@@ -116,6 +116,13 @@ void uwe5622_wifi_cmd_rx(void *priv, struct sk_buff *skb)
 	payload_len = len - sizeof(*hdr);
 	type = FIELD_GET(UWE5622_HEAD_TYPE_MASK, hdr->common);
 
+	/*
+	 * Built while the controller was asleep, which is what identifies the
+	 * object the system was woken for.
+	 */
+	if (hdr->common & UWE5622_HOST_RESUME_MARK)
+		uwe5622_wowlan_marked_event(wifi, hdr->id);
+
 	if (type == UWE5622_HEAD_TYPE_EVENT) {
 		uwe5622_wifi_event(wifi, hdr, skb->data + sizeof(*hdr),
 				   payload_len);

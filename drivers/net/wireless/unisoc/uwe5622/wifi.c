@@ -2002,6 +2002,89 @@ static void uwe5622_set_parked(struct uwe5622_wifi *wifi, bool parked)
 	mutex_unlock(&wifi->cmd_mutex);
 }
 
+/*
+ * Which frames the controller should wake the system for. The subtypes come from
+ * the firmware's own numbering: zero is its default, which wakes for anything it
+ * would normally hand up, and is also how a controller is told to forget an
+ * earlier request.
+ */
+#define UWE5622_WOWLAN_ANY		0
+#define UWE5622_WOWLAN_MAGIC_PKT	1
+#define UWE5622_WOWLAN_DISCONNECT	2
+
+/*
+ * How long resume waits for the object the controller marked. It cannot deliver
+ * that object until the transport is reading again, so reporting from resume
+ * itself would race the record and call every wake unknown.
+ */
+#define UWE5622_WOWLAN_REPORT_DELAY	msecs_to_jiffies(500)
+
+static int uwe5622_set_wowlan(struct uwe5622_wifi *wifi, u8 subtype)
+{
+	u8 cmd[2] = { subtype, 0 };
+
+	return uwe5622_wifi_cmd(wifi, 0, UWE5622_CMD_SET_WOWLAN, cmd,
+				sizeof(cmd), NULL, NULL, NULL);
+}
+
+/*
+ * Program what this sleep asked for, not what the last change to the
+ * configuration asked for: cfg80211 hands a wake configuration to suspend every
+ * time, while it announces one through set_wakeup() only when wake-up as a whole
+ * is switched on or off. A trigger set edited while it was already enabled never
+ * reaches that callback at all.
+ */
+static int uwe5622_arm_wowlan(struct uwe5622_wifi *wifi,
+			      struct cfg80211_wowlan *wowlan)
+{
+	struct uwe5622_wowlan armed = {};
+	unsigned long flags;
+	int ret;
+
+	cancel_delayed_work_sync(&wifi->wowlan_work);
+
+	/*
+	 * Start from the controller's default so a trigger dropped since the last
+	 * sleep is dropped here too, then add what was asked for.
+	 */
+	ret = uwe5622_set_wowlan(wifi, UWE5622_WOWLAN_ANY);
+	if (ret || !wowlan)
+		goto out;
+
+	if (wowlan->any) {
+		/*
+		 * The default already wakes for anything the controller would
+		 * hand up, so there is nothing more to program; what it wakes
+		 * for still has to be remembered to be able to report it.
+		 */
+		armed.any = true;
+	} else {
+		if (wowlan->magic_pkt) {
+			ret = uwe5622_set_wowlan(wifi,
+						 UWE5622_WOWLAN_MAGIC_PKT);
+			if (ret)
+				goto out;
+			armed.magic = true;
+		}
+		if (wowlan->disconnect) {
+			ret = uwe5622_set_wowlan(wifi,
+						 UWE5622_WOWLAN_DISCONNECT);
+			if (ret)
+				goto out;
+			armed.disconnect = true;
+		}
+		if (!armed.magic && !armed.disconnect)
+			goto out;
+	}
+	armed.armed = true;
+out:
+	spin_lock_irqsave(&wifi->wowlan_lock, flags);
+	wifi->wowlan = armed;
+	spin_unlock_irqrestore(&wifi->wowlan_lock, flags);
+
+	return ret;
+}
+
 static int uwe5622_wifi_suspend(struct wiphy *wiphy,
 				struct cfg80211_wowlan *wowlan)
 {
@@ -2016,15 +2099,74 @@ static int uwe5622_wifi_suspend(struct wiphy *wiphy,
 	if (!ndev)
 		return 0;
 	vif = netdev_priv(ndev);
+
+	/* Both of these have to reach a controller that is still answering. */
+	ret = uwe5622_arm_wowlan(wifi, wowlan);
+	if (ret) {
+		dev_err(wifi->dev, "failed to arm wake-up triggers: %d\n", ret);
+		goto out;
+	}
+
 	ret = uwe5622_wifi_cmd(wifi, vif->ctx_id, UWE5622_CMD_POWER_SAVE,
 			       data, sizeof(data), NULL, NULL, NULL);
 	if (!ret) {
 		uwe5622_set_parked(wifi, true);
 		netif_device_detach(ndev);
 	}
+out:
 	dev_put(ndev);
 
 	return ret;
+}
+
+/*
+ * Say what woke the system, once the receive path has had its chance to deliver
+ * the object the controller marked. A marked disconnect event and a marked frame
+ * carrying the magic pattern are exact reasons; a marked frame that matched no
+ * trigger of its own is still the packet that did it and is reported as such.
+ * Nothing marked means the system woke for something other than this controller,
+ * which is reported as a wake whose cause is not known.
+ */
+static void uwe5622_wowlan_report(struct work_struct *work)
+{
+	struct uwe5622_wifi *wifi = container_of(to_delayed_work(work),
+						 struct uwe5622_wifi,
+						 wowlan_work);
+	struct cfg80211_wowlan_wakeup wakeup = {
+		/* Anything but negative claims a matched packet pattern. */
+		.pattern_idx = -1,
+	};
+	struct net_device *ndev = uwe5622_first_ndev(wifi);
+	struct uwe5622_wowlan woke;
+	unsigned long flags;
+
+	if (!ndev)
+		return;
+
+	spin_lock_irqsave(&wifi->wowlan_lock, flags);
+	woke = wifi->wowlan;
+	wifi->wowlan.armed = false;
+	spin_unlock_irqrestore(&wifi->wowlan_lock, flags);
+
+	if (!woke.armed)
+		goto out;
+
+	if (!woke.seen) {
+		cfg80211_report_wowlan_wakeup(ndev->ieee80211_ptr, NULL,
+					      GFP_KERNEL);
+		goto out;
+	}
+
+	wakeup.disconnect = woke.woke_disconnect;
+	wakeup.magic_pkt = woke.woke_magic;
+	if (woke.packet_len) {
+		wakeup.packet = woke.packet;
+		wakeup.packet_len = woke.packet_present;
+		wakeup.packet_present_len = woke.packet_len;
+	}
+	cfg80211_report_wowlan_wakeup(ndev->ieee80211_ptr, &wakeup, GFP_KERNEL);
+out:
+	dev_put(ndev);
 }
 
 static int uwe5622_wifi_resume(struct wiphy *wiphy)
@@ -2047,9 +2189,9 @@ static int uwe5622_wifi_resume(struct wiphy *wiphy)
 	ret = uwe5622_wifi_cmd(wifi, vif->ctx_id, UWE5622_CMD_POWER_SAVE,
 			       data, sizeof(data), NULL, NULL, NULL);
 	/*
-	 * Attach either way. A controller that did not answer is better handed
-	 * to a stack that can time out, disconnect and try again than left with
-	 * an interface nothing can be sent through.
+	 * Attach either way. A controller that did not answer is better handed to
+	 * a stack that can time out, disconnect and try again than left with an
+	 * interface nothing can be sent through.
 	 */
 	if (ret)
 		dev_warn(wifi->dev, "controller did not wake cleanly: %d\n",
@@ -2057,36 +2199,21 @@ static int uwe5622_wifi_resume(struct wiphy *wiphy)
 	netif_device_attach(ndev);
 	dev_put(ndev);
 
+	schedule_delayed_work(&wifi->wowlan_work, UWE5622_WOWLAN_REPORT_DELAY);
+
 	return 0;
 }
 
 #ifdef CONFIG_PM
+/*
+ * Only the physical wake source belongs here. What the controller should wake
+ * for is programmed at suspend, from the configuration that suspend is handed.
+ */
 static void uwe5622_set_wakeup(struct wiphy *wiphy, bool enabled)
 {
 	struct uwe5622_wifi *wifi = wiphy_priv(wiphy);
-	struct cfg80211_wowlan *wowlan = wiphy->wowlan_config;
-	u8 data[2] = {};
-	int ret = 0;
 
 	uwe5622_set_wake(wifi->cmd_client, enabled);
-	if (!enabled || !wowlan || wowlan->any) {
-		data[0] = 0;
-		ret = uwe5622_wifi_cmd(wifi, 0, UWE5622_CMD_SET_WOWLAN,
-				       data, sizeof(data), NULL, NULL, NULL);
-	} else {
-		if (wowlan->magic_pkt) {
-			data[0] = 1;
-			ret = uwe5622_wifi_cmd(wifi, 0, UWE5622_CMD_SET_WOWLAN,
-					       data, sizeof(data), NULL, NULL, NULL);
-		}
-		if (!ret && wowlan->disconnect) {
-			data[0] = 2;
-			ret = uwe5622_wifi_cmd(wifi, 0, UWE5622_CMD_SET_WOWLAN,
-					       data, sizeof(data), NULL, NULL, NULL);
-		}
-	}
-	if (ret)
-		dev_warn(wifi->dev, "failed to configure WoWLAN: %d\n", ret);
 }
 
 static const struct wiphy_wowlan_support uwe5622_wowlan_support = {
@@ -2324,6 +2451,83 @@ void uwe5622_wifi_event(struct uwe5622_wifi *wifi,
 	}
 }
 
+/*
+ * The controller marks the command, event or received frame it built while
+ * asleep, and that object is the account of what woke the system. The first
+ * marked one is kept for the sleep it belongs to; there can be several, and
+ * only the first is the cause.
+ */
+static bool uwe5622_wowlan_take(struct uwe5622_wifi *wifi)
+	__must_hold(&wifi->wowlan_lock)
+{
+	return wifi->wowlan.armed && !wifi->wowlan.seen;
+}
+
+void uwe5622_wowlan_marked_event(struct uwe5622_wifi *wifi, u8 id)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&wifi->wowlan_lock, flags);
+	if (uwe5622_wowlan_take(wifi) && id == UWE5622_EVENT_DISCONNECT &&
+	    wifi->wowlan.disconnect) {
+		wifi->wowlan.seen = true;
+		wifi->wowlan.woke_disconnect = true;
+	}
+	spin_unlock_irqrestore(&wifi->wowlan_lock, flags);
+}
+
+/*
+ * The pattern the controller's own matcher looks for: six 0xff bytes and then
+ * the interface address sixteen times, anywhere in the frame.
+ */
+static bool uwe5622_is_magic_packet(const u8 *frame, u16 len, const u8 *addr)
+{
+	static const u8 sync[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+	u16 need = sizeof(sync) + 16 * ETH_ALEN;
+	u16 i, rep;
+
+	if (len < ETH_HLEN + need)
+		return false;
+
+	/* Skip the destination address, which is six 0xff bytes on a broadcast. */
+	for (i = ETH_ALEN; i + need <= len; i++) {
+		if (memcmp(frame + i, sync, sizeof(sync)))
+			continue;
+		for (rep = 0; rep < 16; rep++)
+			if (memcmp(frame + i + sizeof(sync) + rep * ETH_ALEN,
+				   addr, ETH_ALEN))
+				break;
+		if (rep == 16)
+			return true;
+	}
+
+	return false;
+}
+
+static void uwe5622_wowlan_marked_frame(struct uwe5622_wifi *wifi,
+					struct net_device *ndev,
+					const u8 *frame, u16 len)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&wifi->wowlan_lock, flags);
+	if (uwe5622_wowlan_take(wifi)) {
+		wifi->wowlan.seen = true;
+		wifi->wowlan.woke_magic = wifi->wowlan.magic &&
+			uwe5622_is_magic_packet(frame, len, ndev->dev_addr);
+		/*
+		 * Keep the frame itself. It is the whole of the answer for the
+		 * trigger that wakes for anything, and it is worth having
+		 * alongside a magic packet as well.
+		 */
+		wifi->wowlan.packet_present = len;
+		wifi->wowlan.packet_len = min_t(u16, len,
+						UWE5622_WOWLAN_PACKET_MAX);
+		memcpy(wifi->wowlan.packet, frame, wifi->wowlan.packet_len);
+	}
+	spin_unlock_irqrestore(&wifi->wowlan_lock, flags);
+}
+
 static void uwe5622_rx_one_frame(struct uwe5622_wifi *wifi,
 				 const u8 *data, size_t len,
 				 bool csum_present, u16 csum_raw)
@@ -2353,6 +2557,9 @@ static void uwe5622_rx_one_frame(struct uwe5622_wifi *wifi,
 		goto out;
 	}
 	skb_put_data(skb, data + offset, frame_len);
+	if (unlikely(word & UWE5622_HOST_RESUME_MARK))
+		uwe5622_wowlan_marked_frame(wifi, ndev, data + offset,
+					    frame_len);
 	if (csum_present)
 		skb->ip_summed = uwe5622_rx_csum(data + offset, frame_len,
 						 csum_raw);
@@ -2692,6 +2899,8 @@ static int uwe5622_wifi_probe(struct auxiliary_device *adev,
 	spin_lock_init(&wifi->vif_lock);
 	spin_lock_init(&wifi->scan_lock);
 	spin_lock_init(&wifi->credit_lock);
+	spin_lock_init(&wifi->wowlan_lock);
+	INIT_DELAYED_WORK(&wifi->wowlan_work, uwe5622_wowlan_report);
 	skb_queue_head_init(&wifi->eapol_queue);
 	INIT_WORK(&wifi->eapol_work, uwe5622_eapol_work);
 	skb_queue_head_init(&wifi->ba_queue);
@@ -2777,6 +2986,7 @@ static void uwe5622_wifi_remove(struct auxiliary_device *adev)
 	skb_queue_purge(&wifi->eapol_queue);
 	cancel_work_sync(&wifi->ba_work);
 	skb_queue_purge(&wifi->ba_queue);
+	cancel_delayed_work_sync(&wifi->wowlan_work);
 	uwe5622_finish_scan(wifi, true);
 	rtnl_lock();
 	for (i = 0; i < UWE5622_WIFI_MAX_CTX; i++) {

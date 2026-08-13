@@ -51,6 +51,16 @@
 #define UWE5622_SYNC_ALL_FINISHED	0xf0f0f0ff
 
 /* SDMA RX, 840-byte blocks, and an in-band DATA1 interrupt. */
+/*
+ * The controller has to be told when the host stops being able to take an
+ * in-band interrupt, because that is when it starts using the host-wake output
+ * instead. Without this it stays quiet and nothing wakes the system.
+ */
+#define UWE5622_F0_AP_INT_CP0		0x1b0
+#define UWE5622_AP_INT_ALLOW_SLEEP	BIT(0)
+#define UWE5622_AP_INT_SUSPEND		BIT(5)
+#define UWE5622_AP_INT_RESUME		BIT(6)
+
 #define UWE5622_SDIO_CONFIG_ENABLE	BIT(0)
 #define UWE5622_SDIO_CONFIG_SDMA_RX	BIT(4)
 #define UWE5622_SDIO_CONFIG_BLK_SIZE	GENMASK(7, 5)
@@ -61,8 +71,14 @@
 #define UWE5622_SDIO_CONFIG_WLAN_TRIGGER	GENMASK(17, 16)
 #define UWE5622_SDIO_CONFIG_WAKE_DURATION GENMASK(22, 18)
 
-#define UWE5622_WAKE_TRIGGER_LOW		0
-#define UWE5622_WAKE_TRIGGER_HIGH	3
+/*
+ * How the controller drives its wake output. It only tells active-low from
+ * active-high: every non-zero encoding gives the same active-high pulse, and
+ * neither keeps the edge-versus-level distinction the interrupt was described
+ * with.
+ */
+#define UWE5622_WAKE_PULSE_LOW		0
+#define UWE5622_WAKE_PULSE_HIGH		3
 #define UWE5622_WAKE_DURATION_STEP_MS	10
 #define UWE5622_WAKE_DURATION_DEFAULT_MS	20
 
@@ -126,7 +142,9 @@ struct uwe5622_sdio {
 	u8 *rx_buf;
 	bool enabled;
 	bool irq_claimed;
-	bool wake_irq_set;
+	int wake_irq;
+	bool wake_irq_armed;
+	bool wake_expected;
 	u32 wake_config;
 	/* Aggregated receive: one buffer per packet plus the transfer trailer. */
 	void *rx_pac[UWE5622_RX_PAC_MAX];
@@ -956,28 +974,130 @@ static int uwe5622_sdio_tx(struct uwe5622 *wcn, u8 channel,
 	return 0;
 }
 
+/*
+ * Let the controller sleep, or hold it awake. It only drives the host-wake line
+ * from its own low power state, so the state that costs a wake-up per transfer
+ * while the system runs is exactly the state the system has to leave it in when
+ * it suspends.
+ */
+static void uwe5622_sdio_allow_sleep(struct uwe5622_sdio *sdio, bool allow)
+{
+	int ret = 0;
+
+	sdio_claim_host(sdio->func);
+	sdio_f0_writeb(sdio->func, allow ? 1 : 0, UWE5622_F0_SLEEP_CTL, &ret);
+	if (allow && !ret) {
+		/*
+		 * The request is the byte and then this strobe, which is a
+		 * different bit of the same register the system suspend state is
+		 * reported through. The controller needs two cycles of its
+		 * 32 kHz clock to take it.
+		 */
+		sdio_f0_writeb(sdio->func, UWE5622_AP_INT_ALLOW_SLEEP,
+			       UWE5622_F0_AP_INT_CP0, &ret);
+		udelay(65);
+	}
+	sdio_release_host(sdio->func);
+	if (ret)
+		dev_warn(&sdio->func->dev,
+			 "failed to %s the controller sleeping: %d\n",
+			 allow ? "allow" : "stop", ret);
+}
+
+/*
+ * Tell the controller that the host is going down or has come back. The vendor
+ * driver does the same two writes, and they are what arms and disarms the
+ * host-wake output on its side.
+ */
+static void uwe5622_sdio_notify_host_pm(struct uwe5622_sdio *sdio, u8 event)
+{
+	int ret = 0;
+
+	sdio_claim_host(sdio->func);
+	sdio_f0_writeb(sdio->func, event, UWE5622_F0_AP_INT_CP0, &ret);
+	sdio_release_host(sdio->func);
+	if (ret)
+		dev_warn(&sdio->func->dev,
+			 "failed to report host power state %#x: %d\n", event,
+			 ret);
+}
+
 static int uwe5622_sdio_suspend_bus(struct uwe5622 *wcn, bool wake)
 {
 	struct uwe5622_sdio *sdio = wcn->bus_priv;
 	mmc_pm_flag_t required = MMC_PM_KEEP_POWER;
 	mmc_pm_flag_t caps;
+	int ret;
 
 	flush_work(&sdio->tx_work);
 
 	/* An out-of-band host-wake interrupt replaces SDIO IRQ wake support. */
-	if (wake && device_may_wakeup(&sdio->func->dev) &&
-	    !sdio->wake_irq_set)
+	if (wake && device_may_wakeup(&sdio->func->dev) && !sdio->wake_irq)
 		required |= MMC_PM_WAKE_SDIO_IRQ;
 
 	caps = sdio_get_host_pm_caps(sdio->func);
 	if ((caps & required) != required)
 		return -EOPNOTSUPP;
 
-	return sdio_set_host_pm_flags(sdio->func, required);
+	ret = sdio_set_host_pm_flags(sdio->func, required);
+	if (ret)
+		return ret;
+
+	/*
+	 * Last, once nothing else will be asked of the controller: from here it
+	 * answers by driving the host-wake line rather than the bus.
+	 */
+	if (wake && sdio->wake_config && sdio->wake_irq) {
+		/*
+		 * Read out whatever is already waiting first, then listen before
+		 * saying anything. Being told the host is going down makes the
+		 * transport answer the next pending record with a pulse on the
+		 * wake line instead of a transfer, and it does that once: a
+		 * record from before the sleep would otherwise spend the only
+		 * pulse there is, leaving the sleep deaf to everything after it.
+		 * If one is pending anyway, the pulse arrives against an armed
+		 * interrupt and the sleep is abandoned, which is the right answer
+		 * when there is something to read.
+		 */
+		uwe5622_sdio_drain_rx_aggregated(sdio);
+
+		/*
+		 * Drop an edge latched while the interrupt was masked, so the
+		 * one pulse that matters is not answered by an older one.
+		 */
+		irq_set_irqchip_state(sdio->wake_irq, IRQCHIP_STATE_PENDING,
+				      false);
+		enable_irq(sdio->wake_irq);
+		ret = enable_irq_wake(sdio->wake_irq);
+		if (ret) {
+			disable_irq(sdio->wake_irq);
+			return ret;
+		}
+		sdio->wake_irq_armed = true;
+		uwe5622_sdio_notify_host_pm(sdio, UWE5622_AP_INT_SUSPEND);
+		/* From here a pulse means the controller wants the host back. */
+		WRITE_ONCE(sdio->wake_expected, true);
+		uwe5622_sdio_allow_sleep(sdio, true);
+	}
+
+	return 0;
 }
 
 static int uwe5622_sdio_resume_bus(struct uwe5622 *wcn)
 {
+	struct uwe5622_sdio *sdio = wcn->bus_priv;
+
+	if (sdio->wake_config) {
+		uwe5622_sdio_allow_sleep(sdio, false);
+		uwe5622_sdio_notify_host_pm(sdio, UWE5622_AP_INT_RESUME);
+	}
+	if (sdio->wake_irq_armed) {
+		WRITE_ONCE(sdio->wake_expected, false);
+		sdio->wake_irq_armed = false;
+		disable_irq_wake(sdio->wake_irq);
+		disable_irq(sdio->wake_irq);
+	}
+
 	return 0;
 }
 
@@ -990,6 +1110,31 @@ static const struct uwe5622_bus_ops uwe5622_sdio_bus_ops = {
 	.suspend = uwe5622_sdio_suspend_bus,
 	.resume = uwe5622_sdio_resume_bus,
 };
+
+/*
+ * The controller pulsed its host-wake output. There is nothing to read here: the
+ * record it is holding is delivered once the transport is running again, and all
+ * this has to do is tell the power management core that this device is why the
+ * system is coming back, which also aborts a suspend still in progress.
+ */
+static irqreturn_t uwe5622_sdio_wake_irq(int irq, void *data)
+{
+	struct uwe5622_sdio *sdio = data;
+
+	/*
+	 * An edge that arrived while the interrupt was masked is delivered as
+	 * soon as it is unmasked, and that is not a wake: the controller has not
+	 * been told the host is going down yet, so it is still answering the bus
+	 * normally and whatever it wanted will be read on the way out of suspend.
+	 */
+	if (!READ_ONCE(sdio->wake_expected))
+		return IRQ_HANDLED;
+
+	pm_wakeup_event(&sdio->func->dev, 0);
+	dev_dbg(&sdio->func->dev, "controller asked to be read\n");
+
+	return IRQ_HANDLED;
+}
 
 static int uwe5622_sdio_set_wake_config(struct uwe5622_sdio *sdio, int irq,
 					bool bluetooth)
@@ -1016,17 +1161,24 @@ static int uwe5622_sdio_set_wake_config(struct uwe5622_sdio *sdio, int irq,
 	switch (irq_get_trigger_type(irq)) {
 	case IRQ_TYPE_EDGE_RISING:
 	case IRQ_TYPE_LEVEL_HIGH:
-		trigger = UWE5622_WAKE_TRIGGER_HIGH;
+		trigger = UWE5622_WAKE_PULSE_HIGH;
 		break;
 	case IRQ_TYPE_EDGE_FALLING:
 	case IRQ_TYPE_LEVEL_LOW:
-		trigger = UWE5622_WAKE_TRIGGER_LOW;
+		trigger = UWE5622_WAKE_PULSE_LOW;
 		break;
 	default:
 		return dev_err_probe(&sdio->func->dev, -EINVAL,
 				     "host-wake interrupt polarity is invalid\n");
 	}
 
+	/*
+	 * Exactly the output the board wires, named by the interrupt it declared.
+	 * The controller brings out one per radio and carries the traffic of both
+	 * radios on whichever is enabled, but an enabled Bluetooth output always
+	 * takes precedence: enabling both would select that one even on a board
+	 * that wired the other.
+	 */
 	if (bluetooth)
 		sdio->wake_config = UWE5622_SDIO_CONFIG_BT_WAKE_EN |
 			FIELD_PREP(UWE5622_SDIO_CONFIG_BT_TRIGGER, trigger);
@@ -1067,17 +1219,26 @@ static int uwe5622_sdio_get_wake_irq(struct uwe5622_sdio *sdio)
 		return ret;
 	/*
 	 * The firmware drives this output whenever it hands a transfer to the
-	 * host, not only to wake the system, so the interrupt must stay masked
-	 * while the system is running. A dedicated wake interrupt is enabled by
-	 * the PM core for the duration of suspend only; requesting it as a
-	 * normal interrupt instead lets the firmware's per-transfer pulses
-	 * saturate the CPU with interrupts as soon as traffic starts.
+	 * host, not only to wake the system, so the interrupt stays masked while
+	 * the system is running: its per-transfer pulses would otherwise saturate
+	 * the CPU as soon as traffic starts. It is unmasked for the duration of a
+	 * sleep only.
+	 *
+	 * The PM core's dedicated wake interrupt does exactly that, but it arms
+	 * the interrupt after the last chance this driver has to talk to the
+	 * controller, and the controller answers the first record after being
+	 * told the host is going down with a single pulse. Arming has to come
+	 * first or that pulse is lost and the sleep is deaf to everything after
+	 * it, so the interrupt is this driver's to manage.
 	 */
-	ret = dev_pm_set_dedicated_wake_irq(&sdio->func->dev, irq);
+	ret = devm_request_threaded_irq(&sdio->func->dev, irq, NULL,
+					uwe5622_sdio_wake_irq,
+					IRQF_ONESHOT | IRQF_NO_AUTOEN,
+					"uwe5622-host-wake", sdio);
 	if (ret)
 		return dev_err_probe(&sdio->func->dev, ret,
-				     "failed to set host-wake IRQ\n");
-	sdio->wake_irq_set = true;
+				     "failed to request host-wake IRQ\n");
+	sdio->wake_irq = irq;
 
 	return 0;
 }
@@ -1180,7 +1341,7 @@ static int uwe5622_sdio_probe(struct sdio_func *func,
 		ret = dev_err_probe(&func->dev, PTR_ERR(sdio->rx_thread),
 				    "failed to start the receive thread\n");
 		sdio->rx_thread = NULL;
-		goto err_wake_irq;
+		goto err_wakeup;
 	}
 
 	ret = uwe5622_core_probe(&sdio->wcn);
@@ -1190,9 +1351,6 @@ static int uwe5622_sdio_probe(struct sdio_func *func,
 	kthread_stop(sdio->rx_thread);
 	skb_queue_purge(&sdio->rx_queue);
 	uwe5622_sdio_free_rx_skbs(sdio);
-err_wake_irq:
-	if (sdio->wake_irq_set)
-		dev_pm_clear_wake_irq(&func->dev);
 err_wakeup:
 	device_init_wakeup(&func->dev, false);
 	return ret;
@@ -1206,8 +1364,6 @@ static void uwe5622_sdio_remove(struct sdio_func *func)
 	kthread_stop(sdio->rx_thread);
 	skb_queue_purge(&sdio->rx_queue);
 	uwe5622_sdio_free_rx_skbs(sdio);
-	if (sdio->wake_irq_set)
-		dev_pm_clear_wake_irq(&func->dev);
 	device_init_wakeup(&func->dev, false);
 }
 
