@@ -1723,6 +1723,36 @@ static int uwe5622_reopen_firmware(struct uwe5622_vif *vif)
 	return uwe5622_remember_vif(vif);
 }
 
+/*
+ * Everything a context owns that outlives its own code: two works that can be
+ * scheduled from a firmware event, a poll instance that the netdev is about to
+ * be freed with, and whatever the poll never got around to taking. Unregistering
+ * the netdev frees it, and freeing a netdev whose poll is still attached warns,
+ * so this has to run first on every teardown path.
+ */
+static void uwe5622_quiesce_vif(struct uwe5622_vif *vif)
+{
+	struct net_device *ndev = vif->wdev.netdev;
+
+	/*
+	 * cfg80211 holds a reference to the BSS a station is associated with and
+	 * warns if the interface disappears while it still does, so an
+	 * association that never ended in a firmware event has to be ended here.
+	 */
+	if (vif->connected) {
+		vif->connected = false;
+		netif_carrier_off(ndev);
+		cfg80211_disconnected(ndev, WLAN_REASON_DEAUTH_LEAVING, NULL, 0,
+				      true, GFP_KERNEL);
+	}
+	cancel_delayed_work_sync(&vif->connect_watchdog);
+	cancel_work_sync(&vif->recover_work);
+	vif->napi_ready = false;
+	napi_disable(&vif->napi);
+	netif_napi_del(&vif->napi);
+	skb_queue_purge(&vif->rx_queue);
+}
+
 static struct wireless_dev *
 uwe5622_add_virtual_intf(struct wiphy *wiphy, const char *name,
 			unsigned char name_assign_type,
@@ -1799,10 +1829,7 @@ uwe5622_add_virtual_intf(struct wiphy *wiphy, const char *name,
 
 err_unregister:
 	/* Unregistering frees the netdev, so it must not be freed again here. */
-	vif->napi_ready = false;
-	napi_disable(&vif->napi);
-	netif_napi_del(&vif->napi);
-	skb_queue_purge(&vif->rx_queue);
+	uwe5622_quiesce_vif(vif);
 	uwe5622_close_firmware(vif);
 	cfg80211_unregister_netdevice(ndev);
 	return ERR_PTR(ret);
@@ -1854,18 +1881,9 @@ static int uwe5622_del_virtual_intf(struct wiphy *wiphy,
 	struct uwe5622_vif *vif = uwe5622_vif_from_wdev(wdev);
 	struct net_device *ndev = wdev->netdev;
 
-	cancel_delayed_work_sync(&vif->connect_watchdog);
-	cancel_work_sync(&vif->recover_work);
 	uwe5622_forget_vif(vif);
 	uwe5622_finish_scan_wdev(wifi, wdev, true);
-	/*
-	 * Stop the poll before anything else can queue to it, then empty what it
-	 * never took, so nothing is left holding the device.
-	 */
-	vif->napi_ready = false;
-	napi_disable(&vif->napi);
-	netif_napi_del(&vif->napi);
-	skb_queue_purge(&vif->rx_queue);
+	uwe5622_quiesce_vif(vif);
 	uwe5622_close_firmware(vif);
 	cfg80211_unregister_netdevice(ndev);
 	return 0;
@@ -3051,6 +3069,7 @@ static void uwe5622_wifi_remove(struct auxiliary_device *adev)
 		if (!ndev)
 			continue;
 		vif = netdev_priv(ndev);
+		uwe5622_quiesce_vif(vif);
 		uwe5622_close_firmware(vif);
 		/* Only the RTNL is held here, not the wiphy mutex. */
 		unregister_netdevice(ndev);
