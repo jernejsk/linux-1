@@ -116,6 +116,8 @@
 #define UWE5622_RX_CHANNEL_BASE		12
 #define UWE5622_SDIO_MAX_PAYLOAD		1676
 #define UWE5622_TX_ERROR_LIMIT		4
+/* How long to wait out a controller that is not ready, in milliseconds. */
+#define UWE5622_TX_BUSY_RETRIES		64
 /*
  * Transmit aggregation budget. Several records go out in one transfer, the same
  * way they arrive in one on the receive side, because a transfer costs far more
@@ -694,6 +696,7 @@ static void uwe5622_sdio_tx_work(struct work_struct *work)
 	size_t budget = uwe5622_tx_budget();
 	struct sk_buff *skb;
 	size_t used;
+	int retry;
 	int ret;
 
 	__skb_queue_head_init(&batch);
@@ -721,10 +724,24 @@ static void uwe5622_sdio_tx_work(struct work_struct *work)
 		used += sizeof(__le32);
 		used = roundup(used, UWE5622_SDIO_BLOCK_SIZE);
 
-		sdio_claim_host(sdio->func);
-		ret = sdio_writesb(sdio->func, UWE5622_SDIO_PACKET_ADDR,
-				   sdio->tx_buf, used);
-		sdio_release_host(sdio->func);
+		/*
+		 * A controller that answers busy has not refused the transfer,
+		 * it is not ready for it: its receive path is behind, which
+		 * happens while a station that is asleep has frames waiting for
+		 * it. Give it time rather than counting it as a failure, since
+		 * the failure count ends in resetting a controller that is
+		 * working perfectly well.
+		 */
+		for (retry = 0; retry <= UWE5622_TX_BUSY_RETRIES; retry++) {
+			sdio_claim_host(sdio->func);
+			ret = sdio_writesb(sdio->func,
+					   UWE5622_SDIO_PACKET_ADDR,
+					   sdio->tx_buf, used);
+			sdio_release_host(sdio->func);
+			if (ret != -EBUSY)
+				break;
+			usleep_range(1000, 2000);
+		}
 
 		if (!ret) {
 			sdio->tx_errors = 0;
