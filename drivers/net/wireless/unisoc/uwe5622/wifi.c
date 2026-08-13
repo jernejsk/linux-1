@@ -2152,7 +2152,21 @@ static void uwe5622_wowlan_report(struct work_struct *work)
 		goto out;
 
 	if (!woke.seen) {
-		cfg80211_report_wowlan_wakeup(ndev->ieee80211_ptr, NULL,
+		/*
+		 * Nothing was marked. If the controller pulled the host out of
+		 * its sleep itself then this was still a wake-up it caused, and
+		 * when a magic packet was the only thing it was watching for
+		 * then a magic packet is what it found. The matching frame is
+		 * not always handed up afterwards, and nothing else can pull the
+		 * host out while that is the only trigger armed.
+		 */
+		if (!uwe5622_woke_host(wifi->cmd_client)) {
+			cfg80211_report_wowlan_wakeup(ndev->ieee80211_ptr, NULL,
+						      GFP_KERNEL);
+			goto out;
+		}
+		wakeup.magic_pkt = woke.magic && !woke.any && !woke.disconnect;
+		cfg80211_report_wowlan_wakeup(ndev->ieee80211_ptr, &wakeup,
 					      GFP_KERNEL);
 		goto out;
 	}

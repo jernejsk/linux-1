@@ -146,6 +146,8 @@ struct uwe5622_sdio {
 	int wake_irq[2];
 	bool wake_irq_armed;
 	bool wake_expected;
+	/* Set by the host-wake handler, and the answer uwe5622_woke_host() gives. */
+	bool wake_asserted;
 	u32 wake_config;
 	/* Aggregated receive: one buffer per packet plus the transfer trailer. */
 	void *rx_pac[UWE5622_RX_PAC_MAX];
@@ -1083,13 +1085,30 @@ static int uwe5622_sdio_suspend_bus(struct uwe5622 *wcn, bool wake)
 			}
 		}
 		sdio->wake_irq_armed = true;
+		/*
+		 * Let the edges latched while the interrupts were masked be
+		 * delivered and discarded first, then start believing them: a
+		 * pulse answering the notification below can arrive before the
+		 * write returns, and it must not be taken for an old one.
+		 */
+		for (i = 0; i < ARRAY_SIZE(sdio->wake_irq); i++)
+			if (sdio->wake_irq[i])
+				synchronize_irq(sdio->wake_irq[i]);
+		WRITE_ONCE(sdio->wake_asserted, false);
+		WRITE_ONCE(sdio->wake_expected, true);
 		uwe5622_sdio_notify_host_pm(sdio, UWE5622_AP_INT_SUSPEND);
 		/* From here a pulse means the controller wants the host back. */
-		WRITE_ONCE(sdio->wake_expected, true);
 		uwe5622_sdio_allow_sleep(sdio, true);
 	}
 
 	return 0;
+}
+
+static bool uwe5622_sdio_woke_host(struct uwe5622 *wcn)
+{
+	struct uwe5622_sdio *sdio = wcn->bus_priv;
+
+	return READ_ONCE(sdio->wake_asserted);
 }
 
 static int uwe5622_sdio_resume_bus(struct uwe5622 *wcn)
@@ -1124,6 +1143,7 @@ static const struct uwe5622_bus_ops uwe5622_sdio_bus_ops = {
 	.power_cycle = uwe5622_sdio_power_cycle,
 	.suspend = uwe5622_sdio_suspend_bus,
 	.resume = uwe5622_sdio_resume_bus,
+	.woke_host = uwe5622_sdio_woke_host,
 };
 
 /*
@@ -1145,6 +1165,7 @@ static irqreturn_t uwe5622_sdio_wake_irq(int irq, void *data)
 	if (!READ_ONCE(sdio->wake_expected))
 		return IRQ_HANDLED;
 
+	WRITE_ONCE(sdio->wake_asserted, true);
 	pm_wakeup_event(&sdio->func->dev, 0);
 	dev_dbg(&sdio->func->dev, "controller asked to be read\n");
 

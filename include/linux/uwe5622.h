@@ -71,6 +71,11 @@ int uwe5622_client_send_tagged(struct uwe5622_client *client,
 int uwe5622_power_get(struct uwe5622_client *client);
 void uwe5622_power_put(struct uwe5622_client *client);
 void uwe5622_set_wake(struct uwe5622_client *client, bool enabled);
+/*
+ * Whether the controller pulled the host out of its sleep itself. Answers for
+ * the sleep that has just ended, and only until the next one is armed.
+ */
+bool uwe5622_woke_host(struct uwe5622_client *client);
 void uwe5622_recover(struct uwe5622_client *client);
 void uwe5622_bluetooth_enable(struct uwe5622_client *client, bool enabled);
 int uwe5622_bluetooth_ram(struct uwe5622_client *client, bool on);

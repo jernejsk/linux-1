@@ -375,3 +375,87 @@ whether the CP needs an interrupt enable of its own (`REG_PUB_INT_EN0`, `0x1c0`)
 before it will service `AP_INT_CP0`; and run the vendor driver on this board,
 which settles in one test whether WoWLAN works here at all and, if it does,
 gives a capture of the writes it makes around suspend to diff against ours.
+
+### Forced transport state moves the blocker to the magic matcher
+
+Forcing firmware runtime state `0x00110248 + 0x1c` to 1 read back correctly,
+but a magic packet still produced no physical pulse and the board slept for the
+full 101.9 seconds.  Both wake IRQ counts were only their old masked-edge
+replays, consumed with `expected=false`.  Thus state 1 is necessary but not
+sufficient: no accepted host-bound frame reaches `sdiom_tx_send`, so the
+`AP_SUSPEND` delivery investigation is no longer on the critical path.
+
+Static re-review found why the tested standard packets are rejected.  Firmware
+`check_is_magic_pkt` at `0x0012D0FA` gets the six-byte repeated value from
+`vif_bssid_get(vif)`, so it compares against the associated AP BSSID rather
+than the station MAC.  In addition, `check_rx_magic_pkt` routes broadcast
+destination frames around the matcher.  Both conventional test forms therefore
+miss: broadcast packets never enter the matcher, while a unicast standard
+packet repeats the wrong address from firmware's point of view.
+
+The decisive next packet is unicast at Ethernet level to the station MAC, with
+payload `ff` repeated six times followed by the AP BSSID repeated sixteen
+times.  Keep transport state forced to 1 for this test.  If it pulses PM0 and
+wakes, the firmware defect is proven end to end.  The direct repair is then a
+single call-target change at RAM `0x0012D120`, from `vif_bssid_get`
+(`0x00218A7C`) to signature-compatible `vif_mac_get` (`0x0021876A`), followed
+by separate unicast and broadcast standard-magic validation.
+
+The wake-IRQ ordering race is independently fixed: enable, synchronize the
+replayed IRQ, set `wake_expected`, then issue `AP_SUSPEND`.  The relevant
+filter and matcher functions were updated with these findings in the combined
+Ghidra `wcnmodem.bin` program.
+
+### WoWLAN works, and only the matcher was ever broken (2026-08-13)
+
+Selective wake now works on hardware and the transport state does not need
+forcing.  With trigger programming moved into `.suspend(wiphy, wowlan)`, a
+unicast standard magic packet wakes the board from s2idle on the first attempt
+and repeatably: ten consecutive cycles woke in 14.3-14.6 s of a 45 s sleep,
+each reported to userspace as `magic packet received` with the frame attached,
+each leaving the link on 5240 MHz, and 31.5 MB/s measured afterwards against a
+30-32 MB/s baseline.  Everything earlier that read as "the firmware recognizes
+nothing" was measured with no trigger armed for that sleep, because
+`.set_wakeup()` is called only when wake-up as a whole is switched on or off.
+
+The `AP_SUSPEND` handshake turned out not to matter.  The controller does not
+act on function-0 `0x1b0` bits 5 and 6 at all: `AP_RESUME` does not clear a
+transport state forced to 1, and `AP_SUSPEND` does not set it from 0.  The
+handler exists (`0x00106E18` stores 1 to runtime `+0x1c`, `0x0010606E` stores 0)
+but is never reached, because the byte it tests belongs to a status snapshot the
+SDIO interrupt routine takes rather than to the written register.  Wake works
+with the transport in state 0, so the forced-state diagnostic was a red herring
+and has been removed.  Two earlier probes were artifacts: reading the SDIO slave
+register block at `0x40140000` through the slave's own direct window returns all
+zeros or all ones, and in firmware `0x40140000` is a data array base, not that
+register block.  Function-0 `0x148` reads a constant `0x60` here.
+
+The matcher defect is confirmed on hardware in both directions.  On stock
+firmware a frame repeating the AP BSSID woke the board 3/3 while a standard
+frame repeating the station MAC never did (2/2 full sleeps, zero pulses).  After
+changing the call at `0x0012D120` to `vif_mac_get`, bytes `eb f0 ac fc` to
+`eb f0 23 fb`, the results invert exactly: station MAC wakes 3/3, BSSID no
+longer wakes.  A UDP magic packet addressed to the station's own IP wakes it;
+the same payload broadcast cannot, because `check_rx_magic_pkt` routes broadcast
+destinations around the matcher.  Since the repair lives in the firmware image,
+this driver has to keep working with the stock behaviour, and the limitation
+belongs in its documentation.
+
+Command 83's encoding was read out of firmware rather than inferred.
+`host_cmd_set_wowlan` (`0x00143D3E`) walks `{sub_cmd_id, pad_len, pad...}` TLVs
+through a nine-entry table where subcommand 0 clears the flag word and
+subcommand N ORs bit N.  The existing `{subtype, 0}` payload and the
+reset-then-add sequence are correct as they stand.
+
+Receive-path instrumentation settled wake reporting.  The controller marks its
+own command responses while it considers itself asleep, so ids 248 and 5 arrive
+marked on every suspend; only a marked disconnect event is a reason, which the
+driver already required.  A magic wake does deliver its frame marked when the
+packet is the ordinary UDP form, and that is what produces the exact reason.
+For the case where nothing arrives marked, `uwe5622_woke_host()` now reports
+whether the controller pulled the host out itself, which turns a wake of unknown
+cause into a magic-packet wake whenever that was the only trigger armed.
+
+Still untested: the disconnect trigger, which needs an access point that can be
+made to deauthenticate the station on demand.  This host has no Wi-Fi interface
+to inject from and the test AP is not under this session's control.

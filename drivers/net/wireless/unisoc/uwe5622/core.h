@@ -37,6 +37,12 @@ struct uwe5622_bus_ops {
 	int (*power_cycle)(struct uwe5622 *wcn);
 	int (*suspend)(struct uwe5622 *wcn, bool wake);
 	int (*resume)(struct uwe5622 *wcn);
+	/*
+	 * Whether the controller asserted its host-wake output during the sleep
+	 * that just ended. It is the only account of an out-of-band wake, since
+	 * the object responsible for one is not always handed to the host.
+	 */
+	bool (*woke_host)(struct uwe5622 *wcn);
 };
 
 struct uwe5622_client {

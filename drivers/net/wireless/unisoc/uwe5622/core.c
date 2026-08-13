@@ -239,6 +239,18 @@ void uwe5622_set_wake(struct uwe5622_client *client, bool enabled)
 }
 EXPORT_SYMBOL_GPL(uwe5622_set_wake);
 
+bool uwe5622_woke_host(struct uwe5622_client *client)
+{
+	struct uwe5622 *wcn;
+
+	if (!client)
+		return false;
+	wcn = client->wcn;
+
+	return wcn->bus_ops->woke_host && wcn->bus_ops->woke_host(wcn);
+}
+EXPORT_SYMBOL_GPL(uwe5622_woke_host);
+
 static void uwe5622_notify_reset(struct uwe5622 *wcn)
 {
 	struct uwe5622_client *client;
