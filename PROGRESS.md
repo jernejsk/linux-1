@@ -90,3 +90,61 @@ monitor capture or instrumentation at `machw_create_amsdu_lut` (`0x001534FE`).
 Never measure a link with a userspace sink in the path. Use `iperf3`, and bind
 it to the interface with `-B <addr>%<dev>` - binding the address alone routes
 over Ethernet and reports 110 MB/s of gigabit link.
+
+## Transmit efficiency
+
+Two offloads and one copy removal, measured on 5 GHz VHT80 against the same
+access point, one stream:
+
+| | throughput | CPU of four cores | CPU per MB/s |
+| --- | --- | --- | --- |
+| before | 30.6 MB/s | 19.0% | 5.9 |
+| hardware checksum | 31.4 MB/s | 18.2% | 5.8 |
+| one copy instead of three | 32.9 MB/s | 14.9% | 4.5 |
+
+**Hardware transmit checksum.** `desc[2]` bit 0 enables it, bit 1 selects TCP
+over UDP, `desc[9..10]` carry the transport offset from the Ethernet header.
+Verified on air with the software path taking nothing: IPv4 TCP 317,008 frames,
+IPv4 UDP 103,617 datagrams with no loss, IPv6 TCP 190,486 frames. Worth about
+0.3% of four cores at a rate held equal, which is small enough that the driver
+counts what each path handled.
+
+**One copy instead of three.** The frame was copied into a descriptor buffer,
+then into a bus record, then into the transfer. Now the netdev asks for
+headroom and both headers are pushed in front of the frame where it lies. This
+required flipping the documented bus contract: the bus owns a payload it
+accepts and frees it after the transfer.
+
+### The remaining copy stays
+
+Packing several frames into one CMD53 still copies. Removing it would mean
+driving `mmc_request` with a scatterlist instead of `sdio_writesb`, and that
+does not fit this hardware: after the 15 bytes of headers are pushed, a frame
+starts at `NET_SKB_PAD - 15`, which is not word aligned, while the sunxi mmc
+controller's DMA wants aligned segments — and the four-byte padding between
+records breaks contiguity anyway. The upside does not justify it either: one
+memcpy of the traffic at 33 MB/s against roughly 1.75 GB/s of memory bandwidth
+is about 2% of one core, half a point of the 14.9% now measured.
+
+### Two teardown bugs found on the way
+
+Removing the driver with an interface up warned twice, and both were real:
+a netdev freed with its NAPI instance still attached (the driver's own remove
+path never stopped the poll, emptied its queue, or cancelled two works a
+firmware event can schedule), and cfg80211 still holding the BSS of a station
+that never saw a disconnect. Every teardown path now goes through one function.
+
+### Trap worth remembering
+
+Deploying a new `wifi.ko` against an old `core.ko` corrupts the skb slab and
+panics the board at every boot thereafter, because the two disagree about who
+frees a transmitted frame. Recovery needs U-Boot: interrupt autoboot, then
+
+    setenv bootargs "console=ttyS0,115200 root=/dev/mmcblk0p1 rw rootwait init=/bin/sh"
+    load mmc 0:1 ${kernel_addr_r} /boot/Image
+    load mmc 0:1 ${fdt_addr_r} /boot/sun50i-h6-orangepi-3-lts.dtb
+    booti ${kernel_addr_r} - ${fdt_addr_r}
+
+and move the module directory aside from that shell. Deploy both modules
+together, and check the deployed hash: a scp that times out leaves the old one
+in place and the next boot panics on it.
