@@ -516,3 +516,55 @@ meant to join never appeared, and the board has no second radio to scan with.
 Association itself is not in doubt - an earlier session completed a WPA2 four-way
 handshake and passed data both ways through this same 2.4 GHz path - so what is
 untested here is throughput and the new station listing with a real client.
+
+### What was actually killing the access point (2026-08-13, later)
+
+Every access point session with a client died inside a minute or two, three
+times over, each with the same signature: `4 consecutive transmit failures,
+recovering`, a firmware CPU that would not go into reset, a power cycle, and an
+access point that never came back while hostapd went on reporting it enabled.
+Two separate causes, found by taking one thing away at a time.
+
+**Registering management frame types.** The log finally said it plainly:
+`command 0x16 timed out` - command 22, `REGISTER_FRAME` - followed immediately
+by the transmit failures. hostapd registers about a dozen types at every start,
+so every start poisoned the controller. Registration had been added earlier the
+same day and never demonstrably worked: no probe request was ever delivered in
+sixty seconds on a busy channel with the registration accepted. It is out again,
+along with `mgmt_tx` and the `mgmt_stypes` declaration that invited it. After
+that, an access point runs with no resets at all.
+
+**Group traffic sent to an entry that is not there.** Every broadcast and
+multicast frame went to lookup entry four, the vendor driver's fallback, whether
+or not the controller had such an entry. Suppressing group frames alone kept a
+client attached with no reset, which is what identified them; the entries the
+controller does announce for the broadcast address (indices one and four) only
+appear later and are torn down when the access point stops. Group frames are now
+sent to a station instead, which is exactly right for a single-station access
+point and keeps address resolution and address assignment working. Several
+stations will need a copy each.
+
+Also fixed: the controller takes a station's transmit lookup entry away without
+always reporting that the station left, so hostapd was left holding a station it
+could no longer reach, reporting it authenticated and associated long after its
+client had gone. Losing the way to reach a station is now reported as the
+station leaving.
+
+Two things remain wrong. Unloading the driver while an access point interface
+exists hangs `modprobe -r` in D state and needs the power switch - it happened
+repeatedly and is the reason for several of today's power cycles. And after a
+firmware reset the access point does not come back on its own: the driver does
+call `cfg80211_stop_iface()`, but hostapd has to be restarted by hand.
+
+The client used for all of this associated fine (WPA2, CCMP, `[AUTH][ASSOC]
+[AUTHORIZED]`), took a DHCP lease from dnsmasq on the board, answered pings at
+150-180 ms - its own power saving - and then dropped its interface after about a
+minute each time. That last part is the client's network manager, not the access
+point: the interface goes down on its side, which an access point cannot cause.
+This link has no route to the internet, which is the usual reason a manager
+gives up on a network; NAT would need `ip_tables`, which this kernel does not
+build.
+
+The access point's own address never changes: it is the permanent address with
+the locally-administered bit set and bit 7 of the last octet flipped, so
+`3c:7a:aa:31:6f:17` always becomes `3e:7a:aa:31:6f:97`.
