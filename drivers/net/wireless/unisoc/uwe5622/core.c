@@ -602,6 +602,18 @@ int uwe5622_core_probe(struct uwe5622 *wcn)
 
 	uwe5622_report_firmware(wcn, fw);
 	ret = wcn->bus_ops->start(wcn, fw);
+	/*
+	 * A controller that is already running its firmware ignores a second
+	 * load and never answers the ready handshake, which is what a driver
+	 * reload without a board reset looks like. Take its power away and try
+	 * once more rather than leaving the device unusable until the next boot.
+	 */
+	if (ret == -ETIMEDOUT && wcn->bus_ops->power_cycle) {
+		dev_info(wcn->dev,
+			 "controller did not answer, cycling its power\n");
+		if (!wcn->bus_ops->power_cycle(wcn))
+			ret = wcn->bus_ops->start(wcn, fw);
+	}
 	release_firmware(fw);
 	if (ret)
 		goto err_start;
