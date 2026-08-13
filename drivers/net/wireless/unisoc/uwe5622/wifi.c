@@ -55,7 +55,6 @@ enum uwe5622_cipher {
 	UWE5622_CIPHER_WEP104,
 	UWE5622_CIPHER_TKIP,
 	UWE5622_CIPHER_CCMP,
-	UWE5622_CIPHER_AES_CMAC = 8,
 };
 
 struct uwe5622_cmd_open {
@@ -212,18 +211,18 @@ static const struct ieee80211_supported_band uwe5622_band_5ghz = {
 };
 
 /*
- * BIP is deliberately absent. Management frame protection needs an integrity
- * group key at key index 4 or 5, which the firmware key command has no room
- * for, so advertising the cipher only makes userspace negotiate protected
- * management frames and then fail to install the key.
+ * Protected management frames are deliberately absent, from the ciphers and
+ * from the key negotiations that only exist to use them. The integrity key they
+ * need goes to key index 4, and this firmware was tried with it: it took the key
+ * and then stopped answering the bus, ending in a controller reset. So the
+ * cipher is neither offered nor understood, and the key indices above three are
+ * refused before a command can be built.
  */
 static const u32 uwe5622_akm_suites[] = {
 	WLAN_AKM_SUITE_8021X,
 	WLAN_AKM_SUITE_PSK,
 	WLAN_AKM_SUITE_FT_8021X,
 	WLAN_AKM_SUITE_FT_PSK,
-	WLAN_AKM_SUITE_8021X_SHA256,
-	WLAN_AKM_SUITE_PSK_SHA256,
 };
 
 static const u32 uwe5622_cipher_suites[] = {
@@ -280,8 +279,6 @@ static u8 uwe5622_cipher(u32 cipher)
 		return UWE5622_CIPHER_TKIP;
 	case WLAN_CIPHER_SUITE_CCMP:
 		return UWE5622_CIPHER_CCMP;
-	case WLAN_CIPHER_SUITE_AES_CMAC:
-		return UWE5622_CIPHER_AES_CMAC;
 	default:
 		return UWE5622_CIPHER_NONE;
 	}
@@ -357,6 +354,23 @@ static bool uwe5622_tx_csum_offload(struct sk_buff *skb)
 		return false;
 
 	return true;
+}
+
+static void uwe5622_set_peer_authorized(struct uwe5622_vif *vif, const u8 *mac)
+{
+	struct uwe5622_wifi *wifi = vif->wifi;
+	unsigned int i;
+
+	spin_lock_bh(&wifi->vif_lock);
+	for (i = 0; i < ARRAY_SIZE(wifi->peers); i++) {
+		if (wifi->peers[i].valid &&
+		    wifi->peers[i].ctx_id == vif->ctx_id &&
+		    ether_addr_equal(wifi->peers[i].address, mac)) {
+			wifi->peers[i].authorized = true;
+			break;
+		}
+	}
+	spin_unlock_bh(&wifi->vif_lock);
 }
 
 /*
@@ -1748,6 +1762,11 @@ static int uwe5622_add_key(struct wiphy *wiphy, struct wireless_dev *wdev,
 	size_t len;
 	int ret;
 
+	/*
+	 * Index four is where the integrity key for protected management frames
+	 * goes. The firmware was tried with one and wedged, so the range stops
+	 * at the four a pairwise or group cipher uses.
+	 */
 	if (link_id >= 0 || index > 3 || params->key_len > WLAN_MAX_KEY_LEN)
 		return -EINVAL;
 	cipher = uwe5622_cipher(params->cipher);
@@ -1771,6 +1790,12 @@ static int uwe5622_add_key(struct wiphy *wiphy, struct wireless_dev *wdev,
 	ret = uwe5622_wifi_cmd(vif->wifi, vif->ctx_id, UWE5622_CMD_KEY,
 			       data, len, NULL, NULL, NULL);
 	kfree(data);
+	/*
+	 * A pairwise key for a station is the end of its authentication, and the
+	 * only moment the driver is told about it.
+	 */
+	if (!ret && pairwise && mac)
+		uwe5622_set_peer_authorized(vif, mac);
 	return ret;
 }
 
@@ -2015,8 +2040,48 @@ struct uwe5622_station_report {
 #define UWE5622_RATE_SHORT_GI		BIT(6)
 #define UWE5622_RATE_MODE_MASK		GENMASK(1, 0)
 
+/*
+ * What the driver knows about one station, as opposed to what the controller
+ * reports about the link. Authentication and association are what the
+ * controller announced when it took the station on; the open port follows the
+ * pairwise key, and the quality-of-service flag follows what the station asked
+ * for when it associated. Protected management frames are never claimed: this
+ * firmware cannot do them.
+ */
+static void uwe5622_station_flags(struct uwe5622_vif *vif, const u8 *mac,
+				  struct station_info *sinfo)
+{
+	struct uwe5622_wifi *wifi = vif->wifi;
+	unsigned int i;
+
+	if (!mac)
+		return;
+	sinfo->sta_flags.mask = BIT(NL80211_STA_FLAG_AUTHENTICATED) |
+				BIT(NL80211_STA_FLAG_ASSOCIATED) |
+				BIT(NL80211_STA_FLAG_AUTHORIZED) |
+				BIT(NL80211_STA_FLAG_WME);
+	sinfo->filled |= BIT_ULL(NL80211_STA_INFO_STA_FLAGS);
+
+	spin_lock_bh(&wifi->vif_lock);
+	for (i = 0; i < ARRAY_SIZE(wifi->peers); i++) {
+		if (!wifi->peers[i].valid ||
+		    wifi->peers[i].ctx_id != vif->ctx_id ||
+		    !ether_addr_equal(wifi->peers[i].address, mac))
+			continue;
+		sinfo->sta_flags.set = BIT(NL80211_STA_FLAG_AUTHENTICATED) |
+				       BIT(NL80211_STA_FLAG_ASSOCIATED);
+		if (wifi->peers[i].authorized)
+			sinfo->sta_flags.set |=
+				BIT(NL80211_STA_FLAG_AUTHORIZED);
+		if (wifi->peers[i].wme)
+			sinfo->sta_flags.set |= BIT(NL80211_STA_FLAG_WME);
+		break;
+	}
+	spin_unlock_bh(&wifi->vif_lock);
+}
+
 static int uwe5622_fill_station(struct uwe5622_vif *vif,
-			       struct net_device *ndev,
+			       struct net_device *ndev, const u8 *mac,
 			       struct station_info *sinfo)
 {
 	struct uwe5622_station_report report = {};
@@ -2032,6 +2097,7 @@ static int uwe5622_fill_station(struct uwe5622_vif *vif,
 	sinfo->tx_packets = ndev->stats.tx_packets;
 	sinfo->rx_bytes = ndev->stats.rx_bytes;
 	sinfo->rx_packets = ndev->stats.rx_packets;
+	uwe5622_station_flags(vif, mac, sinfo);
 
 	ret = uwe5622_wifi_cmd(vif->wifi, vif->ctx_id, UWE5622_CMD_GET_STATION,
 			       NULL, 0, &report, &len, NULL);
@@ -2072,7 +2138,7 @@ static int uwe5622_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
 			       const u8 *mac, struct station_info *sinfo)
 {
 	return uwe5622_fill_station(uwe5622_vif_from_wdev(wdev), wdev->netdev,
-				    sinfo);
+				    mac, sinfo);
 }
 
 /*
@@ -2104,7 +2170,7 @@ static int uwe5622_dump_station(struct wiphy *wiphy, struct wireless_dev *wdev,
 	if (i == ARRAY_SIZE(wifi->peers))
 		return -ENOENT;
 
-	return uwe5622_fill_station(vif, ndev, sinfo);
+	return uwe5622_fill_station(vif, ndev, mac, sinfo);
 }
 
 /*
@@ -2587,6 +2653,43 @@ static void uwe5622_event_mgmt_frame(struct uwe5622_wifi *wifi, u8 ctx,
 	dev_put(ndev);
 }
 
+/* The element a station puts in its association request to ask for WMM. */
+static bool uwe5622_ies_have_wme(const u8 *ies, size_t len)
+{
+	static const u8 wmm[] = { 0x00, 0x50, 0xf2, 0x02 };
+	size_t offset = 0;
+
+	while (offset + 2 <= len) {
+		u8 elen = ies[offset + 1];
+
+		if (offset + 2 + elen > len)
+			break;
+		if (ies[offset] == WLAN_EID_VENDOR_SPECIFIC &&
+		    elen >= sizeof(wmm) &&
+		    !memcmp(ies + offset + 2, wmm, sizeof(wmm)))
+			return true;
+		offset += 2 + elen;
+	}
+
+	return false;
+}
+
+static void uwe5622_set_peer_wme(struct uwe5622_wifi *wifi, u8 ctx,
+				 const u8 *mac, bool wme)
+{
+	unsigned int i;
+
+	spin_lock_bh(&wifi->vif_lock);
+	for (i = 0; i < ARRAY_SIZE(wifi->peers); i++) {
+		if (wifi->peers[i].valid && wifi->peers[i].ctx_id == ctx &&
+		    ether_addr_equal(wifi->peers[i].address, mac)) {
+			wifi->peers[i].wme = wme;
+			break;
+		}
+	}
+	spin_unlock_bh(&wifi->vif_lock);
+}
+
 static void uwe5622_event_new_station(struct uwe5622_wifi *wifi, u8 ctx,
 				      const u8 *data, size_t len)
 {
@@ -2604,6 +2707,8 @@ static void uwe5622_event_new_station(struct uwe5622_wifi *wifi, u8 ctx,
 	if (data[0]) {
 		sinfo.assoc_req_ies = data + 9;
 		sinfo.assoc_req_ies_len = ie_len;
+		uwe5622_set_peer_wme(wifi, ctx, data + 1,
+				     uwe5622_ies_have_wme(data + 9, ie_len));
 		cfg80211_new_sta(ndev->ieee80211_ptr, data + 1, &sinfo,
 				 GFP_ATOMIC);
 	} else {

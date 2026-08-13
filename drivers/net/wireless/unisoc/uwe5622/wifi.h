@@ -141,6 +141,10 @@ struct uwe5622_peer {
 	u8 sta_lut;
 	u8 address[ETH_ALEN];
 	bool valid;
+	/* A pairwise key was installed for it, so its port is open. */
+	bool authorized;
+	/* It asked for the quality-of-service the firmware then uses. */
+	bool wme;
 	/* Transmit block acknowledgement sessions asked for, one bit per tid. */
 	unsigned long ba_tx;
 	unsigned int frames;
