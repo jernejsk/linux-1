@@ -370,6 +370,7 @@ static bool uwe5622_tx_sta_lut(struct uwe5622_vif *vif,
 {
 	struct uwe5622_wifi *wifi = vif->wifi;
 	const struct ethhdr *eth;
+	bool group;
 	int i;
 
 	if (vif->mode != UWE5622_MODE_AP || skb->len < ETH_HLEN) {
@@ -378,17 +379,23 @@ static bool uwe5622_tx_sta_lut(struct uwe5622_vif *vif,
 	}
 
 	eth = (const void *)skb->data;
-	if (is_multicast_ether_addr(eth->h_dest)) {
-		*sta_lut = 4;
-		return true;
-	}
-
+	group = is_multicast_ether_addr(eth->h_dest);
+	/*
+	 * This firmware announces no entry for group traffic, and the entry the
+	 * vendor driver falls back to for it is not one this firmware has: a
+	 * frame sent to it stops the controller answering the bus at all, which
+	 * ends in a reset a second later. So a group frame is sent to a station
+	 * instead, which is what the only station on an access point wants
+	 * anyway. Reaching more than one of them needs a copy each.
+	 */
 	*sta_lut = 0;
 	spin_lock_bh(&wifi->vif_lock);
 	for (i = 0; i < ARRAY_SIZE(wifi->peers); i++) {
-		if (wifi->peers[i].valid &&
-		    wifi->peers[i].ctx_id == vif->ctx_id &&
-		    ether_addr_equal(wifi->peers[i].address, eth->h_dest)) {
+		if (!wifi->peers[i].valid ||
+		    wifi->peers[i].ctx_id != vif->ctx_id)
+			continue;
+		if (group || ether_addr_equal(wifi->peers[i].address,
+					      eth->h_dest)) {
 			*sta_lut = wifi->peers[i].sta_lut;
 			break;
 		}
