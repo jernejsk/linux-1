@@ -294,6 +294,11 @@ static void uwe5622_notify_reset(struct uwe5622 *wcn)
  * it. Discarding the result on this side pays the firmware, bus, interrupt and
  * allocation cost anyway.
  *
+ * Nothing claims the channel the log arrives on, so what the firmware sends
+ * before this takes effect, or on an exceptional path afterwards, is dropped
+ * where every unclaimed channel is dropped. It still has to be read: all the
+ * logical channels share one receive FIFO.
+ *
  * The single byte selects the mode: zero clears the enable that is tested
  * before the expensive work in the emitters, so nothing is formatted and no
  * page is requested. It does not stop the receive channel completely, because
@@ -302,17 +307,7 @@ static void uwe5622_notify_reset(struct uwe5622 *wcn)
  * channel is therefore still drained; only the ring that captured it is gone.
  */
 #define UWE5622_AT_ARMLOG_OFF		"at+armlog=0\r\n"
-#define UWE5622_AT_ARMLOG_ON		"at+armlog=1\r\n"
 #define UWE5622_AT_TIMEOUT		msecs_to_jiffies(3000)
-
-/* Leave the controller's logging on, for capturing what it says. */
-static bool uwe5622_firmware_log;
-module_param_named(firmware_log, uwe5622_firmware_log, bool, 0444);
-MODULE_PARM_DESC(firmware_log,
-		 "let the controller keep formatting and sending its debug log");
-
-static unsigned int uwe5622_log_records;
-module_param_named(log_records, uwe5622_log_records, uint, 0444);
 
 static int uwe5622_at_command(struct uwe5622 *wcn, const char *cmd)
 {
@@ -342,9 +337,7 @@ static int uwe5622_at_command(struct uwe5622 *wcn, const char *cmd)
 
 static void uwe5622_quiet_firmware_log(struct uwe5622 *wcn)
 {
-	int ret = uwe5622_at_command(wcn, uwe5622_firmware_log ?
-					  UWE5622_AT_ARMLOG_ON :
-					  UWE5622_AT_ARMLOG_OFF);
+	int ret = uwe5622_at_command(wcn, UWE5622_AT_ARMLOG_OFF);
 
 	/*
 	 * Worth reporting but not worth failing over: a controller that keeps
@@ -510,13 +503,6 @@ void uwe5622_core_rx(struct uwe5622 *wcn, u8 channel, struct sk_buff *skb)
 	client = srcu_dereference(wcn->channels[channel], &wcn->channel_srcu);
 	if (client) {
 		client->ops->rx(client->priv, skb);
-	} else if (channel == wcn->services[UWE5622_SERVICE_WCN_TRACE].rx) {
-		/*
-		 * Still drained, because the channel shares its FIFO with
-		 * everything else and a page can arrive even with logging off.
-		 */
-		uwe5622_log_records++;
-		kfree_skb(skb);
 	} else if (channel == wcn->services[UWE5622_SERVICE_AT].rx) {
 		dev_dbg(wcn->dev, "AT answer: %*phN\n", (int)skb->len,
 			skb->data);

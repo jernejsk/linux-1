@@ -14,12 +14,6 @@ enum uwe5622_service {
 	UWE5622_SERVICE_WIFI_DATA,
 	UWE5622_SERVICE_WIFI_LOG,
 	UWE5622_SERVICE_BLUETOOTH,
-	/*
-	 * The controller's debug trace ring, shared by its Wi-Fi, Bluetooth and
-	 * coexistence code. It carries no HCI traffic: every HCI event,
-	 * advertising reports among them, arrives on the Bluetooth channel.
-	 */
-	UWE5622_SERVICE_WCN_TRACE,
 	/* The controller's AT command interpreter, which controls its logging. */
 	UWE5622_SERVICE_AT,
 	UWE5622_SERVICE_COUNT,

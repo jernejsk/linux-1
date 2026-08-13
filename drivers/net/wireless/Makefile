@@ -24,3 +24,5 @@ obj-$(CONFIG_WLAN_VENDOR_UNISOC) += unisoc/
 obj-$(CONFIG_WLAN_VENDOR_ZYDAS) += zydas/
 
 obj-$(CONFIG_WLAN) += virtual/
+
+obj-$(CONFIG_SPARD_WLAN_SUPPORT) += uwe5622/

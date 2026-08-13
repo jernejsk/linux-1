@@ -38,6 +38,7 @@ source "drivers/net/wireless/unisoc/Kconfig"
 source "drivers/net/wireless/zydas/Kconfig"
 source "drivers/net/wireless/quantenna/Kconfig"
 
+source "drivers/net/wireless/uwe5622/Kconfig"
 source "drivers/net/wireless/virtual/Kconfig"
 
 endif # WLAN

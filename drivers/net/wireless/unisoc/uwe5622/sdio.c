@@ -26,7 +26,6 @@
 #include "core.h"
 
 #define UWE5622_SDIO_BLOCK_SIZE		840
-#define UWE5622_SDIO_BLOCK_SIZE_ALT	512
 #define UWE5622_SDIO_PACKET_ADDR	0x20
 #define UWE5622_SDIO_DIRECT_ADDR	0x0f
 #define UWE5622_SDIO_TARGET_ADDR0	0x15c
@@ -109,54 +108,12 @@
 #define UWE5622_TX_MAX_SIZE		(UWE5622_TX_MAX_BLOCKS * \
 					 UWE5622_SDIO_BLOCK_SIZE)
 
-static bool uwe5622_rx_aggregation = true;
-module_param_named(rx_aggregation, uwe5622_rx_aggregation, bool, 0444);
-MODULE_PARM_DESC(rx_aggregation,
-		 "use the firmware's scatter-gather receive mode");
 
-/*
- * How received frames reach the stack. Delivering from the read loop costs the
- * least per byte, 2.0 percent of a core per MB/s, which is what the vendor driver
- * costs; handing them to a thread instead reaches about a fifth more throughput
- * but costs a third more, because the loop stops waiting on the stack and starts
- * waiting on a wakeup. Neither is right all the time: the hop is worth paying only
- * while the controller still has a backlog, which is exactly when the loop needs
- * to get back to reading. So by default pay it then and not otherwise.
- */
-enum {
-	UWE5622_RX_DELIVER_INLINE,
-	UWE5622_RX_DELIVER_BEHIND,
-	UWE5622_RX_DELIVER_THREAD,
-};
 
-static unsigned int uwe5622_rx_thread_enable = UWE5622_RX_DELIVER_BEHIND;
-module_param_named(rx_thread, uwe5622_rx_thread_enable, uint, 0644);
-MODULE_PARM_DESC(rx_thread,
-		 "deliver received frames from the read loop (0), from a thread while the controller is behind (1), or always from a thread (2)");
 
-static bool uwe5622_rx_poll;
-module_param_named(rx_poll, uwe5622_rx_poll, bool, 0644);
-MODULE_PARM_DESC(rx_poll,
-		 "read from a dedicated thread instead of the interrupt thread");
 
-static bool uwe5622_rx_debug;
-module_param_named(rx_debug, uwe5622_rx_debug, bool, 0644);
-MODULE_PARM_DESC(rx_debug, "report receive path timing");
 
-static bool uwe5622_blksz_512;
-module_param_named(blksz_512, uwe5622_blksz_512, bool, 0444);
-MODULE_PARM_DESC(blksz_512,
-		 "use 512-byte transfer blocks instead of 840-byte ones");
 
-static bool uwe5622_cp_sleep_dance;
-module_param_named(cp_sleep_dance, uwe5622_cp_sleep_dance, bool, 0644);
-MODULE_PARM_DESC(cp_sleep_dance,
-		 "wake the controller for each transfer and let it sleep after");
-
-static bool uwe5622_cp_keep_awake = true;
-module_param_named(cp_keep_awake, uwe5622_cp_keep_awake, bool, 0444);
-MODULE_PARM_DESC(cp_keep_awake,
-		 "hold the controller out of its low power state");
 
 
 struct uwe5622_sdio {
@@ -184,15 +141,6 @@ struct uwe5622_sdio {
 	unsigned int tx_writes;
 	unsigned int tx_records;
 	unsigned int tx_qmax;
-	unsigned int rx_reads;
-	unsigned int rx_frames;
-	unsigned int rx_inline;
-	unsigned int rx_qmax;
-	unsigned int rx_drains;
-	u64 rx_read_ns;
-	u64 rx_deliver_ns;
-	u64 rx_gap_ns;
-	u64 rx_drain_end;
 	struct scatterlist rx_sg[UWE5622_RX_PAC_MAX + 1];
 	unsigned int rx_pac_num;
 	/* Consecutive failed transmit transfers, reset by every success. */
@@ -213,25 +161,18 @@ struct uwe5622_tx_cb {
 static_assert(16 + sizeof(struct uwe5622_tx_cb) <=
 	      sizeof_field(struct sk_buff, cb));
 
-static unsigned int uwe5622_blk_size(void)
-{
-	return uwe5622_blksz_512 ? UWE5622_SDIO_BLOCK_SIZE_ALT :
-				   UWE5622_SDIO_BLOCK_SIZE;
-}
-
 static size_t uwe5622_tx_budget(void)
 {
-	return UWE5622_TX_MAX_BLOCKS * uwe5622_blk_size();
+	return UWE5622_TX_MAX_BLOCKS * UWE5622_SDIO_BLOCK_SIZE;
 }
 
 /*
- * A packet buffer holds one record and is two blocks of 840 bytes or four of
- * 512, which is also the smallest transfer that can carry a full record.
+ * A packet buffer holds one record and is two blocks, which is also the smallest
+ * transfer that can carry a full record.
  */
 static unsigned int uwe5622_pac_size(void)
 {
-	return uwe5622_blksz_512 ? 4 * UWE5622_SDIO_BLOCK_SIZE_ALT :
-				   2 * UWE5622_SDIO_BLOCK_SIZE;
+	return 2 * UWE5622_SDIO_BLOCK_SIZE;
 }
 
 static int uwe5622_sdio_set_target(struct uwe5622_sdio *sdio, u32 address)
@@ -393,10 +334,6 @@ static int uwe5622_sdio_wait_ready(struct uwe5622_sdio *sdio)
 	u32 config = UWE5622_SDIO_CONFIG_ENABLE |
 		     UWE5622_SDIO_CONFIG_INBAND_IRQ;
 
-	if (!uwe5622_rx_aggregation)
-		config |= UWE5622_SDIO_CONFIG_SDMA_RX;
-	if (uwe5622_blksz_512)
-		config |= FIELD_PREP(UWE5622_SDIO_CONFIG_BLK_SIZE, 1);
 	bool config_written = false;
 	u32 status;
 	int ret;
@@ -457,20 +394,6 @@ static int uwe5622_sdio_wait_ready(struct uwe5622_sdio *sdio)
 			     "firmware ready timeout, sync status %#08x\n", status);
 }
 
-static size_t uwe5622_sdio_rx_size(u32 pending)
-{
-	size_t overhead;
-	size_t length;
-
-	if (!pending)
-		return uwe5622_pac_size();
-
-	overhead = 8 * ((pending >> 10) + 1) + 64;
-	length = roundup(max_t(size_t, pending + overhead,
-			       uwe5622_pac_size()), uwe5622_blk_size());
-	return min_t(size_t, length, UWE5622_RX_MAX_SIZE);
-}
-
 /*
  * One transfer carries several records, each introduced by a four-byte public
  * header. The aggregate ends at the first EOF header or once the payload
@@ -479,58 +402,6 @@ static size_t uwe5622_sdio_rx_size(u32 pending)
  * records; the receive channel comes from the subtype alone. A single damaged
  * record is skipped rather than discarding the rest of the transfer.
  */
-static void uwe5622_sdio_queue_rx(struct uwe5622_sdio *sdio, size_t read_len,
-				  u32 valid_len, struct sk_buff_head *queue)
-{
-	size_t payload_total = 0;
-	size_t limit = read_len - 8;
-	size_t offset = 0;
-
-	while (payload_total < valid_len && offset + sizeof(__le32) <= limit) {
-		struct sk_buff *skb;
-		u32 header = get_unaligned_le32(sdio->rx_buf + offset);
-		size_t record_len;
-		u16 payload_len;
-		u16 copy_len;
-		u8 channel;
-
-		if (header & UWE5622_PUH_EOF)
-			break;
-
-		payload_len = FIELD_GET(UWE5622_PUH_LENGTH, header);
-		copy_len = payload_len;
-		if (header & UWE5622_PUH_CHECKSUM)
-			copy_len += 2;
-		record_len = sizeof(__le32) + ALIGN(copy_len, 4);
-
-		if (!payload_len || record_len > limit - offset) {
-			dev_dbg(&sdio->func->dev,
-				"RX record truncated at offset %zu\n", offset);
-			break;
-		}
-
-		payload_total += payload_len;
-
-		if (FIELD_GET(UWE5622_PUH_TYPE, header) == 0xf ||
-		    payload_len > UWE5622_SDIO_MAX_PAYLOAD) {
-			offset += record_len;
-			continue;
-		}
-
-		channel = UWE5622_RX_CHANNEL_BASE +
-			  FIELD_GET(UWE5622_PUH_SUBTYPE, header);
-		skb = alloc_skb(payload_len, GFP_KERNEL);
-		if (!skb)
-			break;
-		skb_put_data(skb, sdio->rx_buf + offset + sizeof(__le32),
-			     payload_len);
-		skb->cb[0] = channel;
-		__skb_queue_tail(queue, skb);
-
-		offset += record_len;
-	}
-}
-
 
 /*
  * Aggregated receive. In this mode the firmware hands over a batch of packets
@@ -576,13 +447,13 @@ static int uwe5622_sdio_read_aggregated(struct uwe5622_sdio *sdio,
 		sg_set_buf(&sdio->rx_sg[i], sdio->rx_skb[i]->data,
 			   uwe5622_pac_size());
 	sg_set_buf(&sdio->rx_sg[pac_num], sdio->rx_trailer,
-		   uwe5622_blk_size());
+		   UWE5622_SDIO_BLOCK_SIZE);
 
-	blocks = pac_num * (uwe5622_pac_size() / uwe5622_blk_size()) + 1;
+	blocks = pac_num * (uwe5622_pac_size() / UWE5622_SDIO_BLOCK_SIZE) + 1;
 
 	data.sg = sdio->rx_sg;
 	data.sg_len = pac_num + 1;
-	data.blksz = uwe5622_blk_size();
+	data.blksz = UWE5622_SDIO_BLOCK_SIZE;
 	data.blocks = blocks;
 	data.flags = MMC_DATA_READ;
 
@@ -604,8 +475,8 @@ static int uwe5622_sdio_read_aggregated(struct uwe5622_sdio *sdio,
 		return data.error;
 
 	trailer = sdio->rx_trailer;
-	*valid_len = get_unaligned_le32(trailer + uwe5622_blk_size() - 8);
-	*pending = get_unaligned_le32(trailer + uwe5622_blk_size() - 4);
+	*valid_len = get_unaligned_le32(trailer + UWE5622_SDIO_BLOCK_SIZE - 8);
+	*pending = get_unaligned_le32(trailer + UWE5622_SDIO_BLOCK_SIZE - 4);
 
 	return pac_num;
 }
@@ -625,16 +496,6 @@ static int uwe5622_sdio_rx_thread(void *data)
 	sched_set_fifo_low(current);
 
 	while (!kthread_should_stop()) {
-		if (uwe5622_rx_poll) {
-			uwe5622_sdio_drain(sdio);
-			/*
-			 * Sleep rather than spin: at real time priority a busy
-			 * loop would starve everything else on this CPU.
-			 */
-			usleep_range(50, 100);
-			continue;
-		}
-
 		set_current_state(TASK_INTERRUPTIBLE);
 		if (skb_queue_empty(&sdio->rx_queue)) {
 			schedule();
@@ -661,46 +522,17 @@ static void uwe5622_sdio_deliver(struct uwe5622_sdio *sdio,
 {
 	struct sk_buff *skb;
 
-	unsigned int len = skb_queue_len(queue);
-	u64 start = uwe5622_rx_debug ? ktime_get_ns() : 0;
-
-	sdio->rx_frames += len;
-	if (skb_queue_len(&sdio->rx_queue) > sdio->rx_qmax)
-		sdio->rx_qmax = skb_queue_len(&sdio->rx_queue);
-
-	if (sdio->rx_thread && sdio->rx_thread != current &&
-	    (uwe5622_rx_thread_enable == UWE5622_RX_DELIVER_THREAD ||
-	     (uwe5622_rx_thread_enable == UWE5622_RX_DELIVER_BEHIND && behind)) &&
+	if (sdio->rx_thread && sdio->rx_thread != current && behind &&
 	    skb_queue_len(&sdio->rx_queue) < UWE5622_RX_QUEUE_LIMIT) {
 		spin_lock_bh(&sdio->rx_queue.lock);
 		skb_queue_splice_tail_init(queue, &sdio->rx_queue);
 		spin_unlock_bh(&sdio->rx_queue.lock);
 		wake_up_process(sdio->rx_thread);
-		if (uwe5622_rx_debug)
-			sdio->rx_deliver_ns += ktime_get_ns() - start;
 		return;
 	}
 
-	sdio->rx_inline += len;
 	while ((skb = __skb_dequeue(queue)))
 		uwe5622_core_rx(&sdio->wcn, skb->cb[0], skb);
-	if (uwe5622_rx_debug)
-		sdio->rx_deliver_ns += ktime_get_ns() - start;
-}
-
-static void uwe5622_sdio_rx_account(struct uwe5622_sdio *sdio, u64 read_ns)
-{
-	sdio->rx_reads++;
-	sdio->rx_read_ns += read_ns;
-	if (!uwe5622_rx_debug || sdio->rx_reads % 4096)
-		return;
-
-	dev_info(&sdio->func->dev,
-		 "rx reads=%u frames=%u inline=%u qmax=%u drains=%u read=%lluns deliver=%lluns gap=%lluns\n",
-		 sdio->rx_reads, sdio->rx_frames, sdio->rx_inline, sdio->rx_qmax,
-		 sdio->rx_drains, sdio->rx_read_ns / sdio->rx_reads,
-		 sdio->rx_deliver_ns / sdio->rx_reads,
-		 sdio->rx_gap_ns / max(sdio->rx_drains, 1U));
 }
 
 static void uwe5622_sdio_drain_rx_aggregated(struct uwe5622_sdio *sdio)
@@ -710,7 +542,6 @@ static void uwe5622_sdio_drain_rx_aggregated(struct uwe5622_sdio *sdio)
 	struct sk_buff *skb;
 	u32 valid_len, pending;
 	unsigned int pass = 0;
-	u64 read_ns;
 	int i, got;
 
 	/*
@@ -724,11 +555,8 @@ static void uwe5622_sdio_drain_rx_aggregated(struct uwe5622_sdio *sdio)
 	do {
 		__skb_queue_head_init(&queue);
 
-		read_ns = uwe5622_rx_debug ? ktime_get_ns() : 0;
 		got = uwe5622_sdio_read_aggregated(sdio, sdio->rx_pac_num,
 						   &valid_len, &pending);
-		read_ns = uwe5622_rx_debug ? ktime_get_ns() - read_ns : 0;
-		uwe5622_sdio_rx_account(sdio, read_ns);
 		if (got < 0) {
 			dev_err_ratelimited(&func->dev,
 					    "aggregated RX failed: %d\n", got);
@@ -796,50 +624,6 @@ out:
 	sdio_release_host(func);
 }
 
-static void uwe5622_sdio_drain_rx(struct uwe5622_sdio *sdio)
-{
-	struct sdio_func *func = sdio->func;
-	struct sk_buff_head queue;
-	size_t read_len = uwe5622_sdio_rx_size(0);
-	u32 pending;
-	u32 valid_len;
-	int ret = 0;
-
-	/*
-	 * The transfer trailer reports how much the controller still holds, and
-	 * it has to be read out completely: stopping early leaves the backlog
-	 * unread and the stream stalls until unrelated traffic arrives.
-	 */
-	do {
-		__skb_queue_head_init(&queue);
-
-		sdio_claim_host(func);
-		ret = sdio_readsb(func, sdio->rx_buf,
-				  UWE5622_SDIO_PACKET_ADDR, read_len);
-		sdio_release_host(func);
-		if (ret) {
-			dev_err_ratelimited(&func->dev,
-					    "RX transfer failed: %d\n", ret);
-			return;
-		}
-
-		valid_len = get_unaligned_le32(sdio->rx_buf + read_len - 8);
-		pending = get_unaligned_le32(sdio->rx_buf + read_len - 4);
-		if (valid_len > read_len - 8) {
-			dev_err_ratelimited(&func->dev,
-					    "RX valid length %u exceeds transfer %zu\n",
-					    valid_len, read_len - 8);
-			return;
-		}
-		uwe5622_sdio_queue_rx(sdio, read_len, valid_len, &queue);
-		read_len = uwe5622_sdio_rx_size(pending);
-
-		uwe5622_sdio_deliver(sdio, &queue, pending);
-
-		cond_resched();
-	} while (pending);
-}
-
 /*
  * This callback runs on the host's SDIO interrupt thread, which is nice -16.
  * The in-band interrupt is only deasserted once the queued data has been read,
@@ -863,42 +647,10 @@ static int uwe5622_sdio_wake_locked(struct uwe5622_sdio *sdio)
 	return ret;
 }
 
-static void uwe5622_sdio_allow_sleep_locked(struct uwe5622_sdio *sdio)
-{
-	int ret = 0;
-
-	sdio_f0_writeb(sdio->func, 1, UWE5622_F0_SLEEP_CTL, &ret);
-}
-
 static void uwe5622_sdio_drain(struct uwe5622_sdio *sdio)
 {
-	if (uwe5622_rx_debug) {
-		u64 now = ktime_get_ns();
+	uwe5622_sdio_drain_rx_aggregated(sdio);
 
-		if (sdio->rx_drain_end)
-			sdio->rx_gap_ns += now - sdio->rx_drain_end;
-		sdio->rx_drains++;
-	}
-
-	if (uwe5622_cp_sleep_dance) {
-		sdio_claim_host(sdio->func);
-		uwe5622_sdio_wake_locked(sdio);
-		sdio_release_host(sdio->func);
-	}
-
-	if (uwe5622_rx_aggregation)
-		uwe5622_sdio_drain_rx_aggregated(sdio);
-	else
-		uwe5622_sdio_drain_rx(sdio);
-
-	if (uwe5622_cp_sleep_dance) {
-		sdio_claim_host(sdio->func);
-		uwe5622_sdio_allow_sleep_locked(sdio);
-		sdio_release_host(sdio->func);
-	}
-
-	if (uwe5622_rx_debug)
-		sdio->rx_drain_end = ktime_get_ns();
 }
 
 static void uwe5622_sdio_irq(struct sdio_func *func)
@@ -910,11 +662,6 @@ static void uwe5622_sdio_irq(struct sdio_func *func)
 	 * known, nothing reads the value, and a command costs bus time on every
 	 * interrupt: the queue itself says what there is to do.
 	 */
-	if (uwe5622_rx_poll && sdio->rx_thread) {
-		wake_up_process(sdio->rx_thread);
-		return;
-	}
-
 	uwe5622_sdio_drain(sdio);
 }
 
@@ -951,15 +698,11 @@ static void uwe5622_sdio_tx_work(struct work_struct *work)
 
 		put_unaligned_le32(UWE5622_PUH_EOF, sdio->tx_buf + used);
 		used += sizeof(__le32);
-		used = roundup(used, uwe5622_blk_size());
+		used = roundup(used, UWE5622_SDIO_BLOCK_SIZE);
 
 		sdio_claim_host(sdio->func);
-		if (uwe5622_cp_sleep_dance)
-			uwe5622_sdio_wake_locked(sdio);
 		ret = sdio_writesb(sdio->func, UWE5622_SDIO_PACKET_ADDR,
 				   sdio->tx_buf, used);
-		if (uwe5622_cp_sleep_dance)
-			uwe5622_sdio_allow_sleep_locked(sdio);
 		sdio_release_host(sdio->func);
 
 		if (!ret) {
@@ -1014,11 +757,11 @@ static int uwe5622_sdio_boot(struct uwe5622_sdio *sdio,
 		goto out_release;
 	sdio->enabled = true;
 
-	ret = sdio_set_block_size(sdio->func, uwe5622_blk_size());
+	ret = sdio_set_block_size(sdio->func, UWE5622_SDIO_BLOCK_SIZE);
 	if (ret)
 		goto out_disable;
 
-	if (uwe5622_cp_keep_awake) {
+	{
 		/*
 		 * Clear the controller's sleep request before anything else.
 		 * Left set, the core powers down between packets and has to be
@@ -1345,7 +1088,7 @@ static int uwe5622_sdio_probe(struct sdio_func *func,
 			      const struct sdio_device_id *id)
 {
 	struct uwe5622_sdio *sdio;
-	int ret;
+	int pac, ret;
 
 	if (func->num != 1 ||
 	    !of_device_is_compatible(func->dev.of_node, "sprd,uwe5622"))
@@ -1373,24 +1116,18 @@ static int uwe5622_sdio_probe(struct sdio_func *func,
 	 */
 	func->card->quirks |= MMC_QUIRK_LENIENT_FN0;
 
-	if (uwe5622_rx_aggregation) {
-		int pac;
-
-		for (pac = 0; pac < UWE5622_RX_PAC_MAX; pac++) {
-			sdio->rx_pac[pac] = devm_kmalloc(&func->dev,
-							 UWE5622_RX_PAC_SIZE,
-							 GFP_KERNEL);
-			if (!sdio->rx_pac[pac])
-				return -ENOMEM;
-		}
-		sdio->rx_trailer = devm_kmalloc(&func->dev,
-						UWE5622_SDIO_BLOCK_SIZE,
-						GFP_KERNEL);
-		/* The largest of the two block sizes covers both. */
-		if (!sdio->rx_trailer)
+	for (pac = 0; pac < UWE5622_RX_PAC_MAX; pac++) {
+		sdio->rx_pac[pac] = devm_kmalloc(&func->dev,
+						 UWE5622_RX_PAC_SIZE,
+						 GFP_KERNEL);
+		if (!sdio->rx_pac[pac])
 			return -ENOMEM;
-		sdio->rx_pac_num = 1;
 	}
+	sdio->rx_trailer = devm_kmalloc(&func->dev, UWE5622_SDIO_BLOCK_SIZE,
+					GFP_KERNEL);
+	if (!sdio->rx_trailer)
+		return -ENOMEM;
+	sdio->rx_pac_num = 1;
 
 	sdio->func = func;
 	skb_queue_head_init(&sdio->tx_queue);
@@ -1408,9 +1145,6 @@ static int uwe5622_sdio_probe(struct sdio_func *func,
 		(struct uwe5622_channel_pair) { 8, 23 };
 	sdio->wcn.services[UWE5622_SERVICE_BLUETOOTH] =
 		(struct uwe5622_channel_pair) { 3, 17 };
-	/* Receive only: nothing is ever sent to the trace ring. */
-	sdio->wcn.services[UWE5622_SERVICE_WCN_TRACE] =
-		(struct uwe5622_channel_pair) { 0, 15 };
 	sdio->wcn.services[UWE5622_SERVICE_AT] =
 		(struct uwe5622_channel_pair) { 0, 13 };
 	sdio->wcn.bluetooth_enable = devm_gpiod_get_optional(&func->dev,

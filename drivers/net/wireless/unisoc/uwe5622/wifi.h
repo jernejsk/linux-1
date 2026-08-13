@@ -31,7 +31,6 @@ enum uwe5622_wifi_cmd_id {
 	UWE5622_CMD_START_AP = 17,
 	UWE5622_CMD_DEL_STATION = 18,
 	UWE5622_CMD_SET_IE = 25,
-	UWE5622_CMD_SET_ROAM_OFFLOAD = 28,
 	UWE5622_CMD_NOTIFY_IP_ACQUIRED = 26,
 	UWE5622_CMD_ADDBA_REQ = 40,
 	UWE5622_CMD_BA = 68,
@@ -133,16 +132,6 @@ struct uwe5622_peer {
  * head are filled, or until the head has waited long enough that releasing with
  * a gap beats stalling the stream.
  */
-struct uwe5622_reorder {
-	bool active;
-	u8 sta_lut;
-	u8 tid;
-	u16 head;
-	u16 size;
-	unsigned int stored;
-	unsigned long deadline;
-	struct sk_buff *frame[UWE5622_REORDER_WINDOW];
-};
 
 struct uwe5622_wifi {
 	struct device *dev;

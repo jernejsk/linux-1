@@ -29,59 +29,7 @@
 #define UWE5622_RX_CREDIT_OFFSET	24
 #define UWE5622_CREDIT_COLORS	4
 #define UWE5622_CREDIT_MAX	U16_MAX
-
-/* Whether the hardware may complete transmit checksums. */
-static bool uwe5622_tx_checksum = true;
-module_param_named(tx_checksum, uwe5622_tx_checksum, bool, 0644);
-static unsigned int uwe5622_tx_csum_hw;
-module_param_named(tx_csum_hw, uwe5622_tx_csum_hw, uint, 0444);
-static unsigned int uwe5622_tx_csum_sw;
-module_param_named(tx_csum_sw, uwe5622_tx_csum_sw, uint, 0444);
-
-/*
- * How often transmission had to wait, and for what. A grant only counts when
- * the controller actually handed back credit: every Wi-Fi receive descriptor
- * carries the four grant bytes whether or not any of them are set, so counting
- * the field rather than its contents says nothing about how credit arrives.
- */
-static unsigned int uwe5622_tx_stalls;
-module_param_named(tx_stalls, uwe5622_tx_stalls, uint, 0444);
-static unsigned int uwe5622_tx_stalled_ms;
-module_param_named(tx_stalled_ms, uwe5622_tx_stalled_ms, uint, 0444);
-static unsigned int uwe5622_tx_credits_granted;
-module_param_named(tx_credits_granted, uwe5622_tx_credits_granted, uint, 0444);
-static unsigned int uwe5622_tx_grants_rx;
-module_param_named(tx_grants_rx, uwe5622_tx_grants_rx, uint, 0444);
-static unsigned int uwe5622_tx_grants_event;
-module_param_named(tx_grants_event, uwe5622_tx_grants_event, uint, 0444);
-static unsigned int uwe5622_tx_credit_resets;
-module_param_named(tx_credit_resets, uwe5622_tx_credit_resets, uint, 0444);
-/* Grants sized 1, 2, 3, 4, 5-8, 9-16, 17-32 and above. */
-static unsigned int uwe5622_tx_grant_size[8];
-static unsigned int uwe5622_tx_grant_sizes = ARRAY_SIZE(uwe5622_tx_grant_size);
-module_param_array_named(tx_grant_size, uwe5622_tx_grant_size, uint,
-			 &uwe5622_tx_grant_sizes, 0444);
-static unsigned int uwe5622_tx_credits_now[UWE5622_CREDIT_COLORS];
-static unsigned int uwe5622_tx_credits_colors = UWE5622_CREDIT_COLORS;
-module_param_array_named(tx_credits_now, uwe5622_tx_credits_now, uint,
-			 &uwe5622_tx_credits_colors, 0444);
-
-static void uwe5622_count_grant(unsigned int credits)
-{
-	unsigned int bucket;
-
-	if (credits <= 4)
-		bucket = credits - 1;
-	else if (credits <= 8)
-		bucket = 4;
-	else if (credits <= 16)
-		bucket = 5;
-	else if (credits <= 32)
-		bucket = 6;
-	else
-		bucket = 7;
-	uwe5622_tx_grant_size[bucket]++;
-}
+#define UWE5622_WIFI_CONFIG_MAGIC_OFFSET 251
 #define UWE5622_CREDIT_NO_POOL	0xff
 #define UWE5622_RX_MH_DESC_LEN	28
 #define UWE5622_EAPOL_QUEUE_MAX	64
@@ -97,18 +45,9 @@ static void uwe5622_count_grant(unsigned int credits)
 #define UWE5622_WIFI_COEX_OFFSET 1380
 #define UWE5622_WIFI_COEX_ANT_CFG0 36
 #define UWE5622_WIFI_COEX_ISOLATION_CFG0 44
-#define UWE5622_WIFI_CONFIG_MAGIC_OFFSET 251
 
 #define UWE5622_GET_INFO_CAP_5G	BIT(0)
 #define UWE5622_GET_INFO_CAP_AP_SME BIT(3)
-/*
- * The firmware follows access point driven transitions by itself. It is not used
- * by default: its roam flag latches from scan data and no failure path clears it,
- * so once a transition is refused the firmware keeps building association requests
- * with fast transition elements and every later association is rejected. That is
- * the defect behind Orange Pi issue 98.
- */
-#define UWE5622_GET_INFO_CAP_11R_ROAM_OFFLOAD BIT(5)
 
 enum uwe5622_cipher {
 	UWE5622_CIPHER_NONE,
@@ -382,8 +321,6 @@ static bool uwe5622_tx_csum_offload(struct sk_buff *skb)
 {
 	unsigned int offset = skb_checksum_start_offset(skb);
 
-	if (!uwe5622_tx_checksum)
-		return false;
 	if (skb_is_nonlinear(skb) || skb_csum_is_sctp(skb))
 		return false;
 	if (offset > U16_MAX || offset + skb->csum_offset > skb->len)
@@ -457,7 +394,6 @@ static void uwe5622_fill_tx_desc(struct uwe5622_vif *vif, u8 *desc,
 	desc[6] = sta_lut;
 	desc[7] = color;
 	if (csum_offset) {
-		uwe5622_tx_csum_hw++;
 		desc[2] = UWE5622_TX_CSUM_ENABLE;
 		if (csum_tcp)
 			desc[2] |= UWE5622_TX_CSUM_TCP;
@@ -545,16 +481,14 @@ static void uwe5622_wake_queues(struct uwe5622_wifi *wifi)
 
 static void uwe5622_add_tx_credits(struct uwe5622_wifi *wifi,
 				   const u8 credits[UWE5622_CREDIT_COLORS],
-				   bool reset, bool from_event)
+				   bool reset)
 {
-	unsigned int granted = 0;
 	bool added = false;
 	int i;
 
 	spin_lock_bh(&wifi->credit_lock);
 	if (reset) {
 		memset(wifi->tx_credits, 0, sizeof(wifi->tx_credits));
-		uwe5622_tx_credit_resets++;
 	} else {
 		for (i = 0; i < UWE5622_CREDIT_COLORS; i++) {
 			if (!credits[i])
@@ -562,25 +496,9 @@ static void uwe5622_add_tx_credits(struct uwe5622_wifi *wifi,
 			wifi->tx_credits[i] =
 				min_t(u32, wifi->tx_credits[i] + credits[i],
 				      UWE5622_CREDIT_MAX);
-			granted += credits[i];
 			added = true;
 		}
 	}
-	if (added) {
-		uwe5622_tx_credits_granted += granted;
-		uwe5622_count_grant(granted);
-		if (from_event)
-			uwe5622_tx_grants_event++;
-		else
-			uwe5622_tx_grants_rx++;
-		if (wifi->stall_start) {
-			uwe5622_tx_stalled_ms += ktime_ms_delta(ktime_get(),
-								wifi->stall_start);
-			wifi->stall_start = 0;
-		}
-	}
-	for (i = 0; i < UWE5622_CREDIT_COLORS; i++)
-		uwe5622_tx_credits_now[i] = wifi->tx_credits[i];
 	spin_unlock_bh(&wifi->credit_lock);
 
 	if (added)
@@ -661,9 +579,6 @@ static bool uwe5622_take_tx_credit(struct uwe5622_wifi *wifi,
 		spin_unlock_bh(&wifi->credit_lock);
 		return true;
 	}
-	uwe5622_tx_stalls++;
-	if (!wifi->stall_start)
-		wifi->stall_start = ktime_get();
 	netif_stop_queue(ndev);
 	spin_unlock_bh(&wifi->credit_lock);
 	return false;
@@ -706,11 +621,8 @@ static netdev_tx_t uwe5622_ndev_xmit(struct sk_buff *skb,
 	 * credit is spent on the frame.
 	 */
 	if (skb->ip_summed == CHECKSUM_PARTIAL &&
-	    !uwe5622_tx_csum_offload(skb)) {
-		uwe5622_tx_csum_sw++;
-		if (skb_checksum_help(skb))
-			goto drop;
-	}
+	    !uwe5622_tx_csum_offload(skb) && skb_checksum_help(skb))
+		goto drop;
 
 	if (skb->len + UWE5622_TX_DESC_LEN > UWE5622_DATA_TX_MAX)
 		goto drop;
@@ -749,112 +661,6 @@ static const struct net_device_ops uwe5622_netdev_ops = {
 	.ndo_start_xmit = uwe5622_ndev_xmit,
 };
 
-/*
- * Sequence numbers are 12 bits wide and wrap, so distances are always taken
- * modulo 4096: anything less than half the space ahead of the head counts as a
- * future frame, everything else as one already released.
- */
-#define UWE5622_SEQ_MASK	0xfff
-
-static struct {
-	unsigned int frames;
-	unsigned int stored;
-	unsigned int expired;
-	unsigned int ahead;
-	unsigned int dup;
-	unsigned int nosession;
-	unsigned int jumps;
-	u64 ns;
-} uwe5622_reorder_stats;
-
-static bool uwe5622_reorder_debug;
-module_param_named(reorder_debug, uwe5622_reorder_debug, bool, 0644);
-MODULE_PARM_DESC(reorder_debug, "report reorder window statistics");
-
-static bool uwe5622_tx_block_ack = true;
-module_param_named(tx_block_ack, uwe5622_tx_block_ack, bool, 0644);
-MODULE_PARM_DESC(tx_block_ack, "ask peers for a transmit block ack session");
-
-/*
- * Off by default: the window as it stands mislabels a fifth of the stream as
- * arriving from behind the head, and passing those on late costs a third of the
- * throughput against delivering everything in arrival order.
- */
-static bool uwe5622_reorder_enable;
-module_param_named(reorder, uwe5622_reorder_enable, bool, 0644);
-MODULE_PARM_DESC(reorder, "reorder received frames inside the block ack window");
-
-static unsigned int uwe5622_reorder_timeout_ms = 50;
-module_param_named(reorder_timeout_ms, uwe5622_reorder_timeout_ms, uint, 0644);
-MODULE_PARM_DESC(reorder_timeout_ms,
-		 "how long a reorder window waits for a missing frame");
-
-#define UWE5622_REORDER_TIMEOUT \
-	msecs_to_jiffies(uwe5622_reorder_timeout_ms)
-
-static u16 uwe5622_seq_delta(u16 seq, u16 head)
-{
-	return (seq - head) & UWE5622_SEQ_MASK;
-}
-
-static struct uwe5622_reorder *uwe5622_reorder_find(struct uwe5622_wifi *wifi,
-						    u8 sta_lut, u8 tid)
-{
-	struct uwe5622_reorder *session;
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(wifi->reorder); i++) {
-		session = &wifi->reorder[i];
-		if (session->active && session->sta_lut == sta_lut &&
-		    session->tid == tid)
-			return session;
-	}
-
-	return NULL;
-}
-
-/* Move the head past every slot that is filled, queueing what it passes. */
-static void uwe5622_reorder_release(struct uwe5622_reorder *session,
-				    struct sk_buff_head *done)
-{
-	struct sk_buff *skb;
-
-	while (session->stored) {
-		skb = session->frame[session->head % session->size];
-		if (!skb)
-			break;
-		session->frame[session->head % session->size] = NULL;
-		session->stored--;
-		session->head = (session->head + 1) & UWE5622_SEQ_MASK;
-		__skb_queue_tail(done, skb);
-	}
-}
-
-/* Release everything held, gaps included, and leave the head after it. */
-static void uwe5622_reorder_flush(struct uwe5622_reorder *session,
-				  struct sk_buff_head *done)
-{
-	struct sk_buff *skb;
-	u16 i, next;
-
-	for (i = 0, next = 0; i < session->size; i++) {
-		skb = session->frame[(session->head + i) % session->size];
-		if (!skb)
-			continue;
-		session->frame[(session->head + i) % session->size] = NULL;
-		session->stored--;
-		__skb_queue_tail(done, skb);
-		next = i + 1;
-	}
-	session->head = (session->head + next) & UWE5622_SEQ_MASK;
-}
-
-/*
- * Hand a batch to the stack in one call rather than one frame at a time. At the
- * rates the bus now allows this is thousands of calls a second, and the list form
- * lets the stack amortise its own per-batch work; it wants softirqs off, which the
- * receive thread this runs on does not otherwise provide.
- */
 static void uwe5622_deliver(struct sk_buff_head *done)
 {
 	struct sk_buff *skb;
@@ -874,9 +680,6 @@ static void uwe5622_deliver(struct sk_buff_head *done)
 
 #define UWE5622_NAPI_QUEUE_LIMIT	256
 
-static bool uwe5622_rx_napi = true;
-module_param_named(rx_napi, uwe5622_rx_napi, bool, 0644);
-MODULE_PARM_DESC(rx_napi, "hand received frames to a poll so they can coalesce");
 
 
 /*
@@ -913,7 +716,7 @@ static void uwe5622_deliver_vif(struct uwe5622_vif *vif,
 	struct sk_buff *skb;
 
 
-	if (!uwe5622_rx_napi || !vif->napi_ready ||
+	if (!vif->napi_ready ||
 	    skb_queue_len(&vif->rx_queue) >= UWE5622_NAPI_QUEUE_LIMIT) {
 			uwe5622_deliver(done);
 		return;
@@ -926,50 +729,11 @@ static void uwe5622_deliver_vif(struct uwe5622_vif *vif,
 
 static int uwe5622_reopen_firmware(struct uwe5622_vif *vif);
 
-static bool uwe5622_roam_offload;
-module_param_named(roam_offload, uwe5622_roam_offload, bool, 0644);
-MODULE_PARM_DESC(roam_offload,
-		 "let the firmware follow access point driven transitions itself");
-
-/* Subtypes of the roaming command, from the firmware's own numbering. */
-#define UWE5622_ROAM_SET_FLAG	1
-#define UWE5622_ROAM_SET_FT_IE	2
-#define UWE5622_ROAM_SET_PMK	3
-
-static int uwe5622_set_roam_offload(struct uwe5622_vif *vif, u8 type,
-				    const void *value, u8 len)
-{
-	struct {
-		u8 type;
-		u8 len;
-		u8 value[16];
-	} __packed cmd = { .type = type, .len = len };
-
-	if (len > sizeof(cmd.value))
-		return -EINVAL;
-	if (!(vif->wifi->fw_capa & UWE5622_GET_INFO_CAP_11R_ROAM_OFFLOAD))
-		return -EOPNOTSUPP;
-	memcpy(cmd.value, value, len);
-
-	return uwe5622_wifi_cmd(vif->wifi, vif->ctx_id,
-				UWE5622_CMD_SET_ROAM_OFFLOAD, &cmd,
-				sizeof(cmd) - sizeof(cmd.value) + len,
-				NULL, NULL, NULL);
-}
-
 /*
- * The firmware latches a roaming flag from what it scanned, puts fast transition
- * elements into every association request while it is set, and clears it on no
- * failure path of its own: once a transition is refused, every later association
- * is refused too, for good. The flag lives in the per-context state, so trading
- * the context for a fresh one is what clears it. This costs one association and
- * is the difference between a link that recovers and one that never does.
- */
-/*
- * A connect the firmware never answers, in either direction, is the shape the
- * roaming defect takes here: no refusal arrives, no association happens, and the
- * interface scans for ever. Nothing in the firmware recovers from it, so give the
- * attempt a deadline and replace the context when it passes.
+ * A connect the firmware answers in neither direction leaves the interface
+ * scanning for ever: no refusal arrives and no association happens, and nothing
+ * in the firmware recovers from it. Give the attempt a deadline and replace the
+ * context when it passes, which is the only thing that clears the state.
  */
 #define UWE5622_CONNECT_TIMEOUT	msecs_to_jiffies(8000)
 
@@ -995,22 +759,7 @@ static void uwe5622_recover_work(struct work_struct *work)
 		dev_err(vif->wifi->dev,
 			"failed to replace the context after a refused association: %d\n",
 			ret);
-	else if (uwe5622_roam_offload)
-		uwe5622_set_roam_offload(vif, UWE5622_ROAM_SET_FLAG,
-					 &(u8){ 1 }, 1);
 }
-
-static bool uwe5622_rx_csum_debug;
-module_param_named(rx_csum_debug, uwe5622_rx_csum_debug, bool, 0644);
-MODULE_PARM_DESC(rx_csum_debug, "report receive checksum verification");
-
-static struct {
-	unsigned int checked;
-	unsigned int good;
-	unsigned int swapped;
-	unsigned int bad;
-	unsigned int skipped;
-} uwe5622_csum_stats;
 
 /*
  * The receive engine hands up the raw Internet accumulator over the transport
@@ -1028,8 +777,7 @@ static u8 uwe5622_rx_csum(const u8 *frame, u16 len, u16 raw)
 	u16 proto = get_unaligned_be16(frame + 2 * ETH_ALEN);
 	u16 netlen = len - ETH_HLEN;
 	__wsum sum = (__force __wsum)raw;
-	__wsum swapped = (__force __wsum)swab16(raw);
-	u16 l4len, verdict = 0, verdict_swapped = 0;
+	u16 l4len, verdict = 0;
 	u8 l4proto;
 
 	if (len < ETH_HLEN)
@@ -1060,8 +808,6 @@ static u8 uwe5622_rx_csum(const u8 *frame, u16 len, u16 raw)
 		l4len = total - ihl;
 		verdict = csum_tcpudp_magic(ip->saddr, ip->daddr, l4len,
 					    l4proto, sum);
-		verdict_swapped = csum_tcpudp_magic(ip->saddr, ip->daddr, l4len,
-						    l4proto, swapped);
 	} else if (proto == ETH_P_IPV6) {
 		const struct ipv6hdr *ip6 = (const struct ipv6hdr *)net;
 
@@ -1075,23 +821,11 @@ static u8 uwe5622_rx_csum(const u8 *frame, u16 len, u16 raw)
 			goto skip;
 		verdict = csum_ipv6_magic(&ip6->saddr, &ip6->daddr, l4len,
 					  l4proto, sum);
-		verdict_swapped = csum_ipv6_magic(&ip6->saddr, &ip6->daddr,
-						  l4len, l4proto, swapped);
 	} else {
 		goto skip;
 	}
 
-	uwe5622_csum_stats.checked++;
 	if (!verdict) {
-		uwe5622_csum_stats.good++;
-		if (uwe5622_rx_csum_debug &&
-		    !(uwe5622_csum_stats.checked % 65536))
-			pr_info("uwe5622: rx csum checked %u good %u swapped %u bad %u skipped %u\n",
-				uwe5622_csum_stats.checked,
-				uwe5622_csum_stats.good,
-				uwe5622_csum_stats.swapped,
-				uwe5622_csum_stats.bad,
-				uwe5622_csum_stats.skipped);
 		/*
 		 * The sum plus the pseudo header comes out zero, so the segment
 		 * is intact. Say so rather than passing the sum on: the stack
@@ -1100,289 +834,14 @@ static u8 uwe5622_rx_csum(const u8 *frame, u16 len, u16 raw)
 		 * only the pseudo header, never a pass over the data.
 		 */
 		return CHECKSUM_UNNECESSARY;
-	} else if (!verdict_swapped) {
-		uwe5622_csum_stats.swapped++;
-	} else {
-		uwe5622_csum_stats.bad++;
-		if (uwe5622_rx_csum_debug && uwe5622_csum_stats.bad < 8)
-			pr_info("uwe5622: rx csum raw %#06x fails as %#06x and swapped as %#06x, proto %u l4 %u\n",
-				raw, verdict, verdict_swapped, l4proto, l4len);
 	}
-	if (uwe5622_rx_csum_debug &&
-	    !(uwe5622_csum_stats.checked % 8192))
-		pr_info("uwe5622: rx csum checked %u good %u swapped %u bad %u skipped %u\n",
-			uwe5622_csum_stats.checked, uwe5622_csum_stats.good,
-			uwe5622_csum_stats.swapped, uwe5622_csum_stats.bad,
-			uwe5622_csum_stats.skipped);
 
 	/* Anything unverified reaches the stack unclaimed, as it must. */
 	return CHECKSUM_NONE;
 
 skip:
-	uwe5622_csum_stats.skipped++;
-
 	return CHECKSUM_NONE;
 }
-
-static void uwe5622_reorder_open(struct uwe5622_wifi *wifi, u8 sta_lut, u8 tid,
-				 u16 win_start, u16 win_size)
-{
-	struct sk_buff_head done;
-	struct uwe5622_reorder *session;
-	int i;
-
-	__skb_queue_head_init(&done);
-	if (!win_size || win_size > UWE5622_REORDER_WINDOW)
-		win_size = UWE5622_REORDER_WINDOW;
-
-	spin_lock_bh(&wifi->reorder_lock);
-	session = uwe5622_reorder_find(wifi, sta_lut, tid);
-	if (session) {
-		uwe5622_reorder_flush(session, &done);
-	} else {
-		for (i = 0; i < ARRAY_SIZE(wifi->reorder); i++) {
-			if (!wifi->reorder[i].active) {
-				session = &wifi->reorder[i];
-				break;
-			}
-		}
-	}
-	if (session) {
-		/*
-		 * A session that was closed with frames still held left them in
-		 * its slots, and the window is about to describe a different
-		 * range, so empty it rather than only resetting the count: a
-		 * frame left behind is leaked and makes a later one at the same
-		 * index look like a duplicate.
-		 */
-		uwe5622_reorder_flush(session, &done);
-		session->active = true;
-		session->sta_lut = sta_lut;
-		session->tid = tid;
-		session->head = win_start & UWE5622_SEQ_MASK;
-		session->size = win_size;
-		session->stored = 0;
-	}
-	spin_unlock_bh(&wifi->reorder_lock);
-
-	uwe5622_deliver(&done);
-
-	if (!session)
-		dev_warn(wifi->dev, "no room for another reorder session\n");
-}
-
-static void uwe5622_reorder_close(struct uwe5622_wifi *wifi, u8 sta_lut,
-				  int tid)
-{
-	struct sk_buff_head done;
-	int i;
-
-	__skb_queue_head_init(&done);
-	spin_lock_bh(&wifi->reorder_lock);
-	for (i = 0; i < ARRAY_SIZE(wifi->reorder); i++) {
-		if (!wifi->reorder[i].active ||
-		    wifi->reorder[i].sta_lut != sta_lut ||
-		    (tid >= 0 && wifi->reorder[i].tid != tid))
-			continue;
-		uwe5622_reorder_flush(&wifi->reorder[i], &done);
-		wifi->reorder[i].active = false;
-	}
-	spin_unlock_bh(&wifi->reorder_lock);
-
-	uwe5622_deliver(&done);
-}
-
-static void uwe5622_reorder_close_all(struct uwe5622_wifi *wifi)
-{
-	struct sk_buff_head done;
-	int i;
-
-	__skb_queue_head_init(&done);
-	spin_lock_bh(&wifi->reorder_lock);
-	for (i = 0; i < ARRAY_SIZE(wifi->reorder); i++) {
-		if (!wifi->reorder[i].active)
-			continue;
-		uwe5622_reorder_flush(&wifi->reorder[i], &done);
-		wifi->reorder[i].active = false;
-	}
-	spin_unlock_bh(&wifi->reorder_lock);
-
-	uwe5622_deliver(&done);
-}
-
-/*
- * Returns true once the frame belongs to the session, whether it was stored or
- * queued for delivery; the caller then has nothing left to do with it.
- */
-static bool uwe5622_reorder_rx(struct uwe5622_wifi *wifi, u8 sta_lut, u8 tid,
-			       u16 seq, struct sk_buff *skb,
-			       struct sk_buff_head *done)
-{
-	struct uwe5622_reorder *session;
-	bool pending;
-	u16 delta;
-	u64 start = ktime_get_ns();
-	unsigned int before;
-
-	if (!uwe5622_reorder_enable)
-		return false;
-
-	uwe5622_reorder_stats.frames++;
-	spin_lock_bh(&wifi->reorder_lock);
-	session = uwe5622_reorder_find(wifi, sta_lut, tid);
-	if (!session) {
-		spin_unlock_bh(&wifi->reorder_lock);
-		uwe5622_reorder_stats.nosession++;
-		uwe5622_reorder_stats.ns += ktime_get_ns() - start;
-		if (uwe5622_reorder_debug &&
-		    !(uwe5622_reorder_stats.frames % 16384))
-			dev_info(wifi->dev,
-				 "reorder frames=%u none=%u held=%u expired=%u ahead=%u dup=%u cost=%lluns\n",
-				 uwe5622_reorder_stats.frames,
-				 uwe5622_reorder_stats.nosession,
-				 uwe5622_reorder_stats.stored,
-				 uwe5622_reorder_stats.expired,
-				 uwe5622_reorder_stats.ahead,
-				 uwe5622_reorder_stats.dup,
-				 uwe5622_reorder_stats.ns /
-				 uwe5622_reorder_stats.frames);
-		return false;
-	}
-
-	delta = uwe5622_seq_delta(seq, session->head);
-	if (delta >= session->size) {
-		/*
-		 * A frame from behind the head has to be passed straight on
-		 * rather than dropped. It looks like a retransmission of
-		 * something already delivered, but dropping these costs
-		 * everything: about a fifth of the stream arrives this way once
-		 * a session is running, the stack then has real holes to fill,
-		 * and the link falls to a quarter of a megabyte a second. So
-		 * the head is tracking the stream wrongly rather than the peer
-		 * repeating itself, and until that is understood the frame is
-		 * worth more delivered late than discarded.
-		 */
-		if (delta > UWE5622_SEQ_MASK / 2) {
-			spin_unlock_bh(&wifi->reorder_lock);
-			__skb_queue_tail(done, skb);
-			uwe5622_reorder_stats.ahead++;
-			return true;
-		}
-
-		/* The peer has moved well ahead: follow it. */
-		if (uwe5622_reorder_debug && uwe5622_reorder_stats.jumps++ < 30)
-			dev_info(wifi->dev,
-				 "jump: sta %u tid %u seq %u head %u delta %u stored %u\n",
-				 sta_lut, tid, seq, session->head, delta,
-				 session->stored);
-		uwe5622_reorder_flush(session, done);
-		session->head = (seq - session->size + 1) & UWE5622_SEQ_MASK;
-		delta = uwe5622_seq_delta(seq, session->head);
-	}
-
-	if (session->frame[seq % session->size]) {
-		/* A retransmission of something already held. */
-		spin_unlock_bh(&wifi->reorder_lock);
-		dev_kfree_skb_any(skb);
-		uwe5622_reorder_stats.dup++;
-		return true;
-	}
-
-	session->frame[seq % session->size] = skb;
-	if (!session->stored++)
-		session->deadline = jiffies + UWE5622_REORDER_TIMEOUT;
-	before = session->stored;
-	uwe5622_reorder_release(session, done);
-	pending = session->stored;
-	spin_unlock_bh(&wifi->reorder_lock);
-
-
-	/*
-	 * The timer only has to be armed while something is held, and rearming
-	 * it for every frame costs more than the wait it guards.
-	 */
-	if (pending)
-		uwe5622_reorder_stats.stored++;
-	uwe5622_reorder_stats.ns += ktime_get_ns() - start;
-	if (uwe5622_reorder_debug && !(uwe5622_reorder_stats.frames % 16384))
-		dev_info(wifi->dev,
-			 "reorder frames=%u none=%u held=%u expired=%u ahead=%u dup=%u depth=%u cost=%lluns\n",
-			 uwe5622_reorder_stats.frames,
-			 uwe5622_reorder_stats.nosession,
-			 uwe5622_reorder_stats.stored,
-			 uwe5622_reorder_stats.expired, uwe5622_reorder_stats.ahead,
-			 uwe5622_reorder_stats.dup, before,
-			 uwe5622_reorder_stats.ns / uwe5622_reorder_stats.frames);
-
-	if (pending && !delayed_work_pending(&wifi->reorder_work))
-		schedule_delayed_work(&wifi->reorder_work,
-				      UWE5622_REORDER_TIMEOUT);
-	return true;
-}
-
-/*
- * A hole the peer never fills would otherwise hold the whole stream, so give it
- * a deadline and release past it once that expires.
- */
-static void uwe5622_reorder_expire(struct work_struct *work)
-{
-	struct uwe5622_wifi *wifi = container_of(work, struct uwe5622_wifi,
-						 reorder_work.work);
-	struct sk_buff_head done;
-	bool pending = false;
-	int i;
-
-	__skb_queue_head_init(&done);
-	spin_lock_bh(&wifi->reorder_lock);
-	for (i = 0; i < ARRAY_SIZE(wifi->reorder); i++) {
-		struct uwe5622_reorder *session = &wifi->reorder[i];
-
-		if (!session->active || !session->stored)
-			continue;
-		if (time_after(jiffies, session->deadline)) {
-			uwe5622_reorder_stats.expired++;
-			uwe5622_reorder_flush(session, &done);
-		} else {
-			pending = true;
-		}
-	}
-	spin_unlock_bh(&wifi->reorder_lock);
-
-	uwe5622_deliver(&done);
-
-	if (pending)
-		schedule_delayed_work(&wifi->reorder_work,
-				      UWE5622_REORDER_TIMEOUT);
-}
-
-/*
- * Receive side block acknowledgement. The firmware asks the host whether to
- * accept a session the peer proposes and only aggregates once the host answers,
- * so without this the peer sends single frames and the link runs at a fraction
- * of its rate. The answer cannot be sent from the receive path, which is where
- * the request arrives and where the reply would have to be waited for, so it
- * goes through a worker.
- */
-#define UWE5622_BA_ADDBA_REQ_EVENT	0
-#define UWE5622_BA_ADDBA_RSP_CMD	1
-#define UWE5622_BA_DELBA_EVENT		2
-#define UWE5622_BA_DELBA_ALL_EVENT	5
-
-struct uwe5622_event_ba {
-	u8 type;
-	u8 tid;
-	u8 sta_lut;
-	u8 reserved;
-	__le16 win_start;
-	__le16 win_size;
-} __packed;
-
-struct uwe5622_cmd_ba {
-	u8 type;
-	u8 tid;
-	u8 address[ETH_ALEN];
-	u8 success;
-} __packed;
 
 /*
  * Transmit side. The peer will not aggregate what this station sends until a
@@ -1404,6 +863,34 @@ struct uwe5622_cmd_addba {
 	u8 dialog_token;
 	__le16 param;
 	__le16 timeout;
+} __packed;
+
+/*
+ * Block acknowledgement sessions the peer proposes. The firmware does not accept
+ * one by itself and only aggregates once the host answers, so without this the
+ * peer sends single frames and the link runs at a fraction of its rate. The
+ * answer cannot be sent from the receive path where the request arrives, so it
+ * goes through a worker.
+ */
+#define UWE5622_BA_ADDBA_REQ_EVENT	0
+#define UWE5622_BA_ADDBA_RSP_CMD	1
+#define UWE5622_BA_DELBA_EVENT		2
+#define UWE5622_BA_DELBA_ALL_EVENT	5
+
+struct uwe5622_event_ba {
+	u8 type;
+	u8 tid;
+	u8 sta_lut;
+	u8 reserved;
+	__le16 win_start;
+	__le16 win_size;
+} __packed;
+
+struct uwe5622_cmd_ba {
+	u8 type;
+	u8 tid;
+	u8 address[ETH_ALEN];
+	u8 success;
 } __packed;
 
 /*
@@ -1453,18 +940,10 @@ static void uwe5622_event_ba(struct uwe5622_wifi *wifi, u8 ctx,
 	case UWE5622_BA_ADDBA_REQ_EVENT:
 		break;
 	case UWE5622_BA_DELBA_EVENT:
-		uwe5622_reorder_close(wifi, event->sta_lut, event->tid);
-		return;
 	case UWE5622_BA_DELBA_ALL_EVENT:
-		uwe5622_reorder_close(wifi, event->sta_lut, -1);
-		return;
 	default:
 		return;
 	}
-
-	uwe5622_reorder_open(wifi, event->sta_lut, event->tid,
-			     le16_to_cpu(event->win_start),
-			     le16_to_cpu(event->win_size));
 
 	skb = alloc_skb(sizeof(*rsp), GFP_ATOMIC);
 	if (!skb)
@@ -1499,7 +978,7 @@ static void uwe5622_request_tx_ba(struct uwe5622_wifi *wifi, u8 ctx_id,
 	struct uwe5622_peer *peer;
 	bool ask = false;
 
-	if (sta_lut >= ARRAY_SIZE(wifi->peers) || !uwe5622_tx_block_ack)
+	if (sta_lut >= ARRAY_SIZE(wifi->peers))
 		return;
 
 	spin_lock_bh(&wifi->vif_lock);
@@ -1691,6 +1170,7 @@ static void uwe5622_reg_notify(struct wiphy *wiphy,
 	unsigned int i, band, rules = 0;
 	u32 last_start = 0;
 	size_t len;
+	int ret;
 
 	len = struct_size(regdom, rules, UWE5622_REGDOM_RULES);
 	regdom = kzalloc(len, GFP_KERNEL);
@@ -1761,9 +1241,6 @@ static int uwe5622_open_firmware(struct uwe5622_vif *vif)
 		return -ERANGE;
 	vif->ctx_id = ctx;
 	vif->opened = true;
-	if (uwe5622_roam_offload)
-		uwe5622_set_roam_offload(vif, UWE5622_ROAM_SET_FLAG,
-					 &(u8){ 1 }, 1);
 	return 0;
 }
 
@@ -2761,7 +2238,7 @@ void uwe5622_wifi_event(struct uwe5622_wifi *wifi,
 		if (len >= UWE5622_CREDIT_COLORS)
 			uwe5622_add_tx_credits(wifi, data,
 					       !(data[0] | data[1] |
-						 data[2] | data[3]), true);
+						 data[2] | data[3]));
 		break;
 	case UWE5622_EVENT_SDIO_SEQ_NUM:
 		break;
@@ -2813,9 +2290,9 @@ static void uwe5622_rx_one_frame(struct uwe5622_wifi *wifi,
 	struct sk_buff_head done;
 	struct net_device *ndev;
 	struct sk_buff *skb;
-	u32 word, info;
-	u16 frame_len, flags, seq;
-	u8 ctx, offset, sta_lut, tid;
+	u16 frame_len;
+	u8 ctx, offset;
+	u32 word;
 
 	if (len < UWE5622_RX_DESC_LEN)
 		return;
@@ -2843,16 +2320,7 @@ static void uwe5622_rx_one_frame(struct uwe5622_wifi *wifi,
 	ndev->stats.rx_bytes += frame_len;
 
 	__skb_queue_head_init(&done);
-	flags = get_unaligned_le16(data + UWE5622_RX_STA_OFFSET);
-	info = get_unaligned_le32(data + UWE5622_RX_INFO_OFFSET);
-	sta_lut = FIELD_GET(UWE5622_RX_STA_LUT, flags);
-	tid = FIELD_GET(UWE5622_RX_INFO_TID, info);
-	seq = FIELD_GET(UWE5622_RX_INFO_SEQ, info);
-
-	if (!(flags & UWE5622_RX_STA_LUT_VALID) ||
-	    !(info & UWE5622_RX_INFO_QOS) ||
-	    !uwe5622_reorder_rx(wifi, sta_lut, tid, seq, skb, &done))
-		__skb_queue_tail(&done, skb);
+	__skb_queue_tail(&done, skb);
 
 	uwe5622_deliver_vif(netdev_priv(ndev), &done);
 out:
@@ -2871,8 +2339,7 @@ static void uwe5622_wifi_data_rx(void *priv, struct sk_buff *skb)
 
 	if (left < UWE5622_RX_DESC_LEN)
 		goto out;
-	uwe5622_add_tx_credits(wifi, pos + UWE5622_RX_CREDIT_OFFSET, false,
-			       false);
+	uwe5622_add_tx_credits(wifi, pos + UWE5622_RX_CREDIT_OFFSET, false);
 	count = pos[8];
 	if (count <= 1) {
 		uwe5622_rx_one_frame(wifi, pos, left, skb->cb[4],
@@ -3188,8 +2655,6 @@ static int uwe5622_wifi_probe(struct auxiliary_device *adev,
 	INIT_WORK(&wifi->eapol_work, uwe5622_eapol_work);
 	skb_queue_head_init(&wifi->ba_queue);
 	INIT_WORK(&wifi->ba_work, uwe5622_ba_work);
-	spin_lock_init(&wifi->reorder_lock);
-	INIT_DELAYED_WORK(&wifi->reorder_work, uwe5622_reorder_expire);
 	wifi->inetaddr_notifier.notifier_call = uwe5622_inetaddr_event;
 	set_wiphy_dev(wiphy, &adev->dev);
 
@@ -3271,8 +2736,6 @@ static void uwe5622_wifi_remove(struct auxiliary_device *adev)
 	skb_queue_purge(&wifi->eapol_queue);
 	cancel_work_sync(&wifi->ba_work);
 	skb_queue_purge(&wifi->ba_queue);
-	cancel_delayed_work_sync(&wifi->reorder_work);
-	uwe5622_reorder_close_all(wifi);
 	uwe5622_finish_scan(wifi, true);
 	rtnl_lock();
 	for (i = 0; i < UWE5622_WIFI_MAX_CTX; i++) {
