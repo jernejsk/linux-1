@@ -1217,11 +1217,25 @@ static void uwe5622_reg_notify(struct wiphy *wiphy,
 	regdom->alpha2[0] = request->alpha2[0];
 	regdom->alpha2[1] = request->alpha2[1];
 
-	if (uwe5622_wifi_cmd(wifi, 0, UWE5622_CMD_SET_REGDOM, regdom,
-			     struct_size(regdom, rules, rules),
-			     NULL, NULL, NULL))
-		dev_warn(wifi->dev, "firmware rejected regulatory domain %c%c\n",
-			 request->alpha2[0], request->alpha2[1]);
+	ret = uwe5622_wifi_cmd(wifi, 0, UWE5622_CMD_SET_REGDOM, regdom,
+			       struct_size(regdom, rules, rules),
+			       NULL, NULL, NULL);
+	/*
+	 * A domain the firmware will not take is worth reporting, except for the
+	 * world domain, which it refuses by design and which is what cfg80211
+	 * asks for whenever it restores its default. Nothing is reported when
+	 * the firmware was never asked, which is the case while it is parked for
+	 * system sleep.
+	 */
+	if (ret && ret != -ESHUTDOWN) {
+		if (request->alpha2[0] == '0' && request->alpha2[1] == '0')
+			dev_dbg(wifi->dev,
+				"firmware keeps its own regulatory domain\n");
+		else
+			dev_warn(wifi->dev,
+				 "firmware rejected regulatory domain %c%c\n",
+				 request->alpha2[0], request->alpha2[1]);
+	}
 	kfree(regdom);
 }
 
@@ -1978,6 +1992,17 @@ static int uwe5622_set_power_mgmt(struct wiphy *wiphy, struct net_device *ndev,
 				data, sizeof(data), NULL, NULL, NULL);
 }
 
+/*
+ * Whether the firmware is parked for system sleep, kept under the command mutex
+ * so it cannot change while a command is being decided on.
+ */
+static void uwe5622_set_parked(struct uwe5622_wifi *wifi, bool parked)
+{
+	mutex_lock(&wifi->cmd_mutex);
+	wifi->parked = parked;
+	mutex_unlock(&wifi->cmd_mutex);
+}
+
 static int uwe5622_wifi_suspend(struct wiphy *wiphy,
 				struct cfg80211_wowlan *wowlan)
 {
@@ -1994,9 +2019,12 @@ static int uwe5622_wifi_suspend(struct wiphy *wiphy,
 	vif = netdev_priv(ndev);
 	ret = uwe5622_wifi_cmd(wifi, vif->ctx_id, UWE5622_CMD_POWER_SAVE,
 			       data, sizeof(data), NULL, NULL, NULL);
-	if (!ret)
+	if (!ret) {
+		uwe5622_set_parked(wifi, true);
 		netif_device_detach(ndev);
+	}
 	dev_put(ndev);
+
 	return ret;
 }
 
@@ -2008,15 +2036,29 @@ static int uwe5622_wifi_resume(struct wiphy *wiphy)
 	u8 data[] = { 5, 1 };
 	int ret;
 
+	/*
+	 * Before anything else, and whether or not there is an interface left to
+	 * wake: a flag still set here refuses every later command, which
+	 * userspace sees as a device that has stopped answering entirely.
+	 */
+	uwe5622_set_parked(wifi, false);
 	if (!ndev)
 		return 0;
 	vif = netdev_priv(ndev);
 	ret = uwe5622_wifi_cmd(wifi, vif->ctx_id, UWE5622_CMD_POWER_SAVE,
 			       data, sizeof(data), NULL, NULL, NULL);
-	if (!ret)
-		netif_device_attach(ndev);
+	/*
+	 * Attach either way. A controller that did not answer is better handed
+	 * to a stack that can time out, disconnect and try again than left with
+	 * an interface nothing can be sent through.
+	 */
+	if (ret)
+		dev_warn(wifi->dev, "controller did not wake cleanly: %d\n",
+			 ret);
+	netif_device_attach(ndev);
 	dev_put(ndev);
-	return ret;
+
+	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -2396,7 +2438,7 @@ static void uwe5622_wifi_restart(void *priv)
 	struct net_device *ndev[UWE5622_WIFI_MAX_CTX] = {};
 	int i, ret;
 
-	uwe5622_reorder_close_all(wifi);
+	uwe5622_set_parked(wifi, false);
 	for (i = 0; i < UWE5622_WIFI_MAX_CTX; i++)
 		ndev[i] = uwe5622_get_ndev(wifi, i);
 

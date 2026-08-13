@@ -33,6 +33,15 @@ int uwe5622_wifi_cmd(struct uwe5622_wifi *wifi, u8 ctx_id, u8 id,
 		ret = -ESHUTDOWN;
 		goto out_unlock;
 	}
+	/*
+	 * A firmware parked for system sleep answers nothing, so anything asked
+	 * of it between then and resume would spend the whole command timeout
+	 * failing. Waking it is the one thing worth asking.
+	 */
+	if (wifi->parked && id != UWE5622_CMD_POWER_SAVE) {
+		ret = -ESHUTDOWN;
+		goto out_unlock;
+	}
 
 	skb = alloc_skb(UWE5622_BUS_HEADROOM + sizeof(*hdr) + len, GFP_KERNEL);
 	if (!skb) {

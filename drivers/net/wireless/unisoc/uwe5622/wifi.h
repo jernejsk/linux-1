@@ -172,12 +172,10 @@ struct uwe5622_wifi {
 	struct work_struct eapol_work;
 	struct sk_buff_head ba_queue;
 	struct work_struct ba_work;
-	/* Protects every reorder session and its stored frames. */
-	spinlock_t reorder_lock;
-	struct uwe5622_reorder reorder[UWE5622_REORDER_SESSIONS];
-	struct delayed_work reorder_work;
-	struct notifier_block inetaddr_notifier;
+		struct notifier_block inetaddr_notifier;
 	bool stopping;
+	/* Set while the firmware is parked for system sleep. */
+	bool parked;
 	u8 perm_addr[ETH_ALEN];
 	u32 fw_capa;
 	u32 fw_std;
