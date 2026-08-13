@@ -223,3 +223,72 @@ or faults, `log_records` still zero.
 Not covered by these tests: the access point path, and whether Bluetooth
 scanning still finds devices - there are no advertisers in range at this
 location, so a scan returns nothing before recovery as well as after.
+
+## Cleanup and the full regression pass
+
+The driver had fourteen module parameters. Every one selected a path that
+measurement had already rejected, or reported a number that an investigation
+needed once. All fourteen are gone, along with the code behind them: hardware
+roaming (Orange Pi issue 98 has no fix but not asking), the receive reorder
+window, the single-record receive path, the 512-byte block size, the
+wake-per-transfer sleep protocol, the poll-mode read loop, two unused frame
+delivery modes, the firmware log switch, and the transmit credit, checksum and
+receive timing counters. **The driver now has no module parameters at all**, and
+is 920 lines shorter. Ethtool still offers the checksum offload, so nothing worth
+controlling lost its control.
+
+### Two bugs the cleanup exposed
+
+**A parked controller was still being asked things.** A firmware parked for
+system sleep answers nothing, so a key installation arriving just after the park
+spent the whole command timeout failing: `command 0xe timed out`, three seconds
+of the suspend path. Commands are now refused while parked. The first version of
+that fix was worse than the bug - both edits landed in `suspend()` and nothing
+cleared the flag, so after one sleep the flag refused *everything* and iwd
+reported `Cannot send after transport endpoint shutdown` for every scan while the
+station never reconnected. Resume now clears it first, before the interface
+lookup, whether or not an interface is left to wake.
+
+**Resume left the interface detached** if the wake command failed. It now
+attaches either way: a stack that can time out and retry beats an interface
+nothing can be sent through.
+
+### Test matrix, all on the committed code
+
+| test | result |
+| --- | --- |
+| cold boot | 5240 MHz, MCS 9, 80 MHz |
+| transmit | 30.4-32.8 MB/s |
+| receive | 36.3-41.4 MB/s |
+| bidirectional | 21+21 to 28+28 MB/s |
+| UDP 150 Mbit | 17.9 MB/s, no loss |
+| 60 s soak | 34.0-34.2 MB/s, ~390 retransmits |
+| suspend and resume, three cycles | stays associated on 5 GHz, no scan errors |
+| driver reload | wlan0, phy0, hci0, full throughput |
+| warm reboot | firmware ready without a power cycle |
+| recovery | wlan0/phy0/hci0 kept, reconnects itself (validated before the test switch was removed) |
+| Bluetooth | powered, dual mode, finds devices, no cost to Wi-Fi |
+| oops, warnings, refcount errors | none, in any test |
+
+Throughput and efficiency were then compared against the pre-cleanup build with
+the two builds interleaved, because air conditions drift over an afternoon and a
+sequential comparison measures the weather:
+
+| | before | after |
+| --- | --- | --- |
+| transmit | 31.6, 30.9 MB/s | 32.8, 31.9 |
+| receive | 39.5, 37.8 MB/s | 39.2, 36.3 |
+| transmit CPU per MB/s | 4.55, 4.41 | 4.51, 4.61 |
+| receive CPU per MB/s | 4.81, 4.86 | 4.85, 4.78 |
+
+Transmit is slightly faster, everything else is inside ±2%. No regression.
+
+### Measurement trap: the same SSID on both bands
+
+Twice a cold boot measured 1-6 MB/s, and both times the cause was iwd
+associating with the **2.4 GHz** BSS of a dual-band access point: `freq: 2422`,
+`VHT-MCS 5`, 52 Mbit/s. Restarting iwd moved it to 5240 MHz and 30 MB/s. Two
+hypotheses were tested and killed on the way - Bluetooth being powered or
+scanning (33.8 MB/s during an LE scan) and power save (32.0 MB/s with it on).
+Check the frequency before believing any number; the test suite now refuses to
+measure below 5 GHz.
