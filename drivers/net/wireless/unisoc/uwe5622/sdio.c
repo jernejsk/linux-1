@@ -104,7 +104,7 @@
  * way they arrive in one on the receive side, because a transfer costs far more
  * than the bytes in it.
  */
-#define UWE5622_TX_MAX_SIZE		(16 * UWE5622_SDIO_BLOCK_SIZE)
+#define UWE5622_TX_MAX_SIZE		(32 * UWE5622_SDIO_BLOCK_SIZE)
 
 static bool uwe5622_rx_aggregation = true;
 module_param_named(rx_aggregation, uwe5622_rx_aggregation, bool, 0444);

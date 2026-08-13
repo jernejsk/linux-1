@@ -25,6 +25,12 @@
 #define UWE5622_RX_CREDIT_OFFSET	24
 #define UWE5622_CREDIT_COLORS	4
 #define UWE5622_CREDIT_MAX	U16_MAX
+
+/* How often transmission had to wait, and for what. */
+static unsigned int uwe5622_tx_stalls;
+module_param_named(tx_stalls, uwe5622_tx_stalls, uint, 0444);
+static unsigned int uwe5622_tx_credit_events;
+module_param_named(tx_credit_events, uwe5622_tx_credit_events, uint, 0444);
 #define UWE5622_CREDIT_NO_POOL	0xff
 #define UWE5622_RX_MH_DESC_LEN	28
 #define UWE5622_EAPOL_QUEUE_MAX	64
@@ -376,6 +382,7 @@ static void uwe5622_add_tx_credits(struct uwe5622_wifi *wifi,
 	bool added = false;
 	int i;
 
+	uwe5622_tx_credit_events++;
 	spin_lock_bh(&wifi->credit_lock);
 	if (reset) {
 		memset(wifi->tx_credits, 0, sizeof(wifi->tx_credits));
@@ -469,6 +476,7 @@ static bool uwe5622_take_tx_credit(struct uwe5622_wifi *wifi,
 		spin_unlock_bh(&wifi->credit_lock);
 		return true;
 	}
+	uwe5622_tx_stalls++;
 	netif_stop_queue(ndev);
 	spin_unlock_bh(&wifi->credit_lock);
 	return false;
