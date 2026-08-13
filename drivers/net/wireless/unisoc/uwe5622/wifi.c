@@ -1266,6 +1266,38 @@ struct uwe5622_cmd_addba {
 	__le16 timeout;
 } __packed;
 
+/*
+ * What the firmware answers an ADDBA request with: how the negotiation ended,
+ * followed by the request it was given back unchanged. Only the result is worth
+ * reading; the echo cannot report what the peer agreed to, because the firmware
+ * saves the request before adding parameters of its own to the frame it sends.
+ */
+enum uwe5622_addba_result {
+	UWE5622_ADDBA_SUCCESS,
+	UWE5622_ADDBA_FAIL,
+	UWE5622_ADDBA_TIMEOUT,
+	UWE5622_ADDBA_DECLINE,
+};
+
+struct uwe5622_rsp_addba {
+	u8 result;
+	struct uwe5622_cmd_addba req;
+} __packed;
+
+static const char *uwe5622_addba_result_name(u8 result)
+{
+	switch (result) {
+	case UWE5622_ADDBA_FAIL:
+		return "failed";
+	case UWE5622_ADDBA_TIMEOUT:
+		return "timed out";
+	case UWE5622_ADDBA_DECLINE:
+		return "declined";
+	default:
+		return "rejected";
+	}
+}
+
 static void uwe5622_event_ba(struct uwe5622_wifi *wifi, u8 ctx,
 			     const u8 *data, size_t len)
 {
@@ -1370,15 +1402,37 @@ static void uwe5622_ba_work(struct work_struct *work)
 
 	while ((skb = skb_dequeue(&wifi->ba_queue))) {
 		u8 id = UWE5622_SKB_CB(skb)->ba_cmd;
+		struct uwe5622_rsp_addba rsp = {};
+		size_t rsp_len = sizeof(rsp);
+		bool refused;
 		int ret;
 
 		ret = uwe5622_wifi_cmd(wifi, UWE5622_SKB_CB(skb)->ctx_id, id,
-				       skb->data, skb->len, NULL, NULL, NULL);
-		if (ret && id == UWE5622_CMD_ADDBA_REQ) {
+				       skb->data, skb->len,
+				       id == UWE5622_CMD_ADDBA_REQ ? &rsp : NULL,
+				       id == UWE5622_CMD_ADDBA_REQ ? &rsp_len :
+								     NULL,
+				       NULL);
+		/*
+		 * The command succeeding only means the firmware answered. What
+		 * the peer decided is in the answer, and a session that was
+		 * declined or timed out has to be forgotten here or this TID is
+		 * never asked for again.
+		 */
+		refused = !ret && rsp_len >= sizeof(rsp.result) &&
+			  rsp.result != UWE5622_ADDBA_SUCCESS;
+		if ((ret || refused) && id == UWE5622_CMD_ADDBA_REQ) {
 			const struct uwe5622_cmd_addba *req =
 				(const void *)skb->data;
 			u8 tid = FIELD_GET(UWE5622_BA_PARAM_TID,
 					   le16_to_cpu(req->param));
+
+			if (refused)
+				dev_dbg(wifi->dev,
+					"peer %pM %s a block ack session for TID %u\n",
+					req->address,
+					uwe5622_addba_result_name(rsp.result),
+					tid);
 
 			spin_lock_bh(&wifi->vif_lock);
 			if (req->sta_lut < ARRAY_SIZE(wifi->peers)) {
