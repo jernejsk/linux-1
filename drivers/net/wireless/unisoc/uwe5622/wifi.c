@@ -641,6 +641,75 @@ static void uwe5622_reorder_flush(struct uwe5622_reorder *session,
  * lets the stack amortise its own per-batch work; it wants softirqs off, which the
  * receive thread this runs on does not otherwise provide.
  */
+static void uwe5622_deliver(struct sk_buff_head *done)
+{
+	struct sk_buff *skb;
+	struct list_head list;
+
+	if (skb_queue_empty(done))
+		return;
+
+	INIT_LIST_HEAD(&list);
+	while ((skb = __skb_dequeue(done)))
+		list_add_tail(&skb->list, &list);
+
+	local_bh_disable();
+	netif_receive_skb_list(&list);
+	local_bh_enable();
+}
+
+#define UWE5622_NAPI_QUEUE_LIMIT	256
+
+static bool uwe5622_rx_napi = true;
+module_param_named(rx_napi, uwe5622_rx_napi, bool, 0644);
+MODULE_PARM_DESC(rx_napi, "hand received frames to a poll so they can coalesce");
+
+
+/*
+ * Receive offload needs a poll it can hold open while it coalesces, so frames go
+ * through one rather than being pushed up as they arrive. Coalescing is only
+ * worth having because the controller's checksum arrives with them: segments the
+ * hardware has already summed can be joined without touching their payload.
+ */
+static int uwe5622_napi_poll(struct napi_struct *napi, int budget)
+{
+	struct uwe5622_vif *vif = container_of(napi, struct uwe5622_vif, napi);
+	struct sk_buff *skb;
+	int done = 0;
+
+	while (done < budget && (skb = skb_dequeue(&vif->rx_queue))) {
+		napi_gro_receive(napi, skb);
+		done++;
+	}
+
+	if (done < budget)
+		napi_complete_done(napi, done);
+
+	return done;
+}
+
+/*
+ * Queue for the poll, unless it is not running yet or has fallen behind, in which
+ * case deliver here and now. An unbounded queue would hold socket buffers, and
+ * every one of those holds the device, so an interface could never be taken away.
+ */
+static void uwe5622_deliver_vif(struct uwe5622_vif *vif,
+				struct sk_buff_head *done)
+{
+	struct sk_buff *skb;
+
+
+	if (!uwe5622_rx_napi || !vif->napi_ready ||
+	    skb_queue_len(&vif->rx_queue) >= UWE5622_NAPI_QUEUE_LIMIT) {
+			uwe5622_deliver(done);
+		return;
+	}
+
+	while ((skb = __skb_dequeue(done)))
+		skb_queue_tail(&vif->rx_queue, skb);
+	napi_schedule(&vif->napi);
+}
+
 static bool uwe5622_rx_csum_debug;
 module_param_named(rx_csum_debug, uwe5622_rx_csum_debug, bool, 0644);
 MODULE_PARM_DESC(rx_csum_debug, "report receive checksum verification");
@@ -763,23 +832,6 @@ skip:
 	uwe5622_csum_stats.skipped++;
 
 	return CHECKSUM_NONE;
-}
-
-static void uwe5622_deliver(struct sk_buff_head *done)
-{
-	struct sk_buff *skb;
-	struct list_head list;
-
-	if (skb_queue_empty(done))
-		return;
-
-	INIT_LIST_HEAD(&list);
-	while ((skb = __skb_dequeue(done)))
-		list_add_tail(&skb->list, &list);
-
-	local_bh_disable();
-	netif_receive_skb_list(&list);
-	local_bh_enable();
 }
 
 static void uwe5622_reorder_open(struct uwe5622_wifi *wifi, u8 sta_lut, u8 tid,
@@ -1497,6 +1549,7 @@ uwe5622_add_virtual_intf(struct wiphy *wiphy, const char *name,
 	vif = netdev_priv(ndev);
 	vif->wifi = wifi;
 	vif->credit_pool = UWE5622_CREDIT_NO_POOL;
+	skb_queue_head_init(&vif->rx_queue);
 	vif->wdev.wiphy = wiphy;
 	vif->wdev.iftype = type;
 	vif->wdev.netdev = ndev;
@@ -1514,9 +1567,20 @@ uwe5622_add_virtual_intf(struct wiphy *wiphy, const char *name,
 	ret = uwe5622_open_firmware(vif);
 	if (ret)
 		goto err_free;
+	netif_napi_add(ndev, &vif->napi, uwe5622_napi_poll);
 	ret = cfg80211_register_netdevice(ndev);
 	if (ret)
-		goto err_close;
+		goto err_napi;
+	napi_enable(&vif->napi);
+	/*
+	 * Run the poll in its own thread. Frames are handed over from the
+	 * transport's read loop, a kernel thread that holds the bus claimed for
+	 * the whole drain, and a receive softirq raised there is never
+	 * serviced: the poll simply never runs and reception stops. A threaded
+	 * poll does not depend on that.
+	 */
+	dev_set_threaded(ndev, NETDEV_NAPI_THREADED_ENABLED);
+	vif->napi_ready = true;
 
 	ret = uwe5622_remember_vif(vif);
 	if (ret)
@@ -1525,10 +1589,16 @@ uwe5622_add_virtual_intf(struct wiphy *wiphy, const char *name,
 	return &vif->wdev;
 
 err_unregister:
+	/* Unregistering frees the netdev, so it must not be freed again here. */
+	vif->napi_ready = false;
+	napi_disable(&vif->napi);
+	netif_napi_del(&vif->napi);
+	skb_queue_purge(&vif->rx_queue);
 	uwe5622_close_firmware(vif);
 	cfg80211_unregister_netdevice(ndev);
 	return ERR_PTR(ret);
-err_close:
+err_napi:
+	netif_napi_del(&vif->napi);
 	uwe5622_close_firmware(vif);
 err_free:
 	free_netdev(ndev);
@@ -1577,6 +1647,14 @@ static int uwe5622_del_virtual_intf(struct wiphy *wiphy,
 
 	uwe5622_forget_vif(vif);
 	uwe5622_finish_scan_wdev(wifi, wdev, true);
+	/*
+	 * Stop the poll before anything else can queue to it, then empty what it
+	 * never took, so nothing is left holding the device.
+	 */
+	vif->napi_ready = false;
+	napi_disable(&vif->napi);
+	netif_napi_del(&vif->napi);
+	skb_queue_purge(&vif->rx_queue);
 	uwe5622_close_firmware(vif);
 	cfg80211_unregister_netdevice(ndev);
 	return 0;
@@ -2393,7 +2471,7 @@ static void uwe5622_rx_one_frame(struct uwe5622_wifi *wifi,
 	    !uwe5622_reorder_rx(wifi, sta_lut, tid, seq, skb, &done))
 		__skb_queue_tail(&done, skb);
 
-	uwe5622_deliver(&done);
+	uwe5622_deliver_vif(netdev_priv(ndev), &done);
 out:
 	dev_put(ndev);
 }

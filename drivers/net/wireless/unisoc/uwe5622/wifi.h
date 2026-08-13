@@ -95,6 +95,9 @@ struct uwe5622_vif {
 	u8 credit_pool;
 	bool opened;
 	bool connected;
+	struct napi_struct napi;
+	struct sk_buff_head rx_queue;
+	bool napi_ready;
 };
 
 struct uwe5622_peer {
