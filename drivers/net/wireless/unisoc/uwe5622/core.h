@@ -33,6 +33,8 @@ struct uwe5622_bus_ops {
 	int (*tx)(struct uwe5622 *wcn, u8 channel, struct sk_buff *skb,
 		  u8 tag);
 	int (*bt_ram)(struct uwe5622 *wcn, bool on);
+	/* Cycles the controller's power, losing everything it held. */
+	int (*power_cycle)(struct uwe5622 *wcn);
 	int (*suspend)(struct uwe5622 *wcn, bool wake);
 	int (*resume)(struct uwe5622 *wcn);
 };

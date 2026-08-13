@@ -166,6 +166,38 @@ void uwe5622_core_tx_error(struct uwe5622 *wcn, u8 tx_channel, u8 tag)
 	srcu_read_unlock(&wcn->channel_srcu, idx);
 }
 
+static struct uwe5622 *uwe5622_recovery_target;
+
+/*
+ * Asking for a recovery by hand. A controller whose core has stopped answering
+ * does not necessarily fail a transfer - the writes still land, nothing acts on
+ * them - so there are states the driver cannot notice on its own, and this is how
+ * they get exercised.
+ */
+static int uwe5622_force_recovery_set(const char *val,
+				      const struct kernel_param *kp)
+{
+	struct uwe5622 *wcn = uwe5622_recovery_target;
+	bool ask;
+	int ret;
+
+	ret = kstrtobool(val, &ask);
+	if (ret)
+		return ret;
+	if (!ask || !wcn)
+		return ask ? -ENODEV : 0;
+
+	dev_info(wcn->dev, "recovery requested by hand\n");
+	uwe5622_core_request_recovery(wcn);
+
+	return 0;
+}
+
+static const struct kernel_param_ops uwe5622_force_recovery_ops = {
+	.set = uwe5622_force_recovery_set,
+};
+module_param_cb(force_recovery, &uwe5622_force_recovery_ops, NULL, 0200);
+
 void uwe5622_core_request_recovery(struct uwe5622 *wcn)
 {
 	mutex_lock(&wcn->state_mutex);
@@ -268,6 +300,21 @@ static void uwe5622_recovery_work(struct work_struct *work)
 	wcn->bt_auxdev = NULL;
 	wcn->wifi_auxdev = NULL;
 	wcn->bus_ops->stop(wcn);
+
+	/*
+	 * Take the controller's power away and give it back before loading the
+	 * firmware again. Stopping and restarting on its own leaves whatever
+	 * wedged the firmware exactly where it was: its core keeps running from
+	 * the state it is in, and nothing the host can send reaches it. Only the
+	 * enable line clears the chip, which is why recovery has to go through
+	 * it.
+	 */
+	if (wcn->bus_ops->power_cycle) {
+		ret = wcn->bus_ops->power_cycle(wcn);
+		if (ret)
+			dev_warn(wcn->dev, "failed to cycle the controller: %d\n",
+				 ret);
+	}
 
 	ret = request_firmware(&fw, UWE5622_FIRMWARE_NAME, wcn->dev);
 	if (ret)
@@ -541,6 +588,7 @@ int uwe5622_core_probe(struct uwe5622 *wcn)
 
 	mutex_init(&wcn->state_mutex);
 	mutex_init(&wcn->channel_mutex);
+	uwe5622_recovery_target = wcn;
 	uwe5622_trace_init(wcn);
 	INIT_WORK(&wcn->recovery_work, uwe5622_recovery_work);
 	ret = init_srcu_struct(&wcn->channel_srcu);

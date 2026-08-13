@@ -1084,6 +1084,33 @@ static void uwe5622_sdio_stop(struct uwe5622 *wcn)
 	sdio_release_host(sdio->func);
 }
 
+/*
+ * The controller's enable line belongs to the card's power sequence, which is
+ * where the binding puts it, so the way to reach it is to ask the host to cycle
+ * the card: that drops power, drives the line, restores it and reinitialises the
+ * function. Everything the controller held is gone afterwards, firmware included,
+ * which is the point.
+ */
+static int uwe5622_sdio_power_cycle(struct uwe5622 *wcn)
+{
+	struct uwe5622_sdio *sdio = wcn->bus_priv;
+	struct sdio_func *func = sdio->func;
+	int ret;
+
+	sdio_claim_host(func);
+	ret = mmc_hw_reset(func->card);
+	if (!ret)
+		ret = sdio_enable_func(func);
+	sdio_release_host(func);
+	if (ret)
+		return ret;
+
+	sdio->enabled = false;
+	dev_info(&func->dev, "controller power cycled\n");
+
+	return 0;
+}
+
 static int uwe5622_sdio_bt_ram(struct uwe5622 *wcn, bool on)
 {
 	struct uwe5622_sdio *sdio = wcn->bus_priv;
@@ -1190,6 +1217,7 @@ static const struct uwe5622_bus_ops uwe5622_sdio_bus_ops = {
 	.stop = uwe5622_sdio_stop,
 	.tx = uwe5622_sdio_tx,
 	.bt_ram = uwe5622_sdio_bt_ram,
+	.power_cycle = uwe5622_sdio_power_cycle,
 	.suspend = uwe5622_sdio_suspend_bus,
 	.resume = uwe5622_sdio_resume_bus,
 };
