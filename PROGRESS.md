@@ -183,5 +183,43 @@ What stayed, deliberately:
   asks of a host that wants an explicit capture.
 
 Verified after a forced recovery: no AT timeout, `log_records` still zero, up
-33.0 and down 36.8 MB/s. Note that the interface comes back renamed
-(`wlan0` to `wlan1`) after recovery - cosmetic, iwd copes, still unfixed.
+33.0 and down 36.8 MB/s.
+
+## Recovery keeps the devices
+
+Recovery used to delete both auxiliary devices, reload the firmware and build
+them again. Measured cost of that: the interface came back as `wlan1`, then
+`wlan2`, then `wlan3`. The name follows the **wiphy index**, iwd names the
+interface `wlan<phy id>`, and the kernel never reuses a wiphy index while
+cfg80211 stays loaded - confirmed three times in a row, phy0/phy1/phy2 against
+wlan0/wlan1/wlan2. Nothing downstream of a destroyed wiphy can hold the name.
+
+So recovery now keeps both devices and rebuilds only what the firmware forgot.
+Clients were already told when the firmware goes away; there is now a second
+callback for when it comes back, run once the core is carrying commands again:
+
+- **Wi-Fi**: resend the version handshake and configuration, forget peers,
+  block ack sessions and credits, reopen a firmware context for every interface
+  that still exists, then report the link lost so userspace reconnects on the
+  same interface. An access point interface is reported stopped to cfg80211.
+- **Bluetooth**: inject a hardware error, which is what makes the stack reopen
+  the device and rerun the setup - including the `0xfca1` dual-mode enable -
+  that a fresh firmware needs. The old code did this *before* the reload, from
+  the reset callback, where the stack's reopen could only be refused.
+
+| | before | after |
+| --- | --- | --- |
+| interface after recovery | `wlan1`, `wlan2`, ... | **`wlan0`** every time |
+| wiphy | new phy each time | **`phy0`** |
+| Bluetooth | new `hci` index | **`hci0`** |
+| reconnect | userspace re-discovers device | station reconnects itself |
+| duration | ~2 s | ~2 s |
+
+Tested: three consecutive recoveries, and one fired in the middle of a
+transfer. Interface, phy and hci indices all stable, station reconnects by
+itself, throughput after recovery unchanged (32.1 up, 38.7 down), no warnings
+or faults, `log_records` still zero.
+
+Not covered by these tests: the access point path, and whether Bluetooth
+scanning still finds devices - there are no advertisers in range at this
+location, so a scan returns nothing before recovery as well as after.
