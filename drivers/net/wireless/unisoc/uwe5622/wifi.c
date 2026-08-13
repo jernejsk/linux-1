@@ -12,6 +12,8 @@
 #include <linux/unaligned.h>
 #include <linux/if_vlan.h>
 #include <linux/ip.h>
+#include <linux/tcp.h>
+#include <linux/udp.h>
 #include <linux/ipv6.h>
 #include <net/cfg80211.h>
 #include <net/ip6_checksum.h>
@@ -25,6 +27,14 @@
 #define UWE5622_RX_CREDIT_OFFSET	24
 #define UWE5622_CREDIT_COLORS	4
 #define UWE5622_CREDIT_MAX	U16_MAX
+
+/* Whether the hardware may complete transmit checksums. */
+static bool uwe5622_tx_checksum = true;
+module_param_named(tx_checksum, uwe5622_tx_checksum, bool, 0644);
+static unsigned int uwe5622_tx_csum_hw;
+module_param_named(tx_csum_hw, uwe5622_tx_csum_hw, uint, 0444);
+static unsigned int uwe5622_tx_csum_sw;
+module_param_named(tx_csum_sw, uwe5622_tx_csum_sw, uint, 0444);
 
 /*
  * How often transmission had to wait, and for what. A grant only counts when
@@ -351,6 +361,45 @@ static int uwe5622_ndev_stop(struct net_device *ndev)
 static void uwe5622_request_tx_ba(struct uwe5622_wifi *wifi, u8 ctx_id,
 				  u8 sta_lut, u8 tid);
 
+/*
+ * The transmit descriptor can ask the MAC hardware to complete one checksum for
+ * the frame. It carries only which of TCP and UDP to complete and where the
+ * transport header starts, so hardware has to place the result at the standard
+ * offset for that protocol: anything else, and anything not linear, is completed
+ * in software instead.
+ */
+#define UWE5622_TX_CSUM_ENABLE		BIT(0)
+#define UWE5622_TX_CSUM_TCP		BIT(1)
+
+static bool uwe5622_tx_csum_is_tcp(const struct sk_buff *skb)
+{
+	return skb->csum_offset == offsetof(struct tcphdr, check);
+}
+
+static bool uwe5622_tx_csum_offload(struct sk_buff *skb)
+{
+	unsigned int offset = skb_checksum_start_offset(skb);
+
+	if (!uwe5622_tx_checksum)
+		return false;
+	if (skb_is_nonlinear(skb) || skb_csum_is_sctp(skb))
+		return false;
+	if (offset > U16_MAX || offset + skb->csum_offset > skb->len)
+		return false;
+
+	/*
+	 * Hardware knows where the checksum of a TCP or UDP header lives and
+	 * nothing else. Identify the protocol by the field the stack asked to
+	 * be filled rather than by the network header, which says nothing about
+	 * what an IPv6 extension chain ends in.
+	 */
+	if (skb->csum_offset != offsetof(struct tcphdr, check) &&
+	    skb->csum_offset != offsetof(struct udphdr, check))
+		return false;
+
+	return true;
+}
+
 static struct sk_buff *uwe5622_build_tx(struct uwe5622_vif *vif,
 					const struct sk_buff *skb, u8 type,
 					u8 color)
@@ -395,6 +444,13 @@ static struct sk_buff *uwe5622_build_tx(struct uwe5622_vif *vif,
 	put_unaligned_le16(skb->len, desc + 3);
 	desc[6] = sta_lut;
 	desc[7] = color;
+	if (skb->ip_summed == CHECKSUM_PARTIAL) {
+		uwe5622_tx_csum_hw++;
+		desc[2] = UWE5622_TX_CSUM_ENABLE;
+		if (uwe5622_tx_csum_is_tcp(skb))
+			desc[2] |= UWE5622_TX_CSUM_TCP;
+		put_unaligned_le16(skb_checksum_start_offset(skb), desc + 9);
+	}
 	skb_put_data(tx, skb->data, skb->len);
 	return tx;
 }
@@ -570,6 +626,17 @@ static netdev_tx_t uwe5622_ndev_xmit(struct sk_buff *skb,
 		skb_queue_tail(&wifi->eapol_queue, skb);
 		schedule_work(&wifi->eapol_work);
 		return NETDEV_TX_OK;
+	}
+
+	/*
+	 * Complete in software what the descriptor cannot express, before a
+	 * credit is spent on the frame.
+	 */
+	if (skb->ip_summed == CHECKSUM_PARTIAL &&
+	    !uwe5622_tx_csum_offload(skb)) {
+		uwe5622_tx_csum_sw++;
+		if (skb_checksum_help(skb))
+			goto drop;
 	}
 
 	if (!uwe5622_take_tx_credit(wifi, ndev, &color))
@@ -1794,8 +1861,8 @@ uwe5622_add_virtual_intf(struct wiphy *wiphy, const char *name,
 	vif->wdev.netdev = ndev;
 	ndev->ieee80211_ptr = &vif->wdev;
 	ndev->netdev_ops = &uwe5622_netdev_ops;
-	ndev->features |= NETIF_F_RXCSUM;
-	ndev->hw_features |= NETIF_F_RXCSUM;
+	ndev->features |= NETIF_F_RXCSUM | NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM;
+	ndev->hw_features |= NETIF_F_RXCSUM | NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM;
 	ndev->needs_free_netdev = true;
 	SET_NETDEV_DEV(ndev, wiphy_dev(wiphy));
 	uwe5622_set_vif_type(vif, type, address);
