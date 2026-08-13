@@ -2108,6 +2108,16 @@ static int uwe5622_fill_station(struct uwe5622_vif *vif,
 	sinfo->rx_packets = ndev->stats.rx_packets;
 	uwe5622_station_flags(vif, mac, sinfo);
 
+	/*
+	 * The controller's station report describes the link an interface has as
+	 * a station. Asking an access point for it times out, and a command that
+	 * times out here is followed by transfers that fail and a controller
+	 * that has to be reset, so the access point reports what the driver
+	 * knows and asks nothing.
+	 */
+	if (vif->mode == UWE5622_MODE_AP)
+		return 0;
+
 	ret = uwe5622_wifi_cmd(vif->wifi, vif->ctx_id, UWE5622_CMD_GET_STATION,
 			       NULL, 0, &report, &len, NULL);
 	if (ret || len < sizeof(report))
