@@ -292,3 +292,54 @@ hypotheses were tested and killed on the way - Bluetooth being powered or
 scanning (33.8 MB/s during an LE scan) and power save (32.0 MB/s with it on).
 Check the frequency before believing any number; the test suite now refuses to
 measure below 5 GHz.
+
+## WoWLAN: driver side done, physical wake still blocked
+
+The trigger programming moved from `set_wakeup()` to `suspend(wiphy, wowlan)`,
+where the configuration that applies to the coming sleep is handed over;
+`set_wakeup()` now only enables the physical wake source. Wake-reason reporting
+is implemented from the firmware's resume marker (common-header bit 3): the
+first marked object of each sleep is kept, a marked event `0x81` reports
+disconnect, a marked frame carrying the magic pattern reports a magic packet,
+any other marked frame is reported as the packet itself, and nothing marked
+reports an unknown cause. The report is made from a delayed work 500 ms after
+resume, because the marked object cannot arrive before the transport reads
+again, and `pattern_idx` is set to -1 so a disconnect does not also claim
+packet pattern zero.
+
+**Verified working:** with `any` armed over a sleep an ICMP echo arrived
+during, the driver reported that exact frame (destination, source, protocol
+all correct). With nothing arriving, it reported an unknown cause. So the
+firmware really does mark objects built while asleep, and the host can recover
+the reason from them.
+
+**Not working: the controller never drives its host-wake pin.** All three
+prerequisites from `firmware-re/30-boot-bind-sleep.md` are now implemented -
+the single output the board wires (`bt-host-wake` -> sync bit 8 only), the
+`AP_SUSPEND` transport handshake at function 0 register `0x1b0`, and the
+three-step CP sleep request with its 65 us hold - and the driver now owns the
+wake interrupt so it is armed *before* the controller is told the host is going
+down, with any edge latched while masked discarded first. A firmware runtime
+read at `0x00110248` confirms the configuration is exactly as intended:
+
+    bt_en=1 wl_en=0 duration=2 (20 ms) levels=0/1 separation=0 irq_type=1
+    data_len_max=0x690   transport state=0
+
+The transport state stays **0** through the `AP_SUSPEND` write and for at least
+100 ms after it, where the note says it should become 1. So the write is not
+being honoured, and until it is nothing can pulse the pin. The register is a
+write-1 strobe, so a read-back of zero says nothing either way.
+
+Everything else was eliminated on the way: Bluetooth being powered or scanning
+costs nothing and is not the wake source (its pulses turned out to be edges
+latched while the interrupt was masked, replayed on unmasking); power save is
+irrelevant; the magic filter is definitely armed, since ordinary traffic stops
+being marked as soon as it is; and both a UDP-port-9 magic packet and a raw
+ethertype 0x0842 frame fail to be matched, which is consistent with a filter
+that passes nothing rather than one that misses the pattern.
+
+Next step is the comparison the driver cannot make on its own: run the vendor
+driver on this board and see whether WoWLAN wakes it. If it does, capture its
+function 0 writes around suspend and diff them against the sequence above; if
+it does not, the board's `BT-WAKE-AP` wiring or the firmware's pad routing is
+the answer and `OrangePi_3_LTS_v1.4.pdf` decides it.
