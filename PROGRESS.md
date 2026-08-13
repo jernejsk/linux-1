@@ -47,8 +47,16 @@ looked like it changed nothing when the Python receiver was setting the pace.
 - **Reordering.** `ss -ti` shows `reord_seen:566` on a loaded flow, but
   `tcp_reordering` 3 versus 127 changes nothing (15.6 versus 15.4 MB/s on the
   old harness), and retransmits at full speed are 30 of 21,000 segments.
-- **A-MSDU.** Setting `amsdu_permit` in our own ADDBA request leaves frame size
-  at 1508 B. The firmware does not aggregate MSDUs on transmit. Reverted.
+- **A-MSDU.** Setting `amsdu_permit` in our own ADDBA request changed nothing,
+  and `firmware-re/65-tx-flow-control.md` explains why: the firmware sets bit 0
+  itself in `blockack_alloc_tx_ba_session` (`0x00129BE4`) whenever the peer is
+  HT-capable on 5 GHz, so the host value is redundant on this link, which is also
+  why the vendor writes zero. Reverted as redundant, not as ignored. Note that
+  `tx_bytes / tx_packets` staying at 1508 B proves nothing either way: those are
+  host counters over the original Ethernet frames, and a transmit A-MSDU is
+  assembled past them in the MAC. Either way it cannot raise throughput here,
+  because every constituent MSDU has already spent its own credit before the
+  hardware can combine them.
 - **Pinning a flow to one credit pool.** Do not do this: the controller
   replenishes the pools it chooses, not the one being drained. Colour 0 hit zero
   while 1, 2 and 3 sat at 19, and since the queue is only woken by a grant,
@@ -63,6 +71,19 @@ because the firmware reposts buffers only once eight have accumulated
 is worth at most the stopped fraction, and only if the MAC can drain while the
 host waits. The rest of the gap is air-side asymmetry between what this radio
 transmits and what the access point transmits.
+
+### Block ack negotiation result
+
+The firmware answers `WIFI_CMD_ADDBA_REQ` with thirteen bytes: the negotiation
+result, then the request echoed back. The worker discarded it, so a declined or
+timed-out session was indistinguishable from an accepted one, the TID kept its
+bit, and that traffic stayed unaggregated for the life of the association. Now
+parsed, with the same clear-and-back-off treatment a failed command already got.
+Verified live: `ret=0 len=13 result=0` from an access point that accepts.
+
+The echo is not evidence of A-MSDU acceptance. The firmware saves the request
+before adding its own bits to the frame it sends, so proving A-MSDU use needs a
+monitor capture or instrumentation at `machw_create_amsdu_lut` (`0x001534FE`).
 
 ### Measurement rule
 
