@@ -525,10 +525,17 @@ recovering`, a firmware CPU that would not go into reset, a power cycle, and an
 access point that never came back while hostapd went on reporting it enabled.
 Two separate causes, found by taking one thing away at a time.
 
-**Registering management frame types.** The log finally said it plainly:
-`command 0x16 timed out` - command 22, `REGISTER_FRAME` - followed immediately
-by the transmit failures. hostapd registers about a dozen types at every start,
-so every start poisoned the controller. Registration had been added earlier the
+**Registering management frame types.** The log said `command 0x16 timed out` -
+command 22, `REGISTER_FRAME` - followed immediately by the transmit failures,
+and removing registration removed the resets. That much is measurement; the
+conclusion drawn from it, that registering a frame type is what stops the
+controller, was too strong. Firmware analysis since (below) shows the handler
+has no wait or loop and always queues a confirmation, so the command is not a
+blocking operation. What the reverted code definitely got wrong is the payload:
+it sent cfg80211's subtype index where the firmware wants the whole frame-control
+value, so it asked for control frames instead of probe requests. Why the
+controller then stopped answering is still unexplained; a dropped confirmation
+inside the firmware is the leading candidate. Registration had been added earlier the
 same day and never demonstrably worked: no probe request was ever delivered in
 sixty seconds on a busy channel with the registration accepted. It is out again,
 along with `mgmt_tx` and the `mgmt_stypes` declaration that invited it. After
