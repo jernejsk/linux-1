@@ -343,3 +343,35 @@ driver on this board and see whether WoWLAN wakes it. If it does, capture its
 function 0 writes around suspend and diff them against the sequence above; if
 it does not, the board's `BT-WAKE-AP` wiring or the firmware's pad routing is
 the answer and `OrangePi_3_LTS_v1.4.pdf` decides it.
+
+### WoWLAN, after wiring the Wi-Fi wake line (2026-08-13, later)
+
+The board wires both outputs and the device tree now describes both, so the
+configuration finally reads as intended: `bt=1 wl=1 split=1`, each radio driving
+its own line, PM0 for Wi-Fi and PM1 for Bluetooth, both interrupts claimed
+(`55` = GPIO 32, `56` = GPIO 33) and armed for the duration of a sleep.
+
+Two facts were then established with instrumentation, and they narrow the
+problem to one write:
+
+- **The pulses seen on both lines are edges latched while the interrupts were
+  masked, replayed the moment they are unmasked.** The handler logs
+  `expected=0` for them, which is exactly when it should ignore them, so the
+  earlier "PM0 pulsed" was not a magic packet after all.
+  `irq_set_irqchip_state(IRQCHIP_STATE_PENDING, false)` does not clear them on
+  this pin controller, so a genuine pulse cannot be told from a replay by count
+  alone - only by the `expected` flag, which is what the driver now does.
+- **The transport state at `0x00110248 + 0x1c` stays 0.** It should become 1
+  once `AP_SUSPEND` is written. Writing `BIT(5)` to `0x1b0` as a function 0
+  register (what the vendor documents) and as a function 1 register (what the
+  vendor's own `sdio_func[FUNC_0]` indexing may actually mean) both leave it at
+  0, with the write reporting success either way.
+
+So everything the host controls is in place, and the one remaining question is
+how to make that write reach the firmware's handler. Worth trying next, roughly
+in order of cost: read `0x1b0` and its neighbours back through the CM4 debug
+bridge rather than over SDIO, to see whether the byte lands anywhere; check
+whether the CP needs an interrupt enable of its own (`REG_PUB_INT_EN0`, `0x1c0`)
+before it will service `AP_INT_CP0`; and run the vendor driver on this board,
+which settles in one test whether WoWLAN works here at all and, if it does,
+gives a capture of the writes it makes around suspend to diff against ours.
