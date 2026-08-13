@@ -22,6 +22,8 @@
 
 #define UWE5622_VALID_CONFIG	BIT(7)
 #define UWE5622_TX_DESC_LEN	11
+/* The descriptor, plus room for the header the bus adds in front of it. */
+#define UWE5622_TX_HEADROOM	(UWE5622_TX_DESC_LEN + UWE5622_BUS_HEADROOM)
 #define UWE5622_DATA_TX_MAX	1672
 #define UWE5622_RX_DESC_LEN	28
 #define UWE5622_RX_CREDIT_OFFSET	24
@@ -400,57 +402,128 @@ static bool uwe5622_tx_csum_offload(struct sk_buff *skb)
 	return true;
 }
 
+/*
+ * Which station the firmware should send a frame to. A client has one peer, a
+ * group address goes to the entry the firmware reserves for it, and an access
+ * point has to find the destination among its own: a frame for an address that
+ * is not associated has nowhere to go.
+ */
+static bool uwe5622_tx_sta_lut(struct uwe5622_vif *vif,
+			       const struct sk_buff *skb, u8 *sta_lut)
+{
+	struct uwe5622_wifi *wifi = vif->wifi;
+	const struct ethhdr *eth;
+	int i;
+
+	if (vif->mode != UWE5622_MODE_AP || skb->len < ETH_HLEN) {
+		*sta_lut = READ_ONCE(vif->sta_lut);
+		return true;
+	}
+
+	eth = (const void *)skb->data;
+	if (is_multicast_ether_addr(eth->h_dest)) {
+		*sta_lut = 4;
+		return true;
+	}
+
+	*sta_lut = 0;
+	spin_lock_bh(&wifi->vif_lock);
+	for (i = 0; i < ARRAY_SIZE(wifi->peers); i++) {
+		if (wifi->peers[i].valid &&
+		    wifi->peers[i].ctx_id == vif->ctx_id &&
+		    ether_addr_equal(wifi->peers[i].address, eth->h_dest)) {
+			*sta_lut = wifi->peers[i].sta_lut;
+			break;
+		}
+	}
+	spin_unlock_bh(&wifi->vif_lock);
+
+	return *sta_lut >= 6;
+}
+
+/*
+ * The descriptor describes the frame that follows it, so it is given the frame's
+ * own length and offsets, never those of the buffer it ends up sharing.
+ */
+static void uwe5622_fill_tx_desc(struct uwe5622_vif *vif, u8 *desc,
+				 unsigned int frame_len, u8 type, u8 color,
+				 u8 sta_lut, unsigned int csum_offset,
+				 bool csum_tcp)
+{
+	memset(desc, 0, UWE5622_TX_DESC_LEN);
+	desc[0] = type | (vif->ctx_id << 5);
+	desc[1] = UWE5622_TX_DESC_LEN;
+	put_unaligned_le16(frame_len, desc + 3);
+	desc[6] = sta_lut;
+	desc[7] = color;
+	if (csum_offset) {
+		uwe5622_tx_csum_hw++;
+		desc[2] = UWE5622_TX_CSUM_ENABLE;
+		if (csum_tcp)
+			desc[2] |= UWE5622_TX_CSUM_TCP;
+		put_unaligned_le16(csum_offset, desc + 9);
+	}
+}
+
+/*
+ * Put the descriptor in front of the frame the stack handed over, in the
+ * headroom the netdev asks every transmit skb to keep for it. The frame then
+ * travels to the bus as it is, and the only copy left on the transmit path is
+ * the one that packs several frames into a single transfer.
+ */
+static int uwe5622_push_tx_desc(struct uwe5622_vif *vif, struct sk_buff *skb,
+				u8 type, u8 color, u8 *sta_lut)
+{
+	unsigned int csum_offset = 0;
+	unsigned int frame_len;
+	bool csum_tcp = false;
+	u8 *desc;
+
+	if (!uwe5622_tx_sta_lut(vif, skb, sta_lut))
+		return -ENOENT;
+
+	/* Both of these describe the frame, so they are taken before it moves. */
+	if (skb->ip_summed == CHECKSUM_PARTIAL) {
+		csum_offset = skb_checksum_start_offset(skb);
+		csum_tcp = uwe5622_tx_csum_is_tcp(skb);
+	}
+	frame_len = skb->len;
+
+	if (skb_cow_head(skb, UWE5622_TX_HEADROOM))
+		return -ENOMEM;
+
+	desc = skb_push(skb, UWE5622_TX_DESC_LEN);
+	uwe5622_fill_tx_desc(vif, desc, frame_len, type, color, *sta_lut,
+			     csum_offset, csum_tcp);
+
+	return 0;
+}
+
+/*
+ * The command path needs one buffer it owns, so that frame is still copied. Its
+ * caller puts a marker in front of the descriptor before handing the buffer to
+ * the command channel, so the headroom for that comes with the buffer.
+ */
+#define UWE5622_CMD_TX_MARKER	5
+
 static struct sk_buff *uwe5622_build_tx(struct uwe5622_vif *vif,
 					const struct sk_buff *skb, u8 type,
 					u8 color)
 {
-	struct uwe5622_wifi *wifi = vif->wifi;
 	struct sk_buff *tx;
-	const struct ethhdr *eth;
 	u8 sta_lut;
 	u8 *desc;
-	int i;
 
-	sta_lut = READ_ONCE(vif->sta_lut);
-	if (vif->mode == UWE5622_MODE_AP && skb->len >= ETH_HLEN) {
-		eth = (const void *)skb->data;
-		if (is_multicast_ether_addr(eth->h_dest)) {
-			sta_lut = 4;
-		} else {
-			sta_lut = 0;
-			spin_lock_bh(&wifi->vif_lock);
-			for (i = 0; i < ARRAY_SIZE(wifi->peers); i++) {
-				if (wifi->peers[i].valid &&
-				    wifi->peers[i].ctx_id == vif->ctx_id &&
-				    ether_addr_equal(wifi->peers[i].address,
-						     eth->h_dest)) {
-					sta_lut = wifi->peers[i].sta_lut;
-					break;
-				}
-			}
-			spin_unlock_bh(&wifi->vif_lock);
-			if (sta_lut < 6)
-				return NULL;
-		}
-	}
-
-	tx = alloc_skb(5 + UWE5622_TX_DESC_LEN + skb->len, GFP_ATOMIC);
+	if (!uwe5622_tx_sta_lut(vif, skb, &sta_lut))
+		return NULL;
+	tx = alloc_skb(UWE5622_CMD_TX_MARKER + UWE5622_TX_DESC_LEN + skb->len,
+		       GFP_ATOMIC);
 	if (!tx)
 		return NULL;
-	skb_reserve(tx, 5);
-	desc = skb_put_zero(tx, UWE5622_TX_DESC_LEN);
-	desc[0] = type | (vif->ctx_id << 5);
-	desc[1] = UWE5622_TX_DESC_LEN;
-	put_unaligned_le16(skb->len, desc + 3);
-	desc[6] = sta_lut;
-	desc[7] = color;
-	if (skb->ip_summed == CHECKSUM_PARTIAL) {
-		uwe5622_tx_csum_hw++;
-		desc[2] = UWE5622_TX_CSUM_ENABLE;
-		if (uwe5622_tx_csum_is_tcp(skb))
-			desc[2] |= UWE5622_TX_CSUM_TCP;
-		put_unaligned_le16(skb_checksum_start_offset(skb), desc + 9);
-	}
+	skb_reserve(tx, UWE5622_CMD_TX_MARKER);
+	desc = skb_put(tx, UWE5622_TX_DESC_LEN);
+	uwe5622_fill_tx_desc(vif, desc, skb->len, type, color, sta_lut, 0,
+			     false);
 	skb_put_data(tx, skb->data, skb->len);
 	return tx;
 }
@@ -615,8 +688,8 @@ static netdev_tx_t uwe5622_ndev_xmit(struct sk_buff *skb,
 {
 	struct uwe5622_vif *vif = netdev_priv(ndev);
 	struct uwe5622_wifi *wifi = vif->wifi;
-	struct sk_buff *tx;
-	u8 color;
+	unsigned int len;
+	u8 color, sta_lut;
 	int ret;
 
 	if (unlikely(skb->protocol == htons(ETH_P_PAE))) {
@@ -639,28 +712,28 @@ static netdev_tx_t uwe5622_ndev_xmit(struct sk_buff *skb,
 			goto drop;
 	}
 
+	if (skb->len + UWE5622_TX_DESC_LEN > UWE5622_DATA_TX_MAX)
+		goto drop;
+
 	if (!uwe5622_take_tx_credit(wifi, ndev, &color))
 		return NETDEV_TX_BUSY;
-	tx = uwe5622_build_tx(vif, skb, 2, color);
-	if (!tx)
+	len = skb->len;
+	if (uwe5622_push_tx_desc(vif, skb, 2, color, &sta_lut))
 		goto return_credit;
-	uwe5622_request_tx_ba(wifi, vif->ctx_id, tx->data[6], 0);
-	if (tx->len > UWE5622_DATA_TX_MAX) {
-		kfree_skb(tx);
-		goto return_credit;
-	}
-	ret = uwe5622_client_send_tagged(wifi->data_client, tx, color);
-	kfree_skb(tx);
+	uwe5622_request_tx_ba(wifi, vif->ctx_id, sta_lut, 0);
+	/* The bus owns the frame from here, and frees it once it has gone out. */
+	ret = uwe5622_client_send_tagged(wifi->data_client, skb, color);
 	if (ret) {
 		uwe5622_return_tx_credit(wifi, ndev, color);
-		if (ret == -ENOBUFS)
+		if (ret == -ENOBUFS) {
+			skb_pull(skb, UWE5622_TX_DESC_LEN);
 			return NETDEV_TX_BUSY;
+		}
 		goto drop;
 	}
 
 	ndev->stats.tx_packets++;
-	ndev->stats.tx_bytes += skb->len;
-	dev_kfree_skb_any(skb);
+	ndev->stats.tx_bytes += len;
 	return NETDEV_TX_OK;
 return_credit:
 	uwe5622_return_tx_credit(wifi, ndev, color);
@@ -1535,8 +1608,8 @@ static void uwe5622_eapol_work(struct work_struct *work)
 			ndev->stats.tx_dropped++;
 			goto free;
 		}
-		data = skb_push(tx, 5);
-		memcpy(data, "01234", 5);
+		data = skb_push(tx, UWE5622_CMD_TX_MARKER);
+		memcpy(data, "01234", UWE5622_CMD_TX_MARKER);
 		ret = uwe5622_wifi_cmd(wifi, vif->ctx_id, UWE5622_CMD_TX_DATA,
 				       tx->data, tx->len, NULL, NULL, NULL);
 		kfree_skb(tx);
@@ -1863,6 +1936,7 @@ uwe5622_add_virtual_intf(struct wiphy *wiphy, const char *name,
 	ndev->netdev_ops = &uwe5622_netdev_ops;
 	ndev->features |= NETIF_F_RXCSUM | NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM;
 	ndev->hw_features |= NETIF_F_RXCSUM | NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM;
+	ndev->needed_headroom = UWE5622_TX_HEADROOM;
 	ndev->needs_free_netdev = true;
 	SET_NETDEV_DEV(ndev, wiphy_dev(wiphy));
 	uwe5622_set_vif_type(vif, type, address);

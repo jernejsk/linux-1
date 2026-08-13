@@ -46,8 +46,17 @@ struct uwe5622_client *
 uwe5622_client_register(struct device *dev, enum uwe5622_service service,
 			const struct uwe5622_client_ops *ops, void *priv);
 void uwe5622_client_unregister(struct uwe5622_client *client);
-/* The caller retains ownership of @skb, including after a successful send. */
+/*
+ * Hand @skb to the controller. The bus takes ownership of it when this returns
+ * success and frees it once the transfer is done, which is what lets a payload
+ * reach the controller without being copied; on failure the caller still owns
+ * it. The bus puts its own header in front of the payload, so @skb needs
+ * UWE5622_BUS_HEADROOM bytes of headroom or it is reallocated to get them.
+ */
 int uwe5622_client_send(struct uwe5622_client *client, struct sk_buff *skb);
+/* Room for the header the bus puts in front of every payload. */
+#define UWE5622_BUS_HEADROOM	4
+
 /*
  * As uwe5622_client_send(), but @tag is handed back through
  * uwe5622_client_ops::tx_error if the transfer fails on the bus after this

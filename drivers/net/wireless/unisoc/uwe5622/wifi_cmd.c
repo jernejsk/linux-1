@@ -34,11 +34,12 @@ int uwe5622_wifi_cmd(struct uwe5622_wifi *wifi, u8 ctx_id, u8 id,
 		goto out_unlock;
 	}
 
-	skb = alloc_skb(sizeof(*hdr) + len, GFP_KERNEL);
+	skb = alloc_skb(UWE5622_BUS_HEADROOM + sizeof(*hdr) + len, GFP_KERNEL);
 	if (!skb) {
 		ret = -ENOMEM;
 		goto out_unlock;
 	}
+	skb_reserve(skb, UWE5622_BUS_HEADROOM);
 
 	token = ++wifi->next_token;
 	if (!token)
@@ -59,9 +60,10 @@ int uwe5622_wifi_cmd(struct uwe5622_wifi *wifi, u8 ctx_id, u8 id,
 	wifi->response_status = -ETIMEDOUT;
 
 	ret = uwe5622_client_send(wifi->cmd_client, skb);
-	kfree_skb(skb);
-	if (ret)
+	if (ret) {
+		kfree_skb(skb);
 		goto out_clear;
+	}
 
 	if (!wait_for_completion_timeout(&wifi->cmd_done,
 					 UWE5622_WIFI_CMD_TIMEOUT)) {

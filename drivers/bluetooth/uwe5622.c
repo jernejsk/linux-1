@@ -163,19 +163,22 @@ static void uwe5622_bt_tx_work(struct work_struct *work)
 		h4_len = 1 + skb->len;
 		pad = (type == HCI_COMMAND_PKT || type == HCI_ACLDATA_PKT) ?
 			4 - h4_len % 4 : 0;
-		wire = alloc_skb(h4_len + pad, GFP_KERNEL);
+		wire = alloc_skb(UWE5622_BUS_HEADROOM + h4_len + pad,
+				 GFP_KERNEL);
 		if (!wire) {
 			bt->hdev->stat.err_tx++;
 			goto free;
 		}
+		skb_reserve(wire, UWE5622_BUS_HEADROOM);
 		skb_put_u8(wire, type);
 		skb_put_data(wire, skb->data, skb->len);
 		if (pad)
 			skb_put_zero(wire, pad);
 		ret = uwe5622_client_send(bt->client, wire);
-		kfree_skb(wire);
-		if (ret)
+		if (ret) {
+			kfree_skb(wire);
 			bt->hdev->stat.err_tx++;
+		}
 free:
 		kfree_skb(skb);
 	}

@@ -5,6 +5,7 @@
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
 #include <linux/kthread.h>
+#include <linux/netdevice.h>
 #include <linux/interrupt.h>
 #include <linux/mmc/card.h>
 #include <linux/mmc/core.h>
@@ -197,6 +198,20 @@ struct uwe5622_sdio {
 	/* Consecutive failed transmit transfers, reset by every success. */
 	unsigned int tx_errors;
 };
+
+/*
+ * Bus bookkeeping for a payload waiting to go out, kept clear of the offsets the
+ * owning client uses for its own purposes before it hands the payload over.
+ */
+struct uwe5622_tx_cb {
+	u8 channel;
+	u8 tag;
+};
+
+#define UWE5622_TX_CB(_skb)	((struct uwe5622_tx_cb *)((_skb)->cb + 16))
+
+static_assert(16 + sizeof(struct uwe5622_tx_cb) <=
+	      sizeof_field(struct sk_buff, cb));
 
 static unsigned int uwe5622_blk_size(void)
 {
@@ -918,13 +933,17 @@ static void uwe5622_sdio_tx_work(struct work_struct *work)
 	while (!skb_queue_empty(&sdio->tx_queue)) {
 		used = 0;
 		while ((skb = skb_dequeue(&sdio->tx_queue))) {
-			if (used + skb->len + sizeof(__le32) >
-			    budget) {
+			size_t record = ALIGN(skb->len, 4);
+
+			if (used + record + sizeof(__le32) > budget) {
 				skb_queue_head(&sdio->tx_queue, skb);
 				break;
 			}
 			memcpy(sdio->tx_buf + used, skb->data, skb->len);
-			used += skb->len;
+			/* Records start on a four-byte boundary. */
+			memset(sdio->tx_buf + used + skb->len, 0,
+			       record - skb->len);
+			used += record;
 			__skb_queue_tail(&batch, skb);
 		}
 		if (!used)
@@ -952,7 +971,8 @@ static void uwe5622_sdio_tx_work(struct work_struct *work)
 					 "tx writes=%u records=%u qmax=%u\n",
 					 sdio->tx_writes, sdio->tx_records,
 					 sdio->tx_qmax);
-			__skb_queue_purge(&batch);
+			while ((skb = __skb_dequeue(&batch)))
+				dev_consume_skb_any(skb);
 			continue;
 		}
 
@@ -965,9 +985,10 @@ static void uwe5622_sdio_tx_work(struct work_struct *work)
 		 * credits for good.
 		 */
 		while ((skb = __skb_dequeue(&batch))) {
-			uwe5622_core_tx_error(&sdio->wcn, skb->cb[0],
-					      skb->cb[1]);
-			kfree_skb(skb);
+			uwe5622_core_tx_error(&sdio->wcn,
+					      UWE5622_TX_CB(skb)->channel,
+					      UWE5622_TX_CB(skb)->tag);
+			dev_kfree_skb_any(skb);
 		}
 		if (++sdio->tx_errors < UWE5622_TX_ERROR_LIMIT)
 			continue;
@@ -1161,8 +1182,6 @@ static int uwe5622_sdio_tx(struct uwe5622 *wcn, u8 channel,
 			   struct sk_buff *skb, u8 tag)
 {
 	struct uwe5622_sdio *sdio = wcn->bus_priv;
-	size_t record_len = sizeof(__le32) + ALIGN(skb->len, 4);
-	struct sk_buff *record;
 	u32 header;
 
 	if (channel >= UWE5622_RX_CHANNEL_BASE ||
@@ -1172,22 +1191,21 @@ static int uwe5622_sdio_tx(struct uwe5622 *wcn, u8 channel,
 		return -ENOBUFS;
 
 	/*
-	 * Only the record is built here, without the end marker or the padding
-	 * to a whole transfer: several of these are packed into one transfer
-	 * when the queue is drained.
+	 * The public header goes in front of the payload where it already lies,
+	 * so a frame from the network stack reaches the controller without being
+	 * copied on the way. The end marker and the padding to a whole transfer
+	 * belong to the transfer, not to one record, and are added when several
+	 * records are packed together.
 	 */
-	record = alloc_skb(record_len, GFP_ATOMIC);
-	if (!record)
+	if (skb_cow_head(skb, UWE5622_BUS_HEADROOM))
 		return -ENOMEM;
-	skb_put_zero(record, record_len);
 
 	header = FIELD_PREP(UWE5622_PUH_LENGTH, skb->len) |
 		 FIELD_PREP(UWE5622_PUH_SUBTYPE, channel);
-	put_unaligned_le32(header, record->data);
-	skb_copy_bits(skb, 0, record->data + sizeof(__le32), skb->len);
-	record->cb[0] = channel;
-	record->cb[1] = tag;
-	skb_queue_tail(&sdio->tx_queue, record);
+	put_unaligned_le32(header, skb_push(skb, UWE5622_BUS_HEADROOM));
+	UWE5622_TX_CB(skb)->channel = channel;
+	UWE5622_TX_CB(skb)->tag = tag;
+	skb_queue_tail(&sdio->tx_queue, skb);
 	if (skb_queue_len(&sdio->tx_queue) > sdio->tx_qmax)
 		sdio->tx_qmax = skb_queue_len(&sdio->tx_queue);
 	schedule_work(&sdio->tx_work);
