@@ -104,7 +104,9 @@
  * way they arrive in one on the receive side, because a transfer costs far more
  * than the bytes in it.
  */
-#define UWE5622_TX_MAX_SIZE		(32 * UWE5622_SDIO_BLOCK_SIZE)
+#define UWE5622_TX_MAX_BLOCKS		48
+#define UWE5622_TX_MAX_SIZE		(UWE5622_TX_MAX_BLOCKS * \
+					 UWE5622_SDIO_BLOCK_SIZE)
 
 static bool uwe5622_rx_aggregation = true;
 module_param_named(rx_aggregation, uwe5622_rx_aggregation, bool, 0444);
@@ -200,6 +202,11 @@ static unsigned int uwe5622_blk_size(void)
 {
 	return uwe5622_blksz_512 ? UWE5622_SDIO_BLOCK_SIZE_ALT :
 				   UWE5622_SDIO_BLOCK_SIZE;
+}
+
+static size_t uwe5622_tx_budget(void)
+{
+	return UWE5622_TX_MAX_BLOCKS * uwe5622_blk_size();
 }
 
 /*
@@ -901,6 +908,7 @@ static void uwe5622_sdio_tx_work(struct work_struct *work)
 	struct uwe5622_sdio *sdio = container_of(work, struct uwe5622_sdio,
 						 tx_work);
 	struct sk_buff_head batch;
+	size_t budget = uwe5622_tx_budget();
 	struct sk_buff *skb;
 	size_t used;
 	int ret;
@@ -911,7 +919,7 @@ static void uwe5622_sdio_tx_work(struct work_struct *work)
 		used = 0;
 		while ((skb = skb_dequeue(&sdio->tx_queue))) {
 			if (used + skb->len + sizeof(__le32) >
-			    UWE5622_TX_MAX_SIZE) {
+			    budget) {
 				skb_queue_head(&sdio->tx_queue, skb);
 				break;
 			}
