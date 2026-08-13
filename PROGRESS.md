@@ -568,3 +568,72 @@ build.
 The access point's own address never changes: it is the permanent address with
 the locally-administered bit set and bit 7 of the last octet flipped, so
 `3c:7a:aa:31:6f:17` always becomes `3e:7a:aa:31:6f:97`.
+
+### Why the attempted management registration could never work
+
+RAM and ROM firmware analysis found that command `0x16` takes a packed
+`{ __le16 frame_type; u8 register_frame; }`, where `frame_type` is the complete
+IEEE 802.11 frame-control type/subtype (`0x0040` for probe request), exactly as
+the vendor driver sends it. The reverted implementation sent cfg80211's
+subtype index (`4` for probe request). Firmware decodes bits 2-3 as type and
+bits 4-7 as subtype, so that request changed control/type 1, subtype 0; it did
+not enable probe requests. This accounts for registrations apparently
+succeeding while no probe request was ever reported.
+
+The live RAM handler at `0x00143EB4`, the ROM handler at `0x0020A720`, and the
+filter setter at `0x0022B19E` contain no wait or loop: after a bounded table
+check/store, command 0x16 always queues a successful confirmation. The wrong
+encoding is therefore proven, but it does not fully explain the observed
+command timeout and controller failure. Authentication registration is also
+explicitly ignored by the RAM handler. Keep registration, management TX, and
+`mgmt_stypes` disabled. If this is ever investigated again, send one correctly
+encoded raw command under DAP breakpoints before restoring any cfg80211-facing
+capability.
+
+One generic firmware failure can produce exactly such a timeout:
+`cmd_send_cfm` (`0x002073A4`) obtains a descriptor with
+`saved_msg_alloc(1)` (`0x0023273E`), but on pool exhaustion it only logs and
+returns. It does not send an error or retry. Check that allocation's return
+value under DAP if command 0x16 is ever probed again; this remains a plausible,
+not demonstrated, cause of the lost confirmation.
+
+### Teardown fixed, transmit stall still open (2026-08-13, later still)
+
+Removing the driver with an access point interface present hung `modprobe -r`
+in uninterruptible sleep and needed the power switch. Removal closes each
+context and then unregisters the netdev, and unregistering an access point takes
+cfg80211 through `stop_ap`, which then talked to the context just closed: one
+command per timeout with the RTNL held. Returning from `stop_ap` when there is
+no context to stop fixes it, and covers the reset case too. Verified: unloading
+with a running access point now completes.
+
+Protected management frames are now unreachable rather than merely unadvertised.
+The BIP code point and its cipher translation are gone, so no cfg80211 path can
+submit the key that wedged the firmware, and the two SHA256 key negotiations
+that exist to be used with them are no longer offered. The index-above-three
+rejection stays in both key paths, and its comment now records what was actually
+observed rather than a guess about command layout.
+
+Station reporting says what is known: authenticated and associated from the
+controller's new-station event, the open port from the pairwise key that ends
+authentication, and quality-of-service from the WMM element in the association
+request. Protected management frames are never claimed. Read back from a live
+client as `authorized/authenticated/associated/WMM: yes` with CCMP.
+
+What is still wrong is the data path. With a client attached and traffic
+running, SDIO writes start returning `-EBUSY` about a second apart, and after
+four of them the driver resets the controller: `TX transfer failed: -16` x4 then
+`4 consecutive transmit failures, recovering`. The best clean measurement before
+a reset was 0.76 MB/s out and 0.46 MB/s in, against 31 MB/s for the same radio
+as a station, and later attempts collapsed to a few tens of KB/s with the
+transfer dying when the client went away. Transmit credits are the obvious place
+to look next: if the access point context never gets credit returned, the driver
+would push frames the controller will not take, which is what `-EBUSY` a second
+apart looks like.
+
+`dtim_period` is now 1 rather than hostapd's default 2, which is worth keeping
+regardless: the client's ping latency of 150-180 ms was buffered delivery.
+
+Per-station link data is still missing - `signal: 0 dBm`, `tx bitrate: unknown` -
+because the controller's station report is per interface and returns zeros in
+access point mode.
