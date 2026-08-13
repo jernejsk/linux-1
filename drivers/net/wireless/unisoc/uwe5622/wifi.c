@@ -1807,29 +1807,6 @@ static int uwe5622_set_default_key(struct wiphy *wiphy,
 }
 
 /*
- * Which management frames may be sent and asked for. The controller answers
- * authentication and association itself, so those are left out: the stack is
- * offered the frames it can act on without taking that over.
- */
-static const struct ieee80211_txrx_stypes
-uwe5622_mgmt_stypes[NUM_NL80211_IFTYPES] = {
-	[NL80211_IFTYPE_STATION] = {
-		.tx = BIT(IEEE80211_STYPE_ACTION >> 4),
-		.rx = BIT(IEEE80211_STYPE_ACTION >> 4),
-	},
-	[NL80211_IFTYPE_AP] = {
-		.tx = BIT(IEEE80211_STYPE_ACTION >> 4) |
-		      BIT(IEEE80211_STYPE_PROBE_RESP >> 4) |
-		      BIT(IEEE80211_STYPE_DEAUTH >> 4) |
-		      BIT(IEEE80211_STYPE_DISASSOC >> 4),
-		.rx = BIT(IEEE80211_STYPE_ACTION >> 4) |
-		      BIT(IEEE80211_STYPE_PROBE_REQ >> 4) |
-		      BIT(IEEE80211_STYPE_DEAUTH >> 4) |
-		      BIT(IEEE80211_STYPE_DISASSOC >> 4),
-	},
-};
-
-/*
  * Whether a beacon body already carries an element, walking it from the first
  * one after the fixed fields. A malformed tail simply ends the walk.
  */
@@ -2190,77 +2167,6 @@ static int uwe5622_set_mac_acl(struct wiphy *wiphy, struct net_device *ndev,
 			       UWE5622_ACL_ENABLE, acl);
 }
 
-/*
- * Send a management frame the stack built itself. The controller answers for the
- * transmission, so a failure is reported as a frame that was not acknowledged
- * rather than left for the caller to guess at.
- */
-static int uwe5622_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
-			   struct cfg80211_mgmt_tx_params *params, u64 *cookie)
-{
-	struct uwe5622_vif *vif = uwe5622_vif_from_wdev(wdev);
-	struct uwe5622_wifi *wifi = vif->wifi;
-	struct uwe5622_cmd_mgmt_tx *cmd;
-	size_t len;
-	int ret;
-
-	if (!params->len)
-		return -EINVAL;
-
-	*cookie = atomic64_inc_return(&wifi->mgmt_cookie);
-	len = struct_size(cmd, frame, params->len);
-	cmd = kzalloc(len, GFP_KERNEL);
-	if (!cmd)
-		return -ENOMEM;
-	if (params->chan) {
-		int freq = params->chan->center_freq;
-
-		cmd->channel = ieee80211_frequency_to_channel(freq);
-	}
-	cmd->dont_wait_for_ack = params->dont_wait_for_ack;
-	cmd->wait = cpu_to_le32(params->wait);
-	cmd->cookie = cpu_to_le64(*cookie);
-	cmd->len = cpu_to_le16(params->len);
-	memcpy(cmd->frame, params->buf, params->len);
-	ret = uwe5622_wifi_cmd(wifi, vif->ctx_id, UWE5622_CMD_TX_MGMT, cmd,
-			       len, NULL, NULL, NULL);
-	kfree(cmd);
-	if (!params->dont_wait_for_ack)
-		cfg80211_mgmt_tx_status(wdev, *cookie, params->buf, params->len,
-					!ret, GFP_KERNEL);
-
-	return ret;
-}
-
-/*
- * Which management frames the stack wants to see. The controller takes one
- * subtype at a time, so the difference against what it was already told is what
- * gets sent.
- */
-static void uwe5622_update_mgmt_frame_registrations(struct wiphy *wiphy,
-						    struct wireless_dev *wdev,
-						    struct mgmt_frame_regs *upd)
-{
-	struct uwe5622_vif *vif = uwe5622_vif_from_wdev(wdev);
-	u32 changed = upd->interface_stypes ^ vif->mgmt_regs;
-	unsigned int subtype;
-
-	for (subtype = 0; subtype < 16; subtype++) {
-		struct uwe5622_cmd_register_frame cmd = {
-			.type = cpu_to_le16(subtype),
-			.reg = !!(upd->interface_stypes & BIT(subtype)),
-		};
-
-		if (!(changed & BIT(subtype)))
-			continue;
-		if (uwe5622_wifi_cmd(vif->wifi, vif->ctx_id,
-				     UWE5622_CMD_REGISTER_FRAME, &cmd,
-				     sizeof(cmd), NULL, NULL, NULL))
-			continue;
-		vif->mgmt_regs ^= BIT(subtype);
-	}
-}
-
 static int uwe5622_set_power_mgmt(struct wiphy *wiphy, struct net_device *ndev,
 				  bool enabled, int timeout)
 {
@@ -2525,9 +2431,6 @@ static const struct cfg80211_ops uwe5622_cfg80211_ops = {
 	.get_station = uwe5622_get_station,
 	.dump_station = uwe5622_dump_station,
 	.set_mac_acl = uwe5622_set_mac_acl,
-	.mgmt_tx = uwe5622_mgmt_tx,
-	.update_mgmt_frame_registrations =
-		uwe5622_update_mgmt_frame_registrations,
 	.set_power_mgmt = uwe5622_set_power_mgmt,
 	.add_virtual_intf = uwe5622_add_virtual_intf,
 	.change_virtual_intf = uwe5622_change_virtual_intf,
@@ -3296,7 +3199,6 @@ static int uwe5622_wifi_probe(struct auxiliary_device *adev,
 	wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION) |
 				 BIT(NL80211_IFTYPE_AP);
 	/* What an access point may hold, as the firmware reported it. */
-	wiphy->mgmt_stypes = uwe5622_mgmt_stypes;
 	wiphy->max_ap_assoc_sta = wifi->max_ap_sta;
 	wiphy->max_acl_mac_addrs = wifi->max_acl;
 	wiphy->bands[NL80211_BAND_2GHZ] = &wifi->band_2ghz;
