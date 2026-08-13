@@ -141,6 +141,22 @@ static void uwe5622_bt_reset(void *priv)
 {
 	struct uwe5622_bt *bt = priv;
 
+	skb_queue_purge(&bt->tx_queue);
+	spin_lock_bh(&bt->rx_lock);
+	kfree_skb(bt->rx_skb);
+	bt->rx_skb = NULL;
+	spin_unlock_bh(&bt->rx_lock);
+}
+
+/*
+ * Told once the controller is carrying commands again. The stack reopens the
+ * device from here, which is what re-runs the setup the new firmware needs:
+ * doing this while the firmware was still down only got the reopen refused.
+ */
+static void uwe5622_bt_restart(void *priv)
+{
+	struct uwe5622_bt *bt = priv;
+
 	if (bt->opened)
 		hci_reset_dev(bt->hdev);
 }
@@ -148,6 +164,7 @@ static void uwe5622_bt_reset(void *priv)
 static const struct uwe5622_client_ops uwe5622_bt_client_ops = {
 	.rx = uwe5622_bt_rx,
 	.reset = uwe5622_bt_reset,
+	.restart = uwe5622_bt_restart,
 };
 
 static void uwe5622_bt_tx_work(struct work_struct *work)

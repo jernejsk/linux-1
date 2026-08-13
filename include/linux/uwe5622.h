@@ -40,7 +40,14 @@ enum uwe5622_bus_type {
  */
 struct uwe5622_client_ops {
 	void (*rx)(void *priv, struct sk_buff *skb);
+	/* The firmware is about to go away; drop whatever describes it. */
 	void (*reset)(void *priv);
+	/*
+	 * The firmware has been reloaded underneath, and the client's device is
+	 * the same device it was: re-establish what the controller forgot. Runs
+	 * in process context with the core ready to carry commands again.
+	 */
+	void (*restart)(void *priv);
 	void (*tx_error)(void *priv, u8 tag);
 };
 

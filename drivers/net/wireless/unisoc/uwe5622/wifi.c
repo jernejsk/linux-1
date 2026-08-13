@@ -1864,6 +1864,23 @@ static int uwe5622_reopen_firmware(struct uwe5622_vif *vif)
 }
 
 /*
+ * End an association that no firmware event will end, because the firmware that
+ * held it is gone: either it was reloaded underneath, or the interface itself is
+ * going away. cfg80211 keeps a reference to the BSS until it is told.
+ */
+static void uwe5622_report_disconnect(struct uwe5622_vif *vif)
+{
+	struct net_device *ndev = vif->wdev.netdev;
+
+	if (!vif->connected)
+		return;
+	vif->connected = false;
+	netif_carrier_off(ndev);
+	cfg80211_disconnected(ndev, WLAN_REASON_DEAUTH_LEAVING, NULL, 0, true,
+			      GFP_KERNEL);
+}
+
+/*
  * Everything a context owns that outlives its own code: two works that can be
  * scheduled from a firmware event, a poll instance that the netdev is about to
  * be freed with, and whatever the poll never got around to taking. Unregistering
@@ -1872,19 +1889,7 @@ static int uwe5622_reopen_firmware(struct uwe5622_vif *vif)
  */
 static void uwe5622_quiesce_vif(struct uwe5622_vif *vif)
 {
-	struct net_device *ndev = vif->wdev.netdev;
-
-	/*
-	 * cfg80211 holds a reference to the BSS a station is associated with and
-	 * warns if the interface disappears while it still does, so an
-	 * association that never ended in a firmware event has to be ended here.
-	 */
-	if (vif->connected) {
-		vif->connected = false;
-		netif_carrier_off(ndev);
-		cfg80211_disconnected(ndev, WLAN_REASON_DEAUTH_LEAVING, NULL, 0,
-				      true, GFP_KERNEL);
-	}
+	uwe5622_report_disconnect(vif);
 	cancel_delayed_work_sync(&vif->connect_watchdog);
 	cancel_work_sync(&vif->recover_work);
 	vif->napi_ready = false;
@@ -2909,9 +2914,77 @@ static void uwe5622_wifi_data_reset(void *priv)
 	uwe5622_finish_scan(wifi, true);
 }
 
+static int uwe5622_wifi_init_firmware(struct uwe5622_wifi *wifi);
+
+/*
+ * The controller was reloaded and its devices stayed where they were. Every
+ * interface still exists and keeps its name, address and mode; what the new
+ * firmware has never heard of is its contexts, its peers, its block ack
+ * sessions and its transmit credits. Rebuild exactly that, and tell userspace
+ * the link is gone so it connects again on the interface it already has.
+ */
+static void uwe5622_wifi_restart(void *priv)
+{
+	struct uwe5622_wifi *wifi = priv;
+	struct net_device *ndev[UWE5622_WIFI_MAX_CTX] = {};
+	int i, ret;
+
+	uwe5622_reorder_close_all(wifi);
+	for (i = 0; i < UWE5622_WIFI_MAX_CTX; i++)
+		ndev[i] = uwe5622_get_ndev(wifi, i);
+
+	spin_lock_bh(&wifi->vif_lock);
+	memset(wifi->peers, 0, sizeof(wifi->peers));
+	memset(wifi->vifs, 0, sizeof(wifi->vifs));
+	spin_unlock_bh(&wifi->vif_lock);
+
+	spin_lock_bh(&wifi->credit_lock);
+	memset(wifi->tx_credits, 0, sizeof(wifi->tx_credits));
+	memset(wifi->credit_owner, 0, sizeof(wifi->credit_owner));
+	spin_unlock_bh(&wifi->credit_lock);
+
+	ret = uwe5622_wifi_init_firmware(wifi);
+	if (ret) {
+		dev_err(wifi->dev,
+			"failed to configure the reloaded firmware: %d\n", ret);
+		goto out;
+	}
+
+	for (i = 0; i < UWE5622_WIFI_MAX_CTX; i++) {
+		struct uwe5622_vif *vif;
+
+		if (!ndev[i])
+			continue;
+		vif = netdev_priv(ndev[i]);
+		/* Its context went with the firmware; do not try to close it. */
+		vif->opened = false;
+		vif->credit_pool = UWE5622_CREDIT_NO_POOL;
+		if (vif->mode == UWE5622_MODE_AP)
+			cfg80211_stop_iface(wifi->wiphy, &vif->wdev,
+					    GFP_KERNEL);
+		else
+			uwe5622_report_disconnect(vif);
+
+		ret = uwe5622_open_firmware(vif);
+		if (ret) {
+			dev_err(wifi->dev,
+				"failed to reopen %s after recovery: %d\n",
+				ndev[i]->name, ret);
+			continue;
+		}
+		if (uwe5622_remember_vif(vif))
+			continue;
+		netif_device_attach(ndev[i]);
+	}
+out:
+	for (i = 0; i < UWE5622_WIFI_MAX_CTX; i++)
+		dev_put(ndev[i]);
+}
+
 static const struct uwe5622_client_ops uwe5622_cmd_client_ops = {
 	.rx = uwe5622_wifi_cmd_rx,
 	.reset = uwe5622_wifi_cmd_reset,
+	.restart = uwe5622_wifi_restart,
 };
 
 /*

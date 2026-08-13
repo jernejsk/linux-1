@@ -354,6 +354,21 @@ static void uwe5622_quiet_firmware_log(struct uwe5622 *wcn)
 		dev_warn(wcn->dev, "controller kept its logging on: %d\n", ret);
 }
 
+static void uwe5622_notify_restart(struct uwe5622 *wcn)
+{
+	struct uwe5622_client *client;
+	int idx, channel;
+
+	idx = srcu_read_lock(&wcn->channel_srcu);
+	for (channel = 0; channel < UWE5622_MAX_CHANNELS; channel++) {
+		client = srcu_dereference(wcn->channels[channel],
+					  &wcn->channel_srcu);
+		if (client && client->ops->restart)
+			client->ops->restart(client->priv);
+	}
+	srcu_read_unlock(&wcn->channel_srcu, idx);
+}
+
 static void uwe5622_recovery_work(struct work_struct *work)
 {
 	struct uwe5622 *wcn = container_of(work, struct uwe5622,
@@ -361,11 +376,15 @@ static void uwe5622_recovery_work(struct work_struct *work)
 	const struct firmware *fw;
 	int ret;
 
+	/*
+	 * The devices this controller offers stay where they are. Taking them
+	 * away and building them again gives userspace a different wiphy, and
+	 * therefore a differently named interface, every time the firmware is
+	 * reloaded; it also throws away the addresses, modes and interfaces that
+	 * the firmware is the only thing to have forgotten. Clients are told the
+	 * firmware is going, and told again once it is back.
+	 */
 	uwe5622_notify_reset(wcn);
-	uwe5622_auxdev_del(wcn->bt_auxdev);
-	uwe5622_auxdev_del(wcn->wifi_auxdev);
-	wcn->bt_auxdev = NULL;
-	wcn->wifi_auxdev = NULL;
 	wcn->bus_ops->stop(wcn);
 
 	/*
@@ -401,30 +420,12 @@ static void uwe5622_recovery_work(struct work_struct *work)
 	wcn->state = UWE5622_READY;
 	mutex_unlock(&wcn->state_mutex);
 
-	wcn->wifi_auxdev = uwe5622_auxdev_add(wcn, "wifi");
-	if (IS_ERR(wcn->wifi_auxdev)) {
-		ret = PTR_ERR(wcn->wifi_auxdev);
-		wcn->wifi_auxdev = NULL;
-		goto out_stop;
-	}
-	wcn->bt_auxdev = uwe5622_auxdev_add(wcn, "bluetooth");
-	if (IS_ERR(wcn->bt_auxdev)) {
-		ret = PTR_ERR(wcn->bt_auxdev);
-		wcn->bt_auxdev = NULL;
-		goto out_del_wifi;
-	}
+	/* Ready first: putting a client back together takes commands. */
+	uwe5622_notify_restart(wcn);
 
 	dev_info(wcn->dev, "firmware recovery completed\n");
 	return;
 
-out_del_wifi:
-	uwe5622_auxdev_del(wcn->wifi_auxdev);
-	wcn->wifi_auxdev = NULL;
-out_stop:
-	mutex_lock(&wcn->state_mutex);
-	wcn->state = UWE5622_RECOVERING;
-	mutex_unlock(&wcn->state_mutex);
-	wcn->bus_ops->stop(wcn);
 out_failed:
 	dev_err(wcn->dev, "firmware recovery failed: %d\n", ret);
 }
