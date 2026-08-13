@@ -148,3 +148,40 @@ frees a transmitted frame. Recovery needs U-Boot: interrupt autoboot, then
 and move the module directory aside from that shell. Deploy both modules
 together, and check the deployed hash: a scp that times out leaves the old one
 in place and the next boot panics on it.
+
+## Firmware logging off, trace ring gone
+
+Channel 15 production is now disabled at the source, as
+`firmware-re/50-debug-bt-misc.md` prescribes: `at+armlog=0\r\n` on the AT
+channel (transmit 0, response 13) once the firmware answers, sent again after
+every recovery because a reloaded firmware starts out logging. That byte clears
+an enable tested before the expensive work in the emitters, so the firmware
+stops formatting messages, stops building trace records and stops requesting
+transport pages.
+
+Measured over fourteen seconds of transmit at full rate:
+
+| | records on channel 15 | transmit | CPU per MB/s |
+| --- | --- | --- | --- |
+| `firmware_log=1` | 1,830-1,842 | 32.6-33.0 MB/s | 4.45-4.48 |
+| default (off) | **0** | 32.0-32.5 MB/s | 4.49-4.50 |
+
+So the traffic really is gone - about 131 records a second, each an interrupt,
+a bus read and an allocation - but it never was enough to measure against
+22,000 packets a second of real traffic. The gains that are real: **half a
+megabyte of ring per device**, 143 lines of driver, the debugfs interface, and
+the firmware-side formatting work.
+
+What stayed, deliberately:
+
+- **Draining channel 15.** All logical channels share one FIFO, and a page
+  already queued, a flush or an exceptional path can still deliver one. What
+  arrives is counted in `log_records` and dropped; that counter is the only
+  visibility left, and it reads zero in every test including across recovery.
+- **Channel 14.** Fatal assertions go out there and must keep working.
+- **A way back.** `firmware_log=1` keeps the log on, which is what the note
+  asks of a host that wants an explicit capture.
+
+Verified after a forced recovery: no AT timeout, `log_records` still zero, up
+33.0 and down 36.8 MB/s. Note that the interface comes back renamed
+(`wlan0` to `wlan1`) after recovery - cosmetic, iwd copes, still unfixed.
