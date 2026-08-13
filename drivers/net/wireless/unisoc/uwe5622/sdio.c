@@ -70,6 +70,7 @@
 #define UWE5622_SDIO_CONFIG_WLAN_WAKE_EN	BIT(15)
 #define UWE5622_SDIO_CONFIG_WLAN_TRIGGER	GENMASK(17, 16)
 #define UWE5622_SDIO_CONFIG_WAKE_DURATION GENMASK(22, 18)
+#define UWE5622_SDIO_CONFIG_WAKE_SPLIT	BIT(23)
 
 /*
  * How the controller drives its wake output. It only tells active-low from
@@ -142,7 +143,7 @@ struct uwe5622_sdio {
 	u8 *rx_buf;
 	bool enabled;
 	bool irq_claimed;
-	int wake_irq;
+	int wake_irq[2];
 	bool wake_irq_armed;
 	bool wake_expected;
 	u32 wake_config;
@@ -1032,7 +1033,8 @@ static int uwe5622_sdio_suspend_bus(struct uwe5622 *wcn, bool wake)
 	flush_work(&sdio->tx_work);
 
 	/* An out-of-band host-wake interrupt replaces SDIO IRQ wake support. */
-	if (wake && device_may_wakeup(&sdio->func->dev) && !sdio->wake_irq)
+	if (wake && device_may_wakeup(&sdio->func->dev) &&
+	    !sdio->wake_irq[0] && !sdio->wake_irq[1])
 		required |= MMC_PM_WAKE_SDIO_IRQ;
 
 	caps = sdio_get_host_pm_caps(sdio->func);
@@ -1047,7 +1049,10 @@ static int uwe5622_sdio_suspend_bus(struct uwe5622 *wcn, bool wake)
 	 * Last, once nothing else will be asked of the controller: from here it
 	 * answers by driving the host-wake line rather than the bus.
 	 */
-	if (wake && sdio->wake_config && sdio->wake_irq) {
+	if (wake && sdio->wake_config &&
+	    (sdio->wake_irq[0] || sdio->wake_irq[1])) {
+		unsigned int i;
+
 		/*
 		 * Read out whatever is already waiting first, then listen before
 		 * saying anything. Being told the host is going down makes the
@@ -1065,13 +1070,17 @@ static int uwe5622_sdio_suspend_bus(struct uwe5622 *wcn, bool wake)
 		 * Drop an edge latched while the interrupt was masked, so the
 		 * one pulse that matters is not answered by an older one.
 		 */
-		irq_set_irqchip_state(sdio->wake_irq, IRQCHIP_STATE_PENDING,
-				      false);
-		enable_irq(sdio->wake_irq);
-		ret = enable_irq_wake(sdio->wake_irq);
-		if (ret) {
-			disable_irq(sdio->wake_irq);
-			return ret;
+		for (i = 0; i < ARRAY_SIZE(sdio->wake_irq); i++) {
+			if (!sdio->wake_irq[i])
+				continue;
+			irq_set_irqchip_state(sdio->wake_irq[i],
+					      IRQCHIP_STATE_PENDING, false);
+			enable_irq(sdio->wake_irq[i]);
+			ret = enable_irq_wake(sdio->wake_irq[i]);
+			if (ret) {
+				disable_irq(sdio->wake_irq[i]);
+				return ret;
+			}
 		}
 		sdio->wake_irq_armed = true;
 		uwe5622_sdio_notify_host_pm(sdio, UWE5622_AP_INT_SUSPEND);
@@ -1092,10 +1101,16 @@ static int uwe5622_sdio_resume_bus(struct uwe5622 *wcn)
 		uwe5622_sdio_notify_host_pm(sdio, UWE5622_AP_INT_RESUME);
 	}
 	if (sdio->wake_irq_armed) {
+		unsigned int i;
+
 		WRITE_ONCE(sdio->wake_expected, false);
 		sdio->wake_irq_armed = false;
-		disable_irq_wake(sdio->wake_irq);
-		disable_irq(sdio->wake_irq);
+		for (i = 0; i < ARRAY_SIZE(sdio->wake_irq); i++) {
+			if (!sdio->wake_irq[i])
+				continue;
+			disable_irq_wake(sdio->wake_irq[i]);
+			disable_irq(sdio->wake_irq[i]);
+		}
 	}
 
 	return 0;
@@ -1136,8 +1151,25 @@ static irqreturn_t uwe5622_sdio_wake_irq(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-static int uwe5622_sdio_set_wake_config(struct uwe5622_sdio *sdio, int irq,
-					bool bluetooth)
+static int uwe5622_sdio_wake_trigger(struct device *dev, int irq, u32 *trigger)
+{
+	switch (irq_get_trigger_type(irq)) {
+	case IRQ_TYPE_EDGE_RISING:
+	case IRQ_TYPE_LEVEL_HIGH:
+		*trigger = UWE5622_WAKE_PULSE_HIGH;
+		return 0;
+	case IRQ_TYPE_EDGE_FALLING:
+	case IRQ_TYPE_LEVEL_LOW:
+		*trigger = UWE5622_WAKE_PULSE_LOW;
+		return 0;
+	default:
+		return dev_err_probe(dev, -EINVAL,
+				     "host-wake interrupt polarity is invalid\n");
+	}
+}
+
+static int uwe5622_sdio_set_wake_config(struct uwe5622_sdio *sdio, int bt,
+					int wlan)
 {
 	u32 duration, trigger;
 	int ret;
@@ -1158,78 +1190,51 @@ static int uwe5622_sdio_set_wake_config(struct uwe5622_sdio *sdio, int irq,
 		return dev_err_probe(&sdio->func->dev, -EINVAL,
 				     "host-wake duration is invalid\n");
 
-	switch (irq_get_trigger_type(irq)) {
-	case IRQ_TYPE_EDGE_RISING:
-	case IRQ_TYPE_LEVEL_HIGH:
-		trigger = UWE5622_WAKE_PULSE_HIGH;
-		break;
-	case IRQ_TYPE_EDGE_FALLING:
-	case IRQ_TYPE_LEVEL_LOW:
-		trigger = UWE5622_WAKE_PULSE_LOW;
-		break;
-	default:
-		return dev_err_probe(&sdio->func->dev, -EINVAL,
-				     "host-wake interrupt polarity is invalid\n");
-	}
-
-	/*
-	 * Exactly the output the board wires, named by the interrupt it declared.
-	 * The controller brings out one per radio and carries the traffic of both
-	 * radios on whichever is enabled, but an enabled Bluetooth output always
-	 * takes precedence: enabling both would select that one even on a board
-	 * that wired the other.
-	 */
-	if (bluetooth)
-		sdio->wake_config = UWE5622_SDIO_CONFIG_BT_WAKE_EN |
+	if (bt > 0) {
+		ret = uwe5622_sdio_wake_trigger(&sdio->func->dev, bt, &trigger);
+		if (ret)
+			return ret;
+		sdio->wake_config |= UWE5622_SDIO_CONFIG_BT_WAKE_EN |
 			FIELD_PREP(UWE5622_SDIO_CONFIG_BT_TRIGGER, trigger);
-	else
-		sdio->wake_config = UWE5622_SDIO_CONFIG_WLAN_WAKE_EN |
+	}
+	if (wlan > 0) {
+		ret = uwe5622_sdio_wake_trigger(&sdio->func->dev, wlan,
+						&trigger);
+		if (ret)
+			return ret;
+		sdio->wake_config |= UWE5622_SDIO_CONFIG_WLAN_WAKE_EN |
 			FIELD_PREP(UWE5622_SDIO_CONFIG_WLAN_TRIGGER, trigger);
+	}
+	/*
+	 * With one output enabled it carries both radios. With two, the firmware
+	 * would still send everything to the Bluetooth one, which it gives
+	 * priority, unless it is told to keep them apart.
+	 */
+	if (bt > 0 && wlan > 0)
+		sdio->wake_config |= UWE5622_SDIO_CONFIG_WAKE_SPLIT;
 	sdio->wake_config |= FIELD_PREP(UWE5622_SDIO_CONFIG_WAKE_DURATION,
-			     duration / UWE5622_WAKE_DURATION_STEP_MS);
+					duration /
+					UWE5622_WAKE_DURATION_STEP_MS);
 
 	return 0;
 }
 
-static int uwe5622_sdio_get_wake_irq(struct uwe5622_sdio *sdio)
+static int uwe5622_sdio_request_wake_irq(struct uwe5622_sdio *sdio, int irq,
+					unsigned int slot)
 {
-	struct fwnode_handle *fwnode = dev_fwnode(&sdio->func->dev);
-	bool bluetooth = true;
-	int irq, ret;
+	int ret;
 
-	irq = fwnode_irq_get_byname(fwnode, "bt-host-wake");
-	if (irq == -EPROBE_DEFER)
-		return irq;
-	if (irq < 0) {
-		if (irq != -EINVAL && irq != -ENXIO)
-			return irq;
-		bluetooth = false;
-		irq = fwnode_irq_get_byname(fwnode, "wlan-host-wake");
-	}
-	if (irq == -EPROBE_DEFER)
-		return irq;
-	if (irq < 0) {
-		if (irq == -EINVAL || irq == -ENXIO)
-			return 0;
-		return irq;
-	}
-
-	ret = uwe5622_sdio_set_wake_config(sdio, irq, bluetooth);
-	if (ret)
-		return ret;
 	/*
-	 * The firmware drives this output whenever it hands a transfer to the
-	 * host, not only to wake the system, so the interrupt stays masked while
-	 * the system is running: its per-transfer pulses would otherwise saturate
-	 * the CPU as soon as traffic starts. It is unmasked for the duration of a
-	 * sleep only.
+	 * The controller drives these outputs whenever it hands a transfer over,
+	 * not only to wake the system, so they stay masked while the system runs:
+	 * the per-transfer pulses would saturate the CPU as soon as traffic
+	 * starts. They are unmasked for the duration of a sleep only.
 	 *
-	 * The PM core's dedicated wake interrupt does exactly that, but it arms
-	 * the interrupt after the last chance this driver has to talk to the
-	 * controller, and the controller answers the first record after being
-	 * told the host is going down with a single pulse. Arming has to come
-	 * first or that pulse is lost and the sleep is deaf to everything after
-	 * it, so the interrupt is this driver's to manage.
+	 * The power management core's dedicated wake interrupt does that, but it
+	 * arms after the last chance this driver has to talk to the controller,
+	 * and the controller answers the first record after being told the host
+	 * is going down with a single pulse. Arming has to come first or that
+	 * pulse is lost, so the interrupts are this driver's to manage.
 	 */
 	ret = devm_request_threaded_irq(&sdio->func->dev, irq, NULL,
 					uwe5622_sdio_wake_irq,
@@ -1238,12 +1243,52 @@ static int uwe5622_sdio_get_wake_irq(struct uwe5622_sdio *sdio)
 	if (ret)
 		return dev_err_probe(&sdio->func->dev, ret,
 				     "failed to request host-wake IRQ\n");
-	sdio->wake_irq = irq;
+	sdio->wake_irq[slot] = irq;
 
 	return 0;
 }
 
+/*
+ * The controller brings out one wake output per radio, and a board wires the
+ * ones it has room for. Take whichever the interrupts describe: with both, each
+ * radio is given its own output, which is what the separation bit selects; with
+ * one, that output carries the wake traffic of both radios.
+ */
+static int uwe5622_sdio_get_wake_irq(struct uwe5622_sdio *sdio)
+{
+	struct fwnode_handle *fwnode = dev_fwnode(&sdio->func->dev);
+	int bt, wlan, ret;
 
+	bt = fwnode_irq_get_byname(fwnode, "bt-host-wake");
+	if (bt == -EPROBE_DEFER)
+		return bt;
+	if (bt < 0 && bt != -EINVAL && bt != -ENXIO)
+		return bt;
+	wlan = fwnode_irq_get_byname(fwnode, "wlan-host-wake");
+	if (wlan == -EPROBE_DEFER)
+		return wlan;
+	if (wlan < 0 && wlan != -EINVAL && wlan != -ENXIO)
+		return wlan;
+	if (bt < 0 && wlan < 0)
+		return 0;
+
+	ret = uwe5622_sdio_set_wake_config(sdio, bt, wlan);
+	if (ret)
+		return ret;
+
+	if (bt > 0) {
+		ret = uwe5622_sdio_request_wake_irq(sdio, bt, 0);
+		if (ret)
+			return ret;
+	}
+	if (wlan > 0) {
+		ret = uwe5622_sdio_request_wake_irq(sdio, wlan, 1);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
 
 static int uwe5622_sdio_probe(struct sdio_func *func,
 			      const struct sdio_device_id *id)
