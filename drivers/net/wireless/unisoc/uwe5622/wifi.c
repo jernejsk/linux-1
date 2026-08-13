@@ -2711,6 +2711,7 @@ void uwe5622_wifi_event(struct uwe5622_wifi *wifi,
 	struct net_device *ndev;
 	struct uwe5622_vif *vif;
 	const struct uwe5622_event_sta_lut *lut;
+	u8 gone[ETH_ALEN];
 
 	switch (hdr->id) {
 	case UWE5622_EVENT_CONNECT:
@@ -2747,9 +2748,19 @@ void uwe5622_wifi_event(struct uwe5622_wifi *wifi,
 		if (len < sizeof(*lut))
 			break;
 		lut = (const void *)data;
+		eth_zero_addr(gone);
 		if (lut->sta_lut < ARRAY_SIZE(wifi->peers)) {
 			spin_lock_bh(&wifi->vif_lock);
 			if (lut->action == 0) {
+				/*
+				 * Remember whose entry this was: the firmware
+				 * takes a station's lookup entry away without
+				 * always reporting that the station left, and a
+				 * station nothing can be sent to has left.
+				 */
+				if (wifi->peers[lut->sta_lut].valid)
+					ether_addr_copy(gone,
+						wifi->peers[lut->sta_lut].address);
 				memset(&wifi->peers[lut->sta_lut], 0,
 				       sizeof(wifi->peers[lut->sta_lut]));
 			} else if (lut->action == 1 || lut->action == 2) {
@@ -2769,6 +2780,12 @@ void uwe5622_wifi_event(struct uwe5622_wifi *wifi,
 			WRITE_ONCE(vif->sta_lut, vif->mode == UWE5622_MODE_AP ? 4 : 0);
 		else if (lut->action == 1 || lut->action == 2)
 			WRITE_ONCE(vif->sta_lut, lut->sta_lut);
+		/*
+		 * Otherwise the access point above keeps a station it can no
+		 * longer reach, and refuses to let the same one back in.
+		 */
+		if (vif->mode == UWE5622_MODE_AP && !is_zero_ether_addr(gone))
+			cfg80211_del_sta(ndev->ieee80211_ptr, gone, GFP_ATOMIC);
 		dev_put(ndev);
 		break;
 	case UWE5622_EVENT_HANG:
