@@ -30,12 +30,17 @@ enum uwe5622_wifi_cmd_id {
 	UWE5622_CMD_GET_STATION = 16,
 	UWE5622_CMD_START_AP = 17,
 	UWE5622_CMD_DEL_STATION = 18,
+	UWE5622_CMD_SOFTAP_BLACKLIST = 19,
+	UWE5622_CMD_SOFTAP_WHITELIST = 20,
+	UWE5622_CMD_TX_MGMT = 21,
+	UWE5622_CMD_REGISTER_FRAME = 22,
 	UWE5622_CMD_SET_IE = 25,
 	UWE5622_CMD_NOTIFY_IP_ACQUIRED = 26,
 	UWE5622_CMD_ADDBA_REQ = 40,
 	UWE5622_CMD_BA = 68,
 	UWE5622_CMD_TX_DATA = 72,
 	UWE5622_CMD_DOWNLOAD_INI = 76,
+	UWE5622_CMD_RESET_BEACON = 79,
 	UWE5622_CMD_SET_WOWLAN = 83,
 };
 
@@ -121,6 +126,8 @@ struct uwe5622_vif {
 	u8 credit_pool;
 	bool opened;
 	bool connected;
+	/* Management frame subtypes the controller was told to hand up. */
+	u32 mgmt_regs;
 	/* Reopens the firmware context after it refuses an association. */
 	struct delayed_work connect_watchdog;
 	struct work_struct recover_work;
@@ -208,6 +215,11 @@ struct uwe5622_wifi {
 	struct delayed_work wowlan_work;
 	u8 perm_addr[ETH_ALEN];
 	u32 fw_capa;
+	/* What the firmware said it can hold, for the limits cfg80211 enforces. */
+	/* Cookies for management frames the stack asked to be sent. */
+	atomic64_t mgmt_cookie;
+	u8 max_ap_sta;
+	u8 max_acl;
 	u32 fw_std;
 };
 
