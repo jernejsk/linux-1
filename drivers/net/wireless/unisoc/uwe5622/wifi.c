@@ -1970,6 +1970,15 @@ static int uwe5622_stop_ap(struct wiphy *wiphy, struct net_device *ndev,
 	if (link_id)
 		return -EINVAL;
 	netif_carrier_off(ndev);
+	/*
+	 * Nothing to take down, and nothing to take it down with: this is the
+	 * interface being removed, which closed the context first, or a
+	 * controller that was reset underneath. Talking to a context that is not
+	 * there means a command per timeout while the whole network stack waits
+	 * on the lock this is holding.
+	 */
+	if (!vif->opened)
+		return 0;
 
 	/*
 	 * There is no command that stops an access point: starting one brings
