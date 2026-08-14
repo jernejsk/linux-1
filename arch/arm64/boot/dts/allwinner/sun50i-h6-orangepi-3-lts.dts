@@ -173,11 +173,22 @@
 	vqmmc-supply = <&reg_bldo3>;
 	mmc-pwrseq = <&wifi_pwrseq>;
 	bus-width = <4>;
+	sd-uhs-sdr50;
+	sd-uhs-sdr104;
+	keep-power-in-suspend;
 	non-removable;
 	status = "okay";
 
 	aw859a: wifi@1 {
+		compatible = "sprd,uwe5622";
 		reg = <1>;
+		interrupt-parent = <&r_pio>;
+		interrupts = <1 1 IRQ_TYPE_EDGE_RISING>, /* PM1 / BT-WAKE-AP */
+			     <1 0 IRQ_TYPE_EDGE_RISING>; /* PM0 / WL-WAKE-AP */
+		interrupt-names = "bt-host-wake", "wlan-host-wake";
+		bluetooth-enable-gpios = <&r_pio 1 4 GPIO_ACTIVE_HIGH>; /* PM4 */
+		device-wake-gpios = <&r_pio 1 2 GPIO_ACTIVE_HIGH>; /* PM2 */
+		wakeup-source;
 	};
 };
 
