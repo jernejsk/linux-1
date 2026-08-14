@@ -26,6 +26,13 @@
 #define UWE5622_TX_HEADROOM	(UWE5622_TX_DESC_LEN + UWE5622_BUS_HEADROOM)
 #define UWE5622_DATA_TX_MAX	1672
 #define UWE5622_RX_DESC_LEN	28
+/*
+ * Firmware station table: an access point's group traffic goes to entry four,
+ * and entries from six up are the stations themselves.
+ */
+#define UWE5622_GROUP_LUT_AP	4
+#define UWE5622_STA_LUT_BASE	6
+#define UWE5622_TID_BK		1
 #define UWE5622_RX_CREDIT_OFFSET	24
 #define UWE5622_CREDIT_COLORS	4
 #define UWE5622_CREDIT_MAX	U16_MAX
@@ -395,28 +402,31 @@ static bool uwe5622_tx_sta_lut(struct uwe5622_vif *vif,
 	eth = (const void *)skb->data;
 	group = is_multicast_ether_addr(eth->h_dest);
 	/*
-	 * This firmware announces no entry for group traffic, and the entry the
-	 * vendor driver falls back to for it is not one this firmware has: a
-	 * frame sent to it stops the controller answering the bus at all, which
-	 * ends in a reset a second later. So a group frame is sent to a station
-	 * instead, which is what the only station on an access point wants
-	 * anyway. Reaching more than one of them needs a copy each.
+	 * Group traffic belongs to the entry the firmware keeps for an access
+	 * point's own broadcasts, and that entry only works for a frame queued
+	 * as background: given any other traffic identifier the controller
+	 * stops answering the bus altogether. Sending a group frame to one
+	 * station instead reaches only that station, so a second one never sees
+	 * an ARP request or a DHCP offer.
 	 */
+	if (group) {
+		*sta_lut = UWE5622_GROUP_LUT_AP;
+		return true;
+	}
 	*sta_lut = 0;
 	spin_lock_bh(&wifi->vif_lock);
 	for (i = 0; i < ARRAY_SIZE(wifi->peers); i++) {
 		if (!wifi->peers[i].valid ||
 		    wifi->peers[i].ctx_id != vif->ctx_id)
 			continue;
-		if (group || ether_addr_equal(wifi->peers[i].address,
-					      eth->h_dest)) {
+		if (ether_addr_equal(wifi->peers[i].address, eth->h_dest)) {
 			*sta_lut = wifi->peers[i].sta_lut;
 			break;
 		}
 	}
 	spin_unlock_bh(&wifi->vif_lock);
 
-	return *sta_lut >= 6;
+	return *sta_lut >= UWE5622_STA_LUT_BASE;
 }
 
 /*
@@ -432,6 +442,13 @@ static void uwe5622_fill_tx_desc(struct uwe5622_vif *vif, u8 *desc,
 	desc[0] = type | (vif->ctx_id << 5);
 	desc[1] = UWE5622_TX_DESC_LEN;
 	put_unaligned_le16(frame_len, desc + 3);
+	/*
+	 * The traffic identifier chooses the queue the firmware transmits from.
+	 * Group traffic has to take the background one; see the group entry
+	 * above.
+	 */
+	if (sta_lut < UWE5622_STA_LUT_BASE)
+		desc[5] = UWE5622_TID_BK;
 	desc[6] = sta_lut;
 	desc[7] = color;
 	if (csum_offset) {

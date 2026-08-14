@@ -161,9 +161,6 @@ struct uwe5622_sdio {
 	struct sk_buff *rx_skb[UWE5622_RX_PAC_MAX];
 	void *rx_trailer;
 	void *tx_buf;
-	unsigned int tx_writes;
-	unsigned int tx_records;
-	unsigned int tx_qmax;
 	struct scatterlist rx_sg[UWE5622_RX_PAC_MAX + 1];
 	unsigned int rx_pac_num;
 	/* Consecutive failed transmit transfers, reset by every success. */
@@ -745,13 +742,6 @@ static void uwe5622_sdio_tx_work(struct work_struct *work)
 
 		if (!ret) {
 			sdio->tx_errors = 0;
-			sdio->tx_writes++;
-			sdio->tx_records += skb_queue_len(&batch);
-			if (!(sdio->tx_writes % 2048))
-				dev_info(&sdio->func->dev,
-					 "tx writes=%u records=%u qmax=%u\n",
-					 sdio->tx_writes, sdio->tx_records,
-					 sdio->tx_qmax);
 			while ((skb = __skb_dequeue(&batch)))
 				dev_consume_skb_any(skb);
 			continue;
@@ -987,8 +977,6 @@ static int uwe5622_sdio_tx(struct uwe5622 *wcn, u8 channel,
 	UWE5622_TX_CB(skb)->channel = channel;
 	UWE5622_TX_CB(skb)->tag = tag;
 	skb_queue_tail(&sdio->tx_queue, skb);
-	if (skb_queue_len(&sdio->tx_queue) > sdio->tx_qmax)
-		sdio->tx_qmax = skb_queue_len(&sdio->tx_queue);
 	schedule_work(&sdio->tx_work);
 
 	return 0;
