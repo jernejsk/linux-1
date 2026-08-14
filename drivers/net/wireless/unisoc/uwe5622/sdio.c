@@ -95,7 +95,6 @@
 #define UWE5622_PUH_SUBTYPE		GENMASK(27, 24)
 #define UWE5622_PUH_TYPE		GENMASK(31, 28)
 
-#define UWE5622_RX_MAX_SIZE		(156 * UWE5622_SDIO_BLOCK_SIZE)
 /*
  * A packet buffer has to hold the largest record the firmware can produce, so
  * it is two 840-byte blocks or four 512-byte ones depending on the block size
@@ -134,7 +133,6 @@ struct uwe5622_sdio {
 	struct work_struct tx_work;
 	struct sk_buff_head rx_queue;
 	struct task_struct *rx_thread;
-	u8 *rx_buf;
 	bool enabled;
 	bool irq_claimed;
 	int wake_irq[2];
@@ -143,8 +141,6 @@ struct uwe5622_sdio {
 	/* Set by the host-wake handler, and the answer uwe5622_woke_host() gives. */
 	bool wake_asserted;
 	u32 wake_config;
-	/* Aggregated receive: one buffer per packet plus the transfer trailer. */
-	void *rx_pac[UWE5622_RX_PAC_MAX];
 	/*
 	 * One socket buffer per packet slot, read into directly. A frame that is
 	 * passed up is replaced; a slot the controller left empty is reused as it
@@ -450,8 +446,18 @@ static int uwe5622_sdio_read_aggregated(struct uwe5622_sdio *sdio,
 		if (sdio->rx_skb[i])
 			continue;
 		sdio->rx_skb[i] = alloc_skb(uwe5622_pac_size(), GFP_KERNEL);
-		if (!sdio->rx_skb[i])
-			return i ? (int)i : -ENOMEM;
+		if (!sdio->rx_skb[i]) {
+			/*
+			 * Read with the buffers there are rather than reporting
+			 * buffers that carry no transfer: the caller would parse
+			 * whatever the allocator handed over as if the
+			 * controller had filled it.
+			 */
+			if (!i)
+				return -ENOMEM;
+			pac_num = i;
+			break;
+		}
 	}
 
 	sg_init_table(sdio->rx_sg, pac_num + 1);
@@ -1077,6 +1083,12 @@ static int uwe5622_sdio_suspend_bus(struct uwe5622 *wcn, bool wake)
 			ret = enable_irq_wake(sdio->wake_irq[i]);
 			if (ret) {
 				disable_irq(sdio->wake_irq[i]);
+				while (i--) {
+					if (!sdio->wake_irq[i])
+						continue;
+					disable_irq_wake(sdio->wake_irq[i]);
+					disable_irq(sdio->wake_irq[i]);
+				}
 				return ret;
 			}
 		}
@@ -1311,7 +1323,7 @@ static int uwe5622_sdio_probe(struct sdio_func *func,
 			      const struct sdio_device_id *id)
 {
 	struct uwe5622_sdio *sdio;
-	int pac, ret;
+	int ret;
 
 	if (func->num != 1 ||
 	    !of_device_is_compatible(func->dev.of_node, "sprd,uwe5622"))
@@ -1321,10 +1333,6 @@ static int uwe5622_sdio_probe(struct sdio_func *func,
 	if (!sdio)
 		return -ENOMEM;
 
-	sdio->rx_buf = devm_kmalloc(&func->dev, UWE5622_RX_MAX_SIZE,
-				    GFP_KERNEL);
-	if (!sdio->rx_buf)
-		return -ENOMEM;
 	/* Room for the aggregation budget plus its end marker and padding. */
 	sdio->tx_buf = devm_kmalloc(&func->dev,
 				    UWE5622_TX_MAX_SIZE + UWE5622_SDIO_BLOCK_SIZE,
@@ -1339,13 +1347,6 @@ static int uwe5622_sdio_probe(struct sdio_func *func,
 	 */
 	func->card->quirks |= MMC_QUIRK_LENIENT_FN0;
 
-	for (pac = 0; pac < UWE5622_RX_PAC_MAX; pac++) {
-		sdio->rx_pac[pac] = devm_kmalloc(&func->dev,
-						 UWE5622_RX_PAC_SIZE,
-						 GFP_KERNEL);
-		if (!sdio->rx_pac[pac])
-			return -ENOMEM;
-	}
 	sdio->rx_trailer = devm_kmalloc(&func->dev, UWE5622_SDIO_BLOCK_SIZE,
 					GFP_KERNEL);
 	if (!sdio->rx_trailer)

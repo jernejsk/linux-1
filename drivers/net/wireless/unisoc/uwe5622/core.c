@@ -400,6 +400,16 @@ static void uwe5622_recovery_work(struct work_struct *work)
 	return;
 
 out_failed:
+	/*
+	 * The controller is dead and holds nothing worth parking, so record
+	 * that rather than staying in a transitional state for ever: a state
+	 * that refuses system sleep would keep the whole machine awake for a
+	 * radio that no longer works.
+	 */
+	mutex_lock(&wcn->state_mutex);
+	if (wcn->state == UWE5622_RECOVERING)
+		wcn->state = UWE5622_OFF;
+	mutex_unlock(&wcn->state_mutex);
 	dev_err(wcn->dev, "firmware recovery failed: %d\n", ret);
 }
 
@@ -614,6 +624,11 @@ int uwe5622_core_suspend(struct uwe5622 *wcn)
 	int ret;
 
 	mutex_lock(&wcn->state_mutex);
+	/* Nothing to park; do not keep the system awake for a dead radio. */
+	if (wcn->state == UWE5622_OFF) {
+		ret = 0;
+		goto out;
+	}
 	if (wcn->state != UWE5622_READY) {
 		ret = -EBUSY;
 		goto out;
@@ -635,6 +650,10 @@ int uwe5622_core_resume(struct uwe5622 *wcn)
 	int ret;
 
 	mutex_lock(&wcn->state_mutex);
+	if (wcn->state == UWE5622_OFF) {
+		ret = 0;
+		goto out;
+	}
 	if (wcn->state != UWE5622_SUSPENDED) {
 		ret = -EINVAL;
 		goto out;

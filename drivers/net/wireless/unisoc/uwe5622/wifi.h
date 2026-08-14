@@ -11,6 +11,8 @@
 #include <net/cfg80211.h>
 
 #define UWE5622_WIFI_MAX_CTX		8
+#define UWE5622_N_CHANNELS_2GHZ		14
+#define UWE5622_N_CHANNELS_5GHZ		25
 #define UWE5622_WIFI_CMD_TIMEOUT		msecs_to_jiffies(3000)
 #define UWE5622_WIFI_CMD_TX_MAX		1596
 #define UWE5622_WIFI_RSP_MAX		2048
@@ -177,6 +179,9 @@ struct uwe5622_wifi {
 	struct uwe5622_client *data_client;
 	struct ieee80211_supported_band band_2ghz;
 	struct ieee80211_supported_band band_5ghz;
+	/* Per-device channel state; cfg80211 writes regulatory flags into it. */
+	struct ieee80211_channel channels_2ghz[UWE5622_N_CHANNELS_2GHZ];
+	struct ieee80211_channel channels_5ghz[UWE5622_N_CHANNELS_5GHZ];
 
 	/* Allows one firmware command transaction at a time. */
 	struct mutex cmd_mutex;
@@ -221,7 +226,6 @@ struct uwe5622_wifi {
 	u32 fw_capa;
 	/* What the firmware said it can hold, for the limits cfg80211 enforces. */
 	/* Cookies for management frames the stack asked to be sent. */
-	atomic64_t mgmt_cookie;
 	u8 max_ap_sta;
 	u8 max_acl;
 	u32 fw_std;

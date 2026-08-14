@@ -101,20 +101,6 @@ struct uwe5622_event_mgmt_frame {
 	u8 data[];
 } __packed;
 
-struct uwe5622_cmd_mgmt_tx {
-	u8 channel;
-	u8 dont_wait_for_ack;
-	__le32 wait;
-	__le64 cookie;
-	__le16 len;
-	u8 frame[];
-} __packed;
-
-struct uwe5622_cmd_register_frame {
-	__le16 type;
-	u8 reg;
-} __packed;
-
 struct uwe5622_event_sta_lut {
 	u8 ctx_id;
 	u8 action;
@@ -179,6 +165,10 @@ static struct ieee80211_channel uwe5622_channels_5ghz[] = {
 	UWE5622_CHAN5(157, 5785), UWE5622_CHAN5(161, 5805),
 	UWE5622_CHAN5(165, 5825),
 };
+
+/* The wiphy-private copies in struct uwe5622_wifi are sized to match. */
+static_assert(ARRAY_SIZE(uwe5622_channels_2ghz) == UWE5622_N_CHANNELS_2GHZ);
+static_assert(ARRAY_SIZE(uwe5622_channels_5ghz) == UWE5622_N_CHANNELS_5GHZ);
 
 static const struct ieee80211_supported_band uwe5622_band_2ghz = {
 	.channels = uwe5622_channels_2ghz,
@@ -800,6 +790,8 @@ static void uwe5622_connect_watchdog(struct work_struct *work)
 
 	dev_warn(vif->wifi->dev,
 		 "no answer to the association attempt, replacing the context\n");
+	cfg80211_connect_timeout(vif->wdev.netdev, NULL, NULL, 0, GFP_KERNEL,
+				 NL80211_TIMEOUT_UNSPECIFIED);
 	schedule_work(&vif->recover_work);
 }
 
@@ -2403,7 +2395,12 @@ static int uwe5622_wifi_suspend(struct wiphy *wiphy,
 out:
 	dev_put(ndev);
 
-	return ret;
+	/*
+	 * A controller that is gone has nothing to park and nothing to wake
+	 * for. Refusing would keep a machine whose radio died from ever
+	 * sleeping again.
+	 */
+	return ret == -ESHUTDOWN ? 0 : ret;
 }
 
 /*
@@ -3302,6 +3299,16 @@ static int uwe5622_wifi_probe(struct auxiliary_device *adev,
 	wifi->wiphy = wiphy;
 	wifi->band_2ghz = uwe5622_band_2ghz;
 	wifi->band_5ghz = uwe5622_band_5ghz;
+	/*
+	 * Regulatory state is written into the channels, so every wiphy needs
+	 * its own copy of them rather than a table every device would share.
+	 */
+	memcpy(wifi->channels_2ghz, uwe5622_channels_2ghz,
+	       sizeof(wifi->channels_2ghz));
+	memcpy(wifi->channels_5ghz, uwe5622_channels_5ghz,
+	       sizeof(wifi->channels_5ghz));
+	wifi->band_2ghz.channels = wifi->channels_2ghz;
+	wifi->band_5ghz.channels = wifi->channels_5ghz;
 	mutex_init(&wifi->cmd_mutex);
 	init_completion(&wifi->cmd_done);
 	spin_lock_init(&wifi->vif_lock);
