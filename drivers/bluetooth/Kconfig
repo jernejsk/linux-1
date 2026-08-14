@@ -3,6 +3,17 @@
 menu "Bluetooth device drivers"
 	depends on BT
 
+config BT_UWE5622
+	tristate "Unisoc UWE5622 Bluetooth support"
+	depends on UWE5622_CORE
+	select AUXILIARY_BUS
+	help
+	  Native HCI support for the Bluetooth function in the Unisoc
+	  UWE5622 connectivity controller. The controller shares the parent
+	  transport with the UWE5622 Wi-Fi driver and currently uses SDIO.
+
+	  Say M here to build this support as a module.
+
 config BT_INTEL
 	tristate
 	select REGMAP
