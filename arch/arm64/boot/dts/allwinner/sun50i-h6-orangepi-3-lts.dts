@@ -71,20 +71,6 @@
 		gpio = <&pio 3 6 GPIO_ACTIVE_HIGH>; /* PD6 */
 	};
 
-	/* Vendor UWE5622 stack, used only for driver comparison testing. */
-	uwe_bsp: uwe-bsp {
-		compatible = "unisoc,uwe_bsp";
-		bt-reg-on-gpios = <&r_pio 1 4 GPIO_ACTIVE_HIGH>; /* PM4 */
-		data-irq;
-		blksz-512;
-		keep-power-on;
-	};
-
-	sprd_mtty: sprd-mtty {
-		compatible = "sprd,mtty";
-		sprd,name = "ttyBT";
-	};
-
 	reg_vcc5v: vcc5v {
 		/* board wide 5V supply directly from the DC jack */
 		compatible = "regulator-fixed";

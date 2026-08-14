@@ -26,24 +26,30 @@ properties:
     const: 1
 
   interrupts:
-    maxItems: 1
+    minItems: 1
+    maxItems: 2
     description:
-      Optional out-of-band wake interrupt from the controller. The interrupt
+      Optional out-of-band wake interrupts from the controller. The interrupt
       trigger describes the active polarity of the selected controller output.
       Rising-edge and high-level interrupts select active high; falling-edge
-      and low-level interrupts select active low. If it is absent, the SDIO
+      and low-level interrupts select active low. If they are absent, the SDIO
       in-band interrupt is used for wakeup.
 
   interrupt-names:
-    enum:
-      - bt-host-wake
-      - wlan-host-wake
+    minItems: 1
+    items:
+      - enum:
+          - bt-host-wake
+          - wlan-host-wake
+      - enum:
+          - bt-host-wake
+          - wlan-host-wake
     description:
-      Selects the controller wake output connected to the host. Wake events
-      from both radio functions are routed to that output.
+      Names the controller wake outputs connected to the host. Wake events
+      from a radio function are routed to its named output, or to the single
+      connected output when only one is wired up.
 
   sprd,host-wake-duration-ms:
-    $ref: /schemas/types.yaml#/definitions/uint32
     description:
       Time for which the firmware holds the selected host-wake output active.
     minimum: 10

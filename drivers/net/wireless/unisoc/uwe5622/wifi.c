@@ -738,8 +738,6 @@ static void uwe5622_deliver(struct sk_buff_head *done)
 
 #define UWE5622_NAPI_QUEUE_LIMIT	256
 
-
-
 /*
  * Receive offload needs a poll it can hold open while it coalesces, so frames go
  * through one rather than being pushed up as they arrive. Coalescing is only
@@ -834,7 +832,8 @@ static u8 uwe5622_rx_csum(const u8 *frame, u16 len, u16 raw)
 	u16 proto = get_unaligned_be16(frame + 2 * ETH_ALEN);
 	u16 netlen = len - ETH_HLEN;
 	__wsum sum = (__force __wsum)raw;
-	u16 l4len, verdict = 0;
+	__sum16 verdict = 0;
+	u16 l4len;
 	u8 l4proto;
 
 	if (len < ETH_HLEN)
@@ -1448,7 +1447,7 @@ static void uwe5622_quiesce_vif(struct uwe5622_vif *vif)
 
 static struct wireless_dev *
 uwe5622_add_virtual_intf(struct wiphy *wiphy, const char *name,
-			unsigned char name_assign_type,
+			 unsigned char name_assign_type,
 			enum nl80211_iftype type, struct vif_params *params)
 {
 	struct uwe5622_wifi *wifi = wiphy_priv(wiphy);
@@ -1715,11 +1714,11 @@ static int uwe5622_connect(struct wiphy *wiphy, struct net_device *ndev,
 	else if (sme->bssid_hint)
 		ether_addr_copy(connect.bssid, sme->bssid_hint);
 	if (sme->channel)
-		connect.channel = ieee80211_frequency_to_channel(
-						 sme->channel->center_freq);
+		connect.channel =
+			ieee80211_frequency_to_channel(sme->channel->center_freq);
 	else if (sme->channel_hint)
-		connect.channel = ieee80211_frequency_to_channel(
-						 sme->channel_hint->center_freq);
+		connect.channel =
+			ieee80211_frequency_to_channel(sme->channel_hint->center_freq);
 	connect.auth_type = sme->auth_type == NL80211_AUTHTYPE_SHARED_KEY;
 	if (sme->crypto.n_ciphers_pairwise) {
 		cipher = uwe5622_cipher(sme->crypto.ciphers_pairwise[0]);
@@ -1882,8 +1881,8 @@ static int uwe5622_start_ap(struct wiphy *wiphy, struct net_device *ndev,
 	if (!beacon->head || beacon->head_len < 38 || !settings->ssid ||
 	    settings->ssid_len > IEEE80211_MAX_SSID_LEN)
 		return -EINVAL;
-	channel = ieee80211_frequency_to_channel(
-				settings->chandef.chan->center_freq);
+	channel =
+		ieee80211_frequency_to_channel(settings->chandef.chan->center_freq);
 	ret = uwe5622_wifi_cmd(vif->wifi, vif->ctx_id,
 			       UWE5622_CMD_SET_CHANNEL, &channel, 1,
 			       NULL, NULL, NULL);
@@ -2107,7 +2106,7 @@ static void uwe5622_station_flags(struct uwe5622_vif *vif, const u8 *mac,
 }
 
 static int uwe5622_fill_station(struct uwe5622_vif *vif,
-			       struct net_device *ndev, const u8 *mac,
+				struct net_device *ndev, const u8 *mac,
 			       struct station_info *sinfo)
 {
 	struct uwe5622_station_report report = {};
@@ -2551,28 +2550,29 @@ static const struct cfg80211_ops uwe5622_cfg80211_ops = {
 };
 
 static void uwe5622_event_scan_frame(struct uwe5622_wifi *wifi,
-				      const u8 *data, size_t len)
+				     const u8 *data, size_t len)
 {
 	const struct uwe5622_event_mgmt_frame *frame = (const void *)data;
 	struct cfg80211_inform_bss bss = {};
 	struct cfg80211_bss *result;
+	enum nl80211_band band;
 	u16 frame_len;
+	u32 freq;
 
 	if (len < sizeof(*frame) || frame->type != UWE5622_FRAME_SCAN)
 		return;
 	frame_len = le16_to_cpu(frame->len);
 	if (frame_len > len - sizeof(*frame))
 		return;
-	bss.chan = ieee80211_get_channel(wifi->wiphy,
-		ieee80211_channel_to_frequency(frame->channel,
-			frame->channel <= 14 ? NL80211_BAND_2GHZ :
-						 NL80211_BAND_5GHZ));
+	band = frame->channel <= 14 ? NL80211_BAND_2GHZ : NL80211_BAND_5GHZ;
+	freq = ieee80211_channel_to_frequency(frame->channel, band);
+	bss.chan = ieee80211_get_channel(wifi->wiphy, freq);
 	if (!bss.chan)
 		return;
 	bss.signal = frame->signal * 100;
 	bss.boottime_ns = ktime_get_boottime_ns();
 	result = cfg80211_inform_bss_frame_data(wifi->wiphy, &bss,
-				(struct ieee80211_mgmt *)frame->data,
+						(struct ieee80211_mgmt *)frame->data,
 				frame_len, GFP_ATOMIC);
 	if (result)
 		cfg80211_put_bss(wifi->wiphy, result);
@@ -2779,7 +2779,7 @@ void uwe5622_wifi_event(struct uwe5622_wifi *wifi,
 		break;
 	case UWE5622_EVENT_COEX_BT_ON_OFF:
 		dev_dbg(wifi->dev, "firmware reports Bluetooth %s\n",
-			 len && data[0] ? "active" : "idle");
+			len && data[0] ? "active" : "idle");
 		break;
 	case UWE5622_EVENT_NEW_STATION:
 		uwe5622_event_new_station(wifi, ctx, data, len);
@@ -2811,7 +2811,7 @@ void uwe5622_wifi_event(struct uwe5622_wifi *wifi,
 				 */
 				if (wifi->peers[lut->sta_lut].valid)
 					ether_addr_copy(gone,
-						wifi->peers[lut->sta_lut].address);
+							wifi->peers[lut->sta_lut].address);
 				memset(&wifi->peers[lut->sta_lut], 0,
 				       sizeof(wifi->peers[lut->sta_lut]));
 			} else if (lut->action == 1 || lut->action == 2) {
@@ -3225,7 +3225,7 @@ static int uwe5622_wifi_init_firmware(struct uwe5622_wifi *wifi)
 		download[0] = i + 1;
 		memcpy(download + 4, section, section_len[i]);
 		put_unaligned_le16(crc16(0xffff, section, section_len[i]),
-				     download + 4 + section_len[i]);
+				   download + 4 + section_len[i]);
 		ret = uwe5622_wifi_cmd(wifi, 0, UWE5622_CMD_DOWNLOAD_INI,
 				       download, 4 + section_len[i] + 2,
 				       NULL, NULL, NULL);
@@ -3317,14 +3317,14 @@ static int uwe5622_wifi_probe(struct auxiliary_device *adev,
 	set_wiphy_dev(wiphy, &adev->dev);
 
 	wifi->cmd_client = uwe5622_client_register(&adev->dev,
-			UWE5622_SERVICE_WIFI_COMMAND,
+						   UWE5622_SERVICE_WIFI_COMMAND,
 			&uwe5622_cmd_client_ops, wifi);
 	if (IS_ERR(wifi->cmd_client)) {
 		ret = PTR_ERR(wifi->cmd_client);
 		goto err_wiphy;
 	}
 	wifi->data_client = uwe5622_client_register(&adev->dev,
-			UWE5622_SERVICE_WIFI_DATA,
+						    UWE5622_SERVICE_WIFI_DATA,
 			&uwe5622_data_client_ops, wifi);
 	if (IS_ERR(wifi->data_client)) {
 		ret = PTR_ERR(wifi->data_client);

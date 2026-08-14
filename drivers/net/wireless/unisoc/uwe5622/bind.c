@@ -32,11 +32,11 @@ static void uwe5622_confuse(const u8 input[4], u8 output[16])
 
 	for (i = 0; i < 12; i++)
 		output[i] = uwe5622_choose(mixed[i * 3],
-					  mixed[i * 3 + 1], mixed[i * 3 + 2]);
+					   mixed[i * 3 + 1], mixed[i * 3 + 2]);
 
 	for (i = 0; i < 4; i++) {
 		majority[i] = uwe5622_majority(output[i * 3],
-						output[i * 3 + 1],
+					       output[i * 3 + 1],
 						output[i * 3 + 2]);
 		output[12 + i] = majority[i] ^ input[i];
 	}
@@ -52,7 +52,7 @@ static int uwe5622_deconfuse(const u8 input[16], u8 output[4])
 
 	for (i = 0; i < 4; i++)
 		output[i] = uwe5622_majority(input[i * 3], input[i * 3 + 1],
-					       input[i * 3 + 2]) ^ input[12 + i];
+					     input[i * 3 + 2]) ^ input[12 + i];
 
 	uwe5622_confuse(output, check);
 	return crypto_memneq(input, check, sizeof(check)) ? -EBADMSG : 0;
@@ -73,10 +73,10 @@ static void uwe5622_encrypt(const u8 input[4], u8 output[4])
 
 	for (i = 0; i < 12; i++)
 		majority[i] = uwe5622_majority(mixed[i * 3],
-						mixed[i * 3 + 1], mixed[i * 3 + 2]);
+					       mixed[i * 3 + 1], mixed[i * 3 + 2]);
 	for (i = 0; i < 4; i++)
 		output[i] = uwe5622_choose(majority[i * 3],
-					  majority[i * 3 + 1], majority[i * 3 + 2]);
+					   majority[i * 3 + 1], majority[i * 3 + 2]);
 
 	memzero_explicit(digest, sizeof(digest));
 	memzero_explicit(mixed, sizeof(mixed));

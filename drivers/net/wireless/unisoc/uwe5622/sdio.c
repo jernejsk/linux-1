@@ -127,14 +127,6 @@
 #define UWE5622_TX_MAX_SIZE		(UWE5622_TX_MAX_BLOCKS * \
 					 UWE5622_SDIO_BLOCK_SIZE)
 
-
-
-
-
-
-
-
-
 struct uwe5622_sdio {
 	struct sdio_func *func;
 	struct uwe5622 wcn;
@@ -212,7 +204,7 @@ static int uwe5622_sdio_set_target(struct uwe5622_sdio *sdio, u32 address)
 
 /* The target-side direct window advances after each transfer at address 0x0f. */
 static int uwe5622_sdio_direct_write_locked(struct uwe5622_sdio *sdio,
-					     u32 address, const void *data,
+					    u32 address, const void *data,
 					     size_t length)
 {
 	const u8 *source = data;
@@ -237,7 +229,7 @@ static int uwe5622_sdio_direct_write_locked(struct uwe5622_sdio *sdio,
 }
 
 static int uwe5622_sdio_direct_read_locked(struct uwe5622_sdio *sdio,
-					    u32 address, void *data,
+					   u32 address, void *data,
 					    size_t length)
 {
 	u8 *destination = data;
@@ -262,7 +254,7 @@ static int uwe5622_sdio_direct_read_locked(struct uwe5622_sdio *sdio,
 }
 
 static int uwe5622_sdio_write_u32_locked(struct uwe5622_sdio *sdio,
-					  u32 address, u32 value)
+					 u32 address, u32 value)
 {
 	__le32 wire_value = cpu_to_le32(value);
 
@@ -271,7 +263,7 @@ static int uwe5622_sdio_write_u32_locked(struct uwe5622_sdio *sdio,
 }
 
 static int uwe5622_sdio_read_u32_locked(struct uwe5622_sdio *sdio,
-					 u32 address, u32 *value)
+					u32 address, u32 *value)
 {
 	__le32 wire_value;
 	int ret;
@@ -285,7 +277,7 @@ static int uwe5622_sdio_read_u32_locked(struct uwe5622_sdio *sdio,
 }
 
 static int uwe5622_sdio_download_firmware(struct uwe5622_sdio *sdio,
-					   const struct firmware *fw)
+					  const struct firmware *fw)
 {
 	size_t offset = 0;
 	size_t chunk;
@@ -295,14 +287,14 @@ static int uwe5622_sdio_download_firmware(struct uwe5622_sdio *sdio,
 		return dev_err_probe(&sdio->func->dev, -EINVAL,
 				     "invalid raw firmware size %zu\n", fw->size);
 	if (fw->size >= 4 && (!memcmp(fw->data, "WCNM", 4) ||
-			     !memcmp(fw->data, "WCNE", 4)))
+			      !memcmp(fw->data, "WCNE", 4)))
 		return dev_err_probe(&sdio->func->dev, -EINVAL,
 				     "packed firmware images are not supported yet\n");
 
 	while (offset < fw->size) {
 		chunk = min_t(size_t, fw->size - offset, UWE5622_FW_CHUNK_SIZE);
 		ret = uwe5622_sdio_direct_write_locked(sdio,
-						 UWE5622_FW_LOAD_ADDR + offset,
+						       UWE5622_FW_LOAD_ADDR + offset,
 						 fw->data + offset, chunk);
 		if (ret)
 			return ret;
@@ -327,7 +319,7 @@ static int uwe5622_sdio_release_cpu(struct uwe5622_sdio *sdio)
 }
 
 static int uwe5622_sdio_answer_bind(struct uwe5622_sdio *sdio,
-					     const u8 challenge[16])
+				    const u8 challenge[16])
 {
 	u8 response[16];
 	int ret;
@@ -382,11 +374,11 @@ static int uwe5622_sdio_wait_ready(struct uwe5622_sdio *sdio)
 			return 0;
 		case UWE5622_SYNC_CAL_WAITING:
 			ret = uwe5622_sdio_write_u32_locked(sdio,
-					UWE5622_SYNC_SDIO_CONFIG,
+							    UWE5622_SYNC_SDIO_CONFIG,
 					config);
 			if (!ret)
 				ret = uwe5622_sdio_write_u32_locked(sdio,
-						UWE5622_SYNC_ADDR,
+								    UWE5622_SYNC_ADDR,
 						UWE5622_SYNC_CAL_WRITE_DONE);
 			if (ret)
 				return ret;
@@ -670,7 +662,6 @@ static int uwe5622_sdio_wake_locked(struct uwe5622_sdio *sdio)
 static void uwe5622_sdio_drain(struct uwe5622_sdio *sdio)
 {
 	uwe5622_sdio_drain_rx_aggregated(sdio);
-
 }
 
 static void uwe5622_sdio_irq(struct sdio_func *func)
@@ -873,7 +864,7 @@ static void uwe5622_sdio_stop(struct uwe5622 *wcn)
 						   &reset);
 		if (!ret)
 			ret = uwe5622_sdio_write_u32_locked(sdio,
-					UWE5622_CP_RESET_REG,
+							    UWE5622_CP_RESET_REG,
 					reset | UWE5622_CP_RESET_BIT);
 		if (ret)
 			dev_warn(&sdio->func->dev,
@@ -1003,7 +994,7 @@ static void uwe5622_sdio_allow_sleep(struct uwe5622_sdio *sdio, bool allow)
 		 */
 		sdio_f0_writeb(sdio->func, UWE5622_AP_INT_ALLOW_SLEEP,
 			       UWE5622_F0_AP_INT_CP0, &ret);
-		udelay(65);
+		usleep_range(65, 130);
 	}
 	sdio_release_host(sdio->func);
 	if (ret)
@@ -1246,7 +1237,7 @@ static int uwe5622_sdio_set_wake_config(struct uwe5622_sdio *sdio, int bt,
 }
 
 static int uwe5622_sdio_request_wake_irq(struct uwe5622_sdio *sdio, int irq,
-					unsigned int slot)
+					 unsigned int slot)
 {
 	int ret;
 
@@ -1331,7 +1322,7 @@ static int uwe5622_sdio_probe(struct sdio_func *func,
 		return -ENOMEM;
 
 	sdio->rx_buf = devm_kmalloc(&func->dev, UWE5622_RX_MAX_SIZE,
-				      GFP_KERNEL);
+				    GFP_KERNEL);
 	if (!sdio->rx_buf)
 		return -ENOMEM;
 	/* Room for the aggregation budget plus its end marker and padding. */
@@ -1380,7 +1371,7 @@ static int uwe5622_sdio_probe(struct sdio_func *func,
 	sdio->wcn.services[UWE5622_SERVICE_AT] =
 		(struct uwe5622_channel_pair) { 0, 13 };
 	sdio->wcn.bluetooth_enable = devm_gpiod_get_optional(&func->dev,
-					"bluetooth-enable", GPIOD_OUT_LOW);
+							     "bluetooth-enable", GPIOD_OUT_LOW);
 	if (IS_ERR(sdio->wcn.bluetooth_enable))
 		return dev_err_probe(&func->dev,
 			PTR_ERR(sdio->wcn.bluetooth_enable),

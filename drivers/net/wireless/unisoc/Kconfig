@@ -11,16 +11,6 @@ menuconfig WLAN_VENDOR_UNISOC
 
 if WLAN_VENDOR_UNISOC
 
-config UWE5622_WIFI
-	tristate "Unisoc UWE5622 Wi-Fi support"
-	depends on UWE5622_CORE
-	depends on CFG80211
-	select CRC16
-	help
-	  Fullmac Wi-Fi support for the Unisoc UWE5622. The driver uses the
-	  standard cfg80211 interface and supports dynamic station and AP
-	  interfaces, including userspace management through iwd.
+source "drivers/net/wireless/unisoc/uwe5622/Kconfig"
 
-	  Say M here to build the Wi-Fi child driver as a module.
-
-endif
+endif # WLAN_VENDOR_UNISOC

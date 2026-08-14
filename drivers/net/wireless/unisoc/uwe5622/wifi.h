@@ -110,7 +110,7 @@ struct uwe5622_wifi;
 
 struct uwe5622_wifi_skb_cb {
 	u8 ctx_id;
-	/* Which block acknowledgement command a queued payload belongs to. */
+	/* Which block acknowledgment command a queued payload belongs to. */
 	u8 ba_cmd;
 };
 
@@ -145,7 +145,7 @@ struct uwe5622_peer {
 	bool authorized;
 	/* It asked for the quality-of-service the firmware then uses. */
 	bool wme;
-	/* Transmit block acknowledgement sessions asked for, one bit per tid. */
+	/* Transmit block acknowledgment sessions asked for, one bit per tid. */
 	unsigned long ba_tx;
 	unsigned int frames;
 	unsigned long ba_retry;
@@ -164,7 +164,7 @@ struct uwe5622_peer {
 #define UWE5622_REORDER_WINDOW		64
 
 /*
- * One receive block acknowledgement session. The peer may hand over frames out
+ * One receive block acknowledgment session. The peer may hand over frames out
  * of order within its window, so they are held here until the gaps ahead of the
  * head are filled, or until the head has waited long enough that releasing with
  * a gap beats stalling the stream.

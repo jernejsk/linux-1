@@ -10,10 +10,19 @@ config UWE5622_CORE
 	  This driver supports the common firmware and transport layer of the
 	  Unisoc UWE5622 Wi-Fi and Bluetooth controller. The first supported
 	  transport is SDIO, while child drivers use transport-independent
-	  logical services.
-
-	  It lives outside the WLAN menu because the Bluetooth transport needs
-	  it just as much as the Wi-Fi one, and a Bluetooth-only kernel has to
-	  be able to reach it.
+	  logical services. The Bluetooth child driver is found in the
+	  Bluetooth device driver menu and needs this core as well.
 
 	  Say M here to build the connectivity core as a module.
+
+config UWE5622_WIFI
+	tristate "Unisoc UWE5622 Wi-Fi support"
+	depends on UWE5622_CORE
+	depends on CFG80211
+	select CRC16
+	help
+	  Fullmac Wi-Fi support for the Unisoc UWE5622. The driver uses the
+	  standard cfg80211 interface and supports dynamic station and AP
+	  interfaces, including userspace management through iwd.
+
+	  Say M here to build the Wi-Fi child driver as a module.

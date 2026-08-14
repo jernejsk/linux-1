@@ -228,7 +228,7 @@ void uwe5622_set_wake(struct uwe5622_client *client, bool enabled)
 		struct uwe5622_client *other;
 
 		other = rcu_dereference_protected(wcn->channels[i],
-						 lockdep_is_held(&wcn->channel_mutex));
+						  lockdep_is_held(&wcn->channel_mutex));
 		if (other && other->wake_enabled) {
 			any = true;
 			break;
