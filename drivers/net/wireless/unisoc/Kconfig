@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+menuconfig WLAN_VENDOR_UNISOC
+	bool "Unisoc wireless devices"
+	default y
+	help
+	  This option enables the Unisoc wireless-driver menu. It does not
+	  build a driver by itself. Choose the controller-specific options
+	  below for the hardware present in the system. If unsure, say Y and
+	  leave the individual drivers disabled.
+
+if WLAN_VENDOR_UNISOC
+
+source "drivers/net/wireless/unisoc/uwe5622/Kconfig"
+
+endif # WLAN_VENDOR_UNISOC
