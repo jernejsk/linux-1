@@ -375,6 +375,16 @@ enum {
 	 */
 	HCI_QUIRK_BROKEN_READ_PAGE_SCAN_TYPE,
 
+	/* When this quirk is set, the HCI_OP_WRITE_DEF_LINK_POLICY command is
+	 * skipped. This is required for controllers which claim link policy
+	 * modes in their features that they then refuse to be configured with,
+	 * failing the command with invalid parameters and taking the whole
+	 * controller setup down with it.
+	 *
+	 * This quirk must be set before hci_register_dev is called.
+	 */
+	HCI_QUIRK_BROKEN_WRITE_DEF_LINK_POLICY,
+
 	__HCI_NUM_QUIRKS,
 };
 
