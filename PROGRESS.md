@@ -638,9 +638,57 @@ to look next: if the access point context never gets credit returned, the driver
 would push frames the controller will not take, which is what `-EBUSY` a second
 apart looks like.
 
-`dtim_period` is now 1 rather than hostapd's default 2, which is worth keeping
-regardless: the client's ping latency of 150-180 ms was buffered delivery.
+`dtim_period` is now 1 rather than hostapd's default 2.  It reduces multicast
+and sleeping-client delivery latency, but the later client-power-save-off test
+shows that it does not explain the remaining awake-client packet clustering.
 
 Per-station link data is still missing - `signal: 0 dBm`, `tx bitrate: unknown` -
 because the controller's station report is per interface and returns zeros in
 access point mode.
+
+### Firmware review of the 2.4 GHz AP rate (2026-08-14)
+
+Combined RAM/ROM analysis found no fixed 12 Mbit/s AP rate cap.  It did find
+that `host_cmd_start_ap` (`0x00209AC4`) forces every channel below 36 to internal
+width zero (20 MHz), ignoring HT40 secondary-channel information.  The common
+peer-width and rate-control paths consume that value, so 2.4 GHz HT40 is not
+available in firmware AP mode.
+
+The other built-in loss is A-MSDU: the vendor sends `amsdu_permit=0`, and
+firmware overrides it only for a VHT peer on 5 GHz.  Two-point-four GHz still
+has TX A-MPDU.  `blockack_alloc_tx_ba_session` (`0x00129BE4`) has no AP or band
+exclusion; it requires an HT peer, a QoS-capable station slot and the global BA
+permit.  Association processing marks the slot QoS-capable when it sees either
+WMM or HT Capabilities, and the default A-MPDU buffer limit is 32.  Shared rate
+control contains no AP maximum.  TKIP deliberately suppresses HT; CCMP does
+not.
+
+Therefore HT20 and missing A-MSDU reduce efficiency but do not explain 12
+Mbit/s alone.  The vendor driver reaches the same roughly 12 Mbit/s with the
+same firmware, client and channel.  This rules out a BA-install bug specific to
+the new host driver: either firmware fails to use 2.4 GHz AP A-MPDU in both
+cases, or aggregation is not the differentiator.
+
+A Linux-client test with power saving disabled is also complete.  It gave 13.9
+Mbit/s TCP transmit and 10/161/356 ms ping min/average/max, with replies still
+clustered.  Client power saving is therefore not the primary throughput or
+latency cause.
+
+The decisive next test is to timestamp every ADDBA command/result and capture
+the action exchange, A-MPDU flags, beacons and pings with an external monitor.
+Result zero is emitted only after the peer accepts and firmware creates the
+hardware A-MPDU LUT.  The firmware suspends that peer/TID queue while ADDBA is
+pending and arms a 400-timer-unit timeout; both drivers retry a failed request
+after three seconds.  Thus a failed negotiation can create one roughly 400 ms
+hole per retry in both drivers.  It cannot explain a continuous 500 ms cadence.
+Full firmware evidence and DAP addresses are in
+`firmware-re/75-ap-throughput.md`.
+
+The AP power-save path was checked too.  Firmware buffers only while the MH
+hardware marks the peer asleep, and drains the per-AC queues when that state
+clears; association-time U-APSD bits do not by themselves latch the peer asleep.
+There is no fixed delivery cadence in the awake path.  Firmware TBTT processing
+rebuilds the beacon, and its DTIM helpers gate the high/group power-save queue,
+not normal awake-peer unicast.  With a 100-TU beacon and DTIM 1, the interval is
+102.4 ms rather than 500 ms.  A monitor trace must establish phase alignment
+before attributing the separate packet bunching to TBTT/DTIM.
