@@ -11,6 +11,8 @@
 #include <net/cfg80211.h>
 
 #define UWE5622_WIFI_MAX_CTX		8
+/* How many group addresses this driver is willing to hand the firmware. */
+#define UWE5622_MC_FILTER_MAX		16
 #define UWE5622_N_CHANNELS_2GHZ		14
 #define UWE5622_N_CHANNELS_5GHZ		25
 #define UWE5622_WIFI_CMD_TIMEOUT		msecs_to_jiffies(3000)
@@ -43,6 +45,7 @@ enum uwe5622_wifi_cmd_id {
 	UWE5622_CMD_NOTIFY_IP_ACQUIRED = 26,
 	UWE5622_CMD_SET_CQM = 27,
 	UWE5622_CMD_SET_ROAM_OFFLOAD = 28,
+	UWE5622_CMD_MULTICAST_FILTER = 39,
 	UWE5622_CMD_ADDBA_REQ = 40,
 	UWE5622_CMD_BA = 68,
 	UWE5622_CMD_TX_DATA = 72,
@@ -140,6 +143,10 @@ struct uwe5622_vif {
 	struct delayed_work connect_watchdog;
 	struct work_struct recover_work;
 	struct work_struct roam_resync_work;
+	struct work_struct mc_filter_work;
+	/* Group addresses the firmware should keep, under the wifi vif lock. */
+	u8 mc_addr[UWE5622_MC_FILTER_MAX][ETH_ALEN];
+	u8 mc_count;
 	struct napi_struct napi;
 	struct sk_buff_head rx_queue;
 	bool napi_ready;
@@ -236,6 +243,7 @@ struct uwe5622_wifi {
 	/* What the firmware said it can hold, for the limits cfg80211 enforces. */
 	/* Cookies for management frames the stack asked to be sent. */
 	u8 max_ap_sta;
+	u8 max_mc;
 	u8 max_acl;
 	u32 fw_std;
 };

@@ -758,10 +758,56 @@ drop:
 	return NETDEV_TX_OK;
 }
 
+/*
+ * Hand the firmware the group addresses the stack is listening for, so it can
+ * drop the rest itself. A list that does not fit is no list at all: the
+ * firmware is told to keep nothing, which passes everything up rather than
+ * silently losing the traffic the stack asked for.
+ */
+static void uwe5622_ndev_set_rx_mode(struct net_device *ndev)
+{
+	struct uwe5622_vif *vif = netdev_priv(ndev);
+	struct uwe5622_wifi *wifi = vif->wifi;
+	unsigned int max = min_t(unsigned int, wifi->max_mc,
+				 UWE5622_MC_FILTER_MAX);
+	u8 addr[UWE5622_MC_FILTER_MAX][ETH_ALEN];
+	struct netdev_hw_addr *ha;
+	u8 count = 0;
+	bool changed;
+
+	if (!wifi->max_mc || vif->mode != UWE5622_MODE_STATION)
+		return;
+
+	if ((ndev->flags & IFF_MULTICAST) && !(ndev->flags & IFF_ALLMULTI) &&
+	    netdev_mc_count(ndev) <= max) {
+		netdev_for_each_mc_addr(ha, ndev) {
+			if (count == max)
+				break;
+			ether_addr_copy(addr[count++], ha->addr);
+		}
+	}
+
+	spin_lock_bh(&wifi->vif_lock);
+	changed = count != vif->mc_count ||
+		  memcmp(vif->mc_addr, addr, count * ETH_ALEN);
+	if (changed) {
+		memcpy(vif->mc_addr, addr, count * ETH_ALEN);
+		vif->mc_count = count;
+	}
+	spin_unlock_bh(&wifi->vif_lock);
+
+	/* Only when it differs: the stack calls this for every change of any
+	 * receive setting, most of which leave the group list alone.
+	 */
+	if (changed)
+		schedule_work(&vif->mc_filter_work);
+}
+
 static const struct net_device_ops uwe5622_netdev_ops = {
 	.ndo_open = uwe5622_ndev_open,
 	.ndo_stop = uwe5622_ndev_stop,
 	.ndo_start_xmit = uwe5622_ndev_xmit,
+	.ndo_set_rx_mode = uwe5622_ndev_set_rx_mode,
 };
 
 static void uwe5622_deliver(struct sk_buff_head *done)
@@ -874,6 +920,53 @@ static void uwe5622_roam_resync_work(struct work_struct *work)
 		dev_err(vif->wifi->dev,
 			"failed to clear the firmware's transition state: %d\n",
 			ret);
+}
+
+/*
+ * Which group addresses the firmware should carry up to the host. Everything
+ * else it can drop for itself, which is the point: a receive that never leaves
+ * the controller costs neither a transfer nor a wake-up.
+ *
+ * The list is handed over from a worker because the stack asks for it with its
+ * address lock held, and a command has to be waited for.
+ */
+#define UWE5622_MC_FILTER_MULTICAST	1
+
+struct uwe5622_cmd_mc_filter {
+	u8 subtype;
+	u8 count;
+	u8 mac[][ETH_ALEN];
+} __packed;
+
+static void uwe5622_mc_filter_work(struct work_struct *work)
+{
+	struct uwe5622_vif *vif = container_of(work, struct uwe5622_vif,
+					       mc_filter_work);
+	struct uwe5622_wifi *wifi = vif->wifi;
+	u8 addr[UWE5622_MC_FILTER_MAX][ETH_ALEN];
+	struct uwe5622_cmd_mc_filter *cmd;
+	size_t len;
+	u8 count;
+	int ret;
+
+	spin_lock_bh(&wifi->vif_lock);
+	count = vif->mc_count;
+	memcpy(addr, vif->mc_addr, count * ETH_ALEN);
+	spin_unlock_bh(&wifi->vif_lock);
+
+	len = struct_size(cmd, mac, count);
+	cmd = kzalloc(len, GFP_KERNEL);
+	if (!cmd)
+		return;
+	cmd->subtype = UWE5622_MC_FILTER_MULTICAST;
+	cmd->count = count;
+	memcpy(cmd->mac, addr, count * ETH_ALEN);
+	ret = uwe5622_wifi_cmd(wifi, vif->ctx_id, UWE5622_CMD_MULTICAST_FILTER,
+			       cmd, len, NULL, NULL, NULL);
+	if (ret)
+		dev_dbg(wifi->dev, "firmware kept its own group filter: %d\n",
+			ret);
+	kfree(cmd);
 }
 
 static void uwe5622_recover_work(struct work_struct *work)
@@ -1514,6 +1607,7 @@ static void uwe5622_quiesce_vif(struct uwe5622_vif *vif)
 	cancel_delayed_work_sync(&vif->connect_watchdog);
 	cancel_work_sync(&vif->recover_work);
 	cancel_work_sync(&vif->roam_resync_work);
+	cancel_work_sync(&vif->mc_filter_work);
 	vif->napi_ready = false;
 	napi_disable(&vif->napi);
 	netif_napi_del(&vif->napi);
@@ -1556,6 +1650,7 @@ uwe5622_add_virtual_intf(struct wiphy *wiphy, const char *name,
 	skb_queue_head_init(&vif->rx_queue);
 	INIT_WORK(&vif->recover_work, uwe5622_recover_work);
 	INIT_WORK(&vif->roam_resync_work, uwe5622_roam_resync_work);
+	INIT_WORK(&vif->mc_filter_work, uwe5622_mc_filter_work);
 	INIT_DELAYED_WORK(&vif->connect_watchdog, uwe5622_connect_watchdog);
 	vif->wdev.wiphy = wiphy;
 	vif->wdev.iftype = type;
@@ -3488,6 +3583,7 @@ out_config:
 	wifi->tx_with_credit = info[82] == 0;
 	wifi->max_ap_sta = info[20];
 	wifi->max_acl = info[21];
+	wifi->max_mc = info[22];
 	sec2 = info + 24;
 	ampdu = get_unaligned_le16(sec2 + 2);
 	wifi->band_2ghz.ht_cap.cap = get_unaligned_le16(sec2);
