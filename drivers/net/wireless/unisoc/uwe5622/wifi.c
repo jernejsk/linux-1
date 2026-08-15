@@ -2344,6 +2344,31 @@ static int uwe5622_set_mac_acl(struct wiphy *wiphy, struct net_device *ndev,
 			       UWE5622_ACL_ENABLE, acl);
 }
 
+/*
+ * Ask the firmware to watch the signal for the host and say when it crosses a
+ * threshold, rather than having the host poll for it. What the two words hold
+ * is the threshold and the margin around it that a crossing has to clear
+ * before it is reported.
+ */
+struct uwe5622_cmd_cqm_rssi {
+	__le32 threshold;
+	__le32 hysteresis;
+} __packed;
+
+static int uwe5622_set_cqm_rssi_config(struct wiphy *wiphy,
+				       struct net_device *ndev,
+				       s32 rssi_thold, u32 rssi_hyst)
+{
+	struct uwe5622_vif *vif = netdev_priv(ndev);
+	struct uwe5622_cmd_cqm_rssi cmd = {
+		.threshold = cpu_to_le32(rssi_thold),
+		.hysteresis = cpu_to_le32(rssi_hyst),
+	};
+
+	return uwe5622_wifi_cmd(vif->wifi, vif->ctx_id, UWE5622_CMD_SET_CQM,
+				&cmd, sizeof(cmd), NULL, NULL, NULL);
+}
+
 static int uwe5622_set_power_mgmt(struct wiphy *wiphy, struct net_device *ndev,
 				  bool enabled, int timeout)
 {
@@ -2614,6 +2639,7 @@ static const struct cfg80211_ops uwe5622_cfg80211_ops = {
 	.dump_station = uwe5622_dump_station,
 	.set_mac_acl = uwe5622_set_mac_acl,
 	.set_power_mgmt = uwe5622_set_power_mgmt,
+	.set_cqm_rssi_config = uwe5622_set_cqm_rssi_config,
 	.add_virtual_intf = uwe5622_add_virtual_intf,
 	.change_virtual_intf = uwe5622_change_virtual_intf,
 	.del_virtual_intf = uwe5622_del_virtual_intf,
@@ -2825,6 +2851,41 @@ static void uwe5622_set_peer_wme(struct uwe5622_wifi *wifi, u8 ctx,
 	spin_unlock_bh(&wifi->vif_lock);
 }
 
+/*
+ * What the firmware says the signal did. A lost beacon is not a threshold
+ * crossing, but it means the same thing to whoever is watching the link and
+ * there is nothing else to report it as.
+ */
+#define UWE5622_CQM_RSSI_LOW	1
+#define UWE5622_CQM_RSSI_HIGH	2
+#define UWE5622_CQM_BEACON_LOSS	3
+
+static void uwe5622_event_cqm(struct uwe5622_wifi *wifi, u8 ctx,
+			      const u8 *data, size_t len)
+{
+	struct net_device *ndev;
+	enum nl80211_cqm_rssi_threshold_event event;
+
+	if (!len)
+		return;
+	switch (data[0]) {
+	case UWE5622_CQM_RSSI_HIGH:
+		event = NL80211_CQM_RSSI_THRESHOLD_EVENT_HIGH;
+		break;
+	case UWE5622_CQM_RSSI_LOW:
+	case UWE5622_CQM_BEACON_LOSS:
+		event = NL80211_CQM_RSSI_THRESHOLD_EVENT_LOW;
+		break;
+	default:
+		return;
+	}
+	ndev = uwe5622_get_ndev(wifi, ctx);
+	if (!ndev)
+		return;
+	cfg80211_cqm_rssi_notify(ndev, event, 0, GFP_ATOMIC);
+	dev_put(ndev);
+}
+
 static void uwe5622_event_new_station(struct uwe5622_wifi *wifi, u8 ctx,
 				      const u8 *data, size_t len)
 {
@@ -2879,6 +2940,9 @@ void uwe5622_wifi_event(struct uwe5622_wifi *wifi,
 	case UWE5622_EVENT_COEX_BT_ON_OFF:
 		dev_dbg(wifi->dev, "firmware reports Bluetooth %s\n",
 			len && data[0] ? "active" : "idle");
+		break;
+	case UWE5622_EVENT_CQM:
+		uwe5622_event_cqm(wifi, ctx, data, len);
 		break;
 	case UWE5622_EVENT_NEW_STATION:
 		uwe5622_event_new_station(wifi, ctx, data, len);
