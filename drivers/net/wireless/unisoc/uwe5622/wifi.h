@@ -135,6 +135,7 @@ struct uwe5622_vif {
 	/* Reopens the firmware context after it refuses an association. */
 	struct delayed_work connect_watchdog;
 	struct work_struct recover_work;
+	struct work_struct roam_resync_work;
 	struct napi_struct napi;
 	struct sk_buff_head rx_queue;
 	bool napi_ready;

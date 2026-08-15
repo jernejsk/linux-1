@@ -85,6 +85,14 @@ struct uwe5622_cmd_connect {
 	u8 ssid[IEEE80211_MAX_SSID_LEN];
 } __packed;
 
+/*
+ * What a connection event describes. A roam is the firmware following an
+ * access point driven transition on its own; anything else is the answer to an
+ * association the host asked for.
+ */
+#define UWE5622_CONNECT_SUCCESS		0
+#define UWE5622_CONNECT_ROAMED		2
+
 /* What the controller says a management frame it hands up is for. */
 #define UWE5622_FRAME_REGISTERED	1
 #define UWE5622_FRAME_DEAUTH		2
@@ -795,6 +803,32 @@ static void uwe5622_connect_watchdog(struct work_struct *work)
 	schedule_work(&vif->recover_work);
 }
 
+/*
+ * Undo the fast transition state the firmware latched. The firmware takes its
+ * roaming flag from what it scanned rather than from what the host asked for,
+ * and no failure path of its own ever clears it: once it is set, every
+ * association request carries fast transition elements and an access point that
+ * refuses one refuses all of them. Disconnecting clears the flag, and the
+ * supplicant's next attempt then starts from a state both sides agree on.
+ *
+ * This cannot run from the event itself: commands and the events that answer
+ * them are drained by the same thread, so waiting for one there never finishes.
+ */
+static void uwe5622_roam_resync_work(struct work_struct *work)
+{
+	struct uwe5622_vif *vif = container_of(work, struct uwe5622_vif,
+					       roam_resync_work);
+	__le16 reason = cpu_to_le16(WLAN_REASON_DEAUTH_LEAVING);
+	int ret;
+
+	ret = uwe5622_wifi_cmd(vif->wifi, vif->ctx_id, UWE5622_CMD_DISCONNECT,
+			       &reason, sizeof(reason), NULL, NULL, NULL);
+	if (ret)
+		dev_err(vif->wifi->dev,
+			"failed to clear the firmware's transition state: %d\n",
+			ret);
+}
+
 static void uwe5622_recover_work(struct work_struct *work)
 {
 	struct uwe5622_vif *vif = container_of(work, struct uwe5622_vif,
@@ -1431,6 +1465,7 @@ static void uwe5622_quiesce_vif(struct uwe5622_vif *vif)
 	uwe5622_report_disconnect(vif);
 	cancel_delayed_work_sync(&vif->connect_watchdog);
 	cancel_work_sync(&vif->recover_work);
+	cancel_work_sync(&vif->roam_resync_work);
 	vif->napi_ready = false;
 	napi_disable(&vif->napi);
 	netif_napi_del(&vif->napi);
@@ -1472,6 +1507,7 @@ uwe5622_add_virtual_intf(struct wiphy *wiphy, const char *name,
 	vif->credit_pool = UWE5622_CREDIT_NO_POOL;
 	skb_queue_head_init(&vif->rx_queue);
 	INIT_WORK(&vif->recover_work, uwe5622_recover_work);
+	INIT_WORK(&vif->roam_resync_work, uwe5622_roam_resync_work);
 	INIT_DELAYED_WORK(&vif->connect_watchdog, uwe5622_connect_watchdog);
 	vif->wdev.wiphy = wiphy;
 	vif->wdev.iftype = type;
@@ -2606,7 +2642,25 @@ static void uwe5622_event_connect(struct uwe5622_wifi *wifi, u8 ctx,
 	pos += 2;
 	if (req_len > data + len - pos)
 		goto out;
-	if (data[0] == 2) {
+	/*
+	 * A roam reported for an association the host asked for is the firmware
+	 * answering with state it should have dropped: it kept its transition
+	 * context across a refusal and now describes a fresh association as a
+	 * roam. Reporting it as one would hand cfg80211 a roam without a
+	 * scanned access point behind it, on an interface it does not consider
+	 * associated. Clear what the firmware is holding and refuse the
+	 * association instead, which leaves the supplicant free to try again.
+	 */
+	if (data[0] == UWE5622_CONNECT_ROAMED && !vif->connected) {
+		dev_warn_ratelimited(wifi->dev,
+				     "firmware reported a roam for an association that was asked for; retrying from a clean state\n");
+		schedule_work(&vif->roam_resync_work);
+		cfg80211_connect_result(ndev, bssid, NULL, 0, NULL, 0,
+					WLAN_STATUS_UNSPECIFIED_FAILURE,
+					GFP_ATOMIC);
+		goto out;
+	}
+	if (data[0] == UWE5622_CONNECT_ROAMED) {
 		cfg80211_roamed(ndev, &(struct cfg80211_roam_info) {
 			.links[0].bssid = bssid,
 			.req_ie = pos,
