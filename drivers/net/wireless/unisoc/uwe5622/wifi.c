@@ -9,6 +9,7 @@
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
+#include <linux/hex.h>
 #include <linux/unaligned.h>
 #include <linux/if_vlan.h>
 #include <linux/ip.h>
@@ -61,6 +62,16 @@
 #define UWE5622_ROAM_SET_FLAG	1
 #define UWE5622_ROAM_SET_FT_IE	2
 #define UWE5622_ROAM_SET_PMK	3
+#define UWE5622_ROAM_SET_BLACKLIST	4
+
+/*
+ * Debug: comma-separated BSSIDs the firmware is told never to roam to, so the
+ * hangs seen under rapid band flapping can be blamed on its roam machinery or
+ * cleared of it.
+ */
+static char uwe5622_roam_blacklist[64];
+module_param_string(roam_blacklist, uwe5622_roam_blacklist,
+		    sizeof(uwe5622_roam_blacklist), 0644);
 
 enum uwe5622_cipher {
 	UWE5622_CIPHER_NONE,
@@ -305,6 +316,33 @@ static int uwe5622_set_roam_offload(struct uwe5622_vif *vif, u8 type,
 				NULL, NULL, NULL);
 }
 
+static void uwe5622_arm_roam_blacklist(struct uwe5622_vif *vif)
+{
+	u8 payload[1 + 2 * ETH_ALEN];
+	const char *p = uwe5622_roam_blacklist;
+	u8 count = 0;
+	int ret;
+
+	while (*p && count < 2) {
+		if (!mac_pton(p, &payload[1 + count * ETH_ALEN])) {
+			dev_warn(vif->wifi->dev, "bad blacklist entry: %s\n", p);
+			return;
+		}
+		count++;
+		p = strchr(p, ',');
+		if (!p)
+			break;
+		p++;
+	}
+	if (!count)
+		return;
+
+	payload[0] = count;
+	ret = uwe5622_set_roam_offload(vif, UWE5622_ROAM_SET_BLACKLIST, payload,
+				       1 + count * ETH_ALEN);
+	dev_info(vif->wifi->dev, "roam blacklist of %u: %d\n", count, ret);
+}
+
 static void uwe5622_arm_roam_offload(struct uwe5622_vif *vif)
 {
 	static const u8 on = 1;
@@ -318,6 +356,8 @@ static void uwe5622_arm_roam_offload(struct uwe5622_vif *vif)
 		dev_warn(vif->wifi->dev,
 			 "firmware refused to follow transitions itself: %d\n",
 			 ret);
+
+	uwe5622_arm_roam_blacklist(vif);
 }
 
 static u8 uwe5622_cipher(u32 cipher)
@@ -3157,7 +3197,8 @@ void uwe5622_wifi_event(struct uwe5622_wifi *wifi,
 		dev_put(ndev);
 		break;
 	case UWE5622_EVENT_HANG:
-		dev_err(wifi->dev, "firmware reported a hang\n");
+		dev_err(wifi->dev, "firmware reported a hang: %*phN\n",
+			(int)min(len, 32u), data);
 		uwe5622_recover(wifi->cmd_client);
 		break;
 	default:

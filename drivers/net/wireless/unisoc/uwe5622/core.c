@@ -12,6 +12,25 @@
 
 #include "core.h"
 
+/* Debug only: lets the core be halted and read on demand, for comparison. */
+static struct uwe5622 *uwe5622_debug_wcn;
+
+static int uwe5622_dump_now_set(const char *val, const struct kernel_param *kp)
+{
+	struct uwe5622 *wcn = uwe5622_debug_wcn;
+
+	if (!wcn || !wcn->bus_ops->dump_core)
+		return -ENODEV;
+	wcn->bus_ops->dump_core(wcn);
+
+	return 0;
+}
+
+static const struct kernel_param_ops uwe5622_dump_now_ops = {
+	.set = uwe5622_dump_now_set,
+};
+module_param_cb(dump_now, &uwe5622_dump_now_ops, NULL, 0200);
+
 static void uwe5622_auxdev_release(struct device *dev)
 {
 	struct auxiliary_device *adev = to_auxiliary_dev(dev);
@@ -317,7 +336,7 @@ static int uwe5622_at_command(struct uwe5622 *wcn, const char *cmd)
 
 static void uwe5622_quiet_firmware_log(struct uwe5622 *wcn)
 {
-	int ret = uwe5622_at_command(wcn, UWE5622_AT_ARMLOG_OFF);
+	int ret = 0; /* Debug: leave the controller's log running. */
 
 	/*
 	 * Worth reporting but not worth failing over: a controller that keeps
@@ -357,6 +376,9 @@ static void uwe5622_recovery_work(struct work_struct *work)
 	 * the firmware is the only thing to have forgotten. Clients are told the
 	 * firmware is going, and told again once it is back.
 	 */
+	if (wcn->bus_ops->dump_core)
+		wcn->bus_ops->dump_core(wcn);
+
 	uwe5622_notify_reset(wcn);
 	wcn->bus_ops->stop(wcn);
 
@@ -493,6 +515,11 @@ void uwe5622_core_rx(struct uwe5622 *wcn, u8 channel, struct sk_buff *skb)
 	client = srcu_dereference(wcn->channels[channel], &wcn->channel_srcu);
 	if (client) {
 		client->ops->rx(client->priv, skb);
+	} else if (channel == 14 || channel == 15 ||
+		   channel == wcn->services[UWE5622_SERVICE_WIFI_LOG].rx) {
+		dev_err(wcn->dev, "fwlog%u: %.*s\n", channel,
+			(int)min(skb->len, 240u), skb->data);
+		kfree_skb(skb);
 	} else if (channel == wcn->services[UWE5622_SERVICE_AT].rx) {
 		dev_dbg(wcn->dev, "AT answer: %*phN\n", (int)skb->len,
 			skb->data);
@@ -519,6 +546,7 @@ int uwe5622_core_probe(struct uwe5622 *wcn)
 	ret = init_srcu_struct(&wcn->channel_srcu);
 	if (ret)
 		return ret;
+	uwe5622_debug_wcn = wcn;
 	wcn->state = UWE5622_BOOTING;
 
 	ret = request_firmware(&fw, UWE5622_FIRMWARE_NAME, wcn->dev);

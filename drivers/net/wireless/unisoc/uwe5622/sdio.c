@@ -110,6 +110,42 @@
  */
 #define UWE5622_RX_QUEUE_LIMIT		512
 
+/*
+ * The controller's Cortex-M4 carries an ARM debug access port, reachable
+ * through the direct window once its clock is running and the port is pointed
+ * at the combined Bluetooth/Wi-Fi core. A memory access is a command word, an
+ * address and then the data, written or read at three fixed registers.
+ */
+#define UWE5622_APB_ENB1		0x4008801c
+#define UWE5622_DBG_CM4_EB		BIT(10)
+#define UWE5622_DAP_CTRL		0x4008828c
+#define UWE5622_CM4_DAP_SEL_BTWF	BIT(1)
+#define UWE5622_DAP_COMMAND		0x40060000
+#define UWE5622_DAP_ADDRESS		0x40060004
+#define UWE5622_DAP_DATA		0x4006000c
+#define UWE5622_DAP_STATUS		0x400600fc
+#define UWE5622_DAP_READY		0x24770011
+#define UWE5622_DAP_ACCESS		0x22000012
+
+/* ARMv7-M debug, fault and control registers, addressed through the port. */
+#define CM4_ICSR			0xe000ed04
+#define CM4_CFSR			0xe000ed28
+#define CM4_HFSR			0xe000ed2c
+#define CM4_DFSR			0xe000ed30
+#define CM4_MMFAR			0xe000ed34
+#define CM4_BFAR			0xe000ed38
+#define CM4_DHCSR			0xe000edf0
+#define CM4_DHCSR_HALT			0xa05f0003
+#define CM4_DHCSR_RUN			0xa05f0000
+#define CM4_DCRSR			0xe000edf4
+#define CM4_DCRDR			0xe000edf8
+#define CM4_DEMCR			0xe000edfc
+#define CM4_DEMCR_CATCH_FAULTS		0x010007f1
+/* Selector indices: 0-15 are r0-r15, then xPSR and the two stack pointers. */
+#define CM4_REG_COUNT			19
+#define CM4_REG_SP			13
+#define CM4_REG_PC			15
+
 /* Function 0 register holding the controller's sleep request in bit 0. */
 #define UWE5622_F0_SLEEP_CTL		0x1a2
 #define UWE5622_RX_CHANNEL_BASE		12
@@ -270,6 +306,161 @@ static int uwe5622_sdio_read_u32_locked(struct uwe5622_sdio *sdio,
 		*value = le32_to_cpu(wire_value);
 
 	return ret;
+}
+
+static int uwe5622_dap_write_locked(struct uwe5622_sdio *sdio, u32 address,
+				    u32 value)
+{
+	int ret;
+
+	ret = uwe5622_sdio_write_u32_locked(sdio, UWE5622_DAP_COMMAND,
+					    UWE5622_DAP_ACCESS);
+	if (!ret)
+		ret = uwe5622_sdio_write_u32_locked(sdio, UWE5622_DAP_ADDRESS,
+						    address);
+	if (!ret)
+		ret = uwe5622_sdio_write_u32_locked(sdio, UWE5622_DAP_DATA,
+						    value);
+
+	return ret;
+}
+
+static int uwe5622_dap_read_locked(struct uwe5622_sdio *sdio, u32 address,
+				   u32 *value)
+{
+	int ret;
+
+	ret = uwe5622_sdio_write_u32_locked(sdio, UWE5622_DAP_COMMAND,
+					    UWE5622_DAP_ACCESS);
+	if (!ret)
+		ret = uwe5622_sdio_write_u32_locked(sdio, UWE5622_DAP_ADDRESS,
+						    address);
+	if (!ret)
+		ret = uwe5622_sdio_read_u32_locked(sdio, UWE5622_DAP_DATA,
+						  value);
+
+	return ret;
+}
+
+static int uwe5622_dap_core_reg_locked(struct uwe5622_sdio *sdio, u32 index,
+				       u32 *value)
+{
+	int ret;
+
+	ret = uwe5622_dap_write_locked(sdio, CM4_DCRSR, index);
+	if (ret)
+		return ret;
+
+	return uwe5622_dap_read_locked(sdio, CM4_DCRDR, value);
+}
+
+/*
+ * Halt the controller's core and report where it stopped. This is the only
+ * account of a wedged firmware: it answers nothing on its own channels, and the
+ * recovery that follows takes its power away and with it everything it held.
+ */
+static void uwe5622_sdio_dump_core(struct uwe5622 *wcn)
+{
+	static const char * const names[CM4_REG_COUNT] = {
+		"r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7",
+		"r8", "r9", "r10", "r11", "r12", "sp", "lr", "pc",
+		"xpsr", "msp", "psp",
+	};
+	struct uwe5622_sdio *sdio = wcn->bus_priv;
+	struct device *dev = &sdio->func->dev;
+	u32 regs[CM4_REG_COUNT] = {};
+	u32 frame[8] = {};
+	u32 value;
+	int ret, i;
+
+	sdio_claim_host(sdio->func);
+
+	ret = uwe5622_sdio_read_u32_locked(sdio, UWE5622_APB_ENB1, &value);
+	if (!ret)
+		ret = uwe5622_sdio_write_u32_locked(sdio, UWE5622_APB_ENB1,
+						    value | UWE5622_DBG_CM4_EB);
+	if (!ret)
+		ret = uwe5622_sdio_read_u32_locked(sdio, UWE5622_DAP_CTRL,
+						   &value);
+	if (!ret)
+		ret = uwe5622_sdio_write_u32_locked(sdio, UWE5622_DAP_CTRL,
+						    value |
+						    UWE5622_CM4_DAP_SEL_BTWF);
+	if (!ret)
+		ret = uwe5622_sdio_read_u32_locked(sdio, UWE5622_DAP_STATUS,
+						   &value);
+	if (ret) {
+		dev_warn(dev, "cannot reach the debug port: %d\n", ret);
+		goto out;
+	}
+	if (value != UWE5622_DAP_READY) {
+		dev_warn(dev, "debug port not ready: 0x%08x\n", value);
+		goto out;
+	}
+
+	ret = uwe5622_dap_write_locked(sdio, CM4_DEMCR,
+				       CM4_DEMCR_CATCH_FAULTS);
+	if (!ret)
+		ret = uwe5622_dap_write_locked(sdio, CM4_DHCSR, CM4_DHCSR_HALT);
+	if (ret) {
+		dev_warn(dev, "failed to halt the core: %d\n", ret);
+		goto out;
+	}
+
+	for (i = 0; i < CM4_REG_COUNT; i++) {
+		ret = uwe5622_dap_core_reg_locked(sdio, i, &regs[i]);
+		if (ret) {
+			dev_warn(dev, "failed to read %s: %d\n", names[i], ret);
+			goto out_release;
+		}
+	}
+
+	dev_err(dev, "firmware core halted at pc 0x%08x, lr 0x%08x, xpsr 0x%08x\n",
+		regs[CM4_REG_PC], regs[14], regs[16]);
+	for (i = 0; i < CM4_REG_COUNT; i += 2) {
+		if (i + 1 < CM4_REG_COUNT)
+			dev_err(dev, "%-4s 0x%08x  %-4s 0x%08x\n",
+				names[i], regs[i], names[i + 1], regs[i + 1]);
+		else
+			dev_err(dev, "%-4s 0x%08x\n", names[i], regs[i]);
+	}
+
+	if (!uwe5622_dap_read_locked(sdio, CM4_ICSR, &value))
+		dev_err(dev, "icsr 0x%08x (exception %u)\n", value,
+			(u32)(value & GENMASK(8, 0)));
+	if (!uwe5622_dap_read_locked(sdio, CM4_CFSR, &value))
+		dev_err(dev, "cfsr 0x%08x\n", value);
+	if (!uwe5622_dap_read_locked(sdio, CM4_HFSR, &value))
+		dev_err(dev, "hfsr 0x%08x\n", value);
+	if (!uwe5622_dap_read_locked(sdio, CM4_DFSR, &value))
+		dev_err(dev, "dfsr 0x%08x\n", value);
+	if (!uwe5622_dap_read_locked(sdio, CM4_MMFAR, &value))
+		dev_err(dev, "mmfar 0x%08x\n", value);
+	if (!uwe5622_dap_read_locked(sdio, CM4_BFAR, &value))
+		dev_err(dev, "bfar 0x%08x\n", value);
+
+	/*
+	 * If the core stopped inside an exception it entered from a stack frame,
+	 * the address that faulted is in that frame rather than in the program
+	 * counter, which by then points at the handler.
+	 */
+	if (regs[CM4_REG_SP] >= 0x00100000 && regs[CM4_REG_SP] < 0x001f0000 &&
+	    !(regs[CM4_REG_SP] & 3)) {
+		for (i = 0; i < ARRAY_SIZE(frame); i++)
+			if (uwe5622_dap_read_locked(sdio,
+						    regs[CM4_REG_SP] + i * 4,
+						    &frame[i]))
+				break;
+		dev_err(dev, "stack frame: r0 0x%08x r1 0x%08x r2 0x%08x r3 0x%08x\n",
+			frame[0], frame[1], frame[2], frame[3]);
+		dev_err(dev, "stack frame: r12 0x%08x lr 0x%08x pc 0x%08x xpsr 0x%08x\n",
+			frame[4], frame[5], frame[6], frame[7]);
+	}
+
+out_release:
+	uwe5622_dap_write_locked(sdio, CM4_DHCSR, CM4_DHCSR_RUN);
+out:
+	sdio_release_host(sdio->func);
 }
 
 static int uwe5622_sdio_download_firmware(struct uwe5622_sdio *sdio,
@@ -1149,6 +1340,7 @@ static const struct uwe5622_bus_ops uwe5622_sdio_bus_ops = {
 	.tx = uwe5622_sdio_tx,
 	.bt_ram = uwe5622_sdio_bt_ram,
 	.power_cycle = uwe5622_sdio_power_cycle,
+	.dump_core = uwe5622_sdio_dump_core,
 	.suspend = uwe5622_sdio_suspend_bus,
 	.resume = uwe5622_sdio_resume_bus,
 	.woke_host = uwe5622_sdio_woke_host,

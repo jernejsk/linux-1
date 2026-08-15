@@ -35,6 +35,8 @@ struct uwe5622_bus_ops {
 	int (*bt_ram)(struct uwe5622 *wcn, bool on);
 	/* Cycles the controller's power, losing everything it held. */
 	int (*power_cycle)(struct uwe5622 *wcn);
+	/* Reports where the controller's core stopped, before it is cycled. */
+	void (*dump_core)(struct uwe5622 *wcn);
 	int (*suspend)(struct uwe5622 *wcn, bool wake);
 	int (*resume)(struct uwe5622 *wcn);
 	/*
