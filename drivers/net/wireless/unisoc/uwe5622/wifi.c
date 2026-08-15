@@ -55,6 +55,12 @@
 
 #define UWE5622_GET_INFO_CAP_5G	BIT(0)
 #define UWE5622_GET_INFO_CAP_AP_SME BIT(3)
+#define UWE5622_GET_INFO_CAP_ROAM_OFFLOAD BIT(5)
+
+/* Subtypes of the roaming command, from the firmware's own numbering. */
+#define UWE5622_ROAM_SET_FLAG	1
+#define UWE5622_ROAM_SET_FT_IE	2
+#define UWE5622_ROAM_SET_PMK	3
 
 enum uwe5622_cipher {
 	UWE5622_CIPHER_NONE,
@@ -271,6 +277,47 @@ static int uwe5622_set_ie(struct uwe5622_vif *vif, u8 type,
 			       data, 3 + len, NULL, NULL, NULL);
 	kfree(data);
 	return ret;
+}
+
+/*
+ * Let the firmware follow access point driven transitions itself. It answers
+ * one with a roam event and keeps the link, where the host doing the same
+ * work means a disconnection and a fresh association every time.
+ */
+static int uwe5622_set_roam_offload(struct uwe5622_vif *vif, u8 type,
+				    const void *value, u8 len)
+{
+	struct {
+		u8 type;
+		u8 len;
+		u8 value[16];
+	} __packed cmd = { .type = type, .len = len };
+
+	if (len > sizeof(cmd.value))
+		return -EINVAL;
+	if (!(vif->wifi->fw_capa & UWE5622_GET_INFO_CAP_ROAM_OFFLOAD))
+		return -EOPNOTSUPP;
+	memcpy(cmd.value, value, len);
+
+	return uwe5622_wifi_cmd(vif->wifi, vif->ctx_id,
+				UWE5622_CMD_SET_ROAM_OFFLOAD, &cmd,
+				sizeof(cmd) - sizeof(cmd.value) + len,
+				NULL, NULL, NULL);
+}
+
+static void uwe5622_arm_roam_offload(struct uwe5622_vif *vif)
+{
+	static const u8 on = 1;
+	int ret;
+
+	if (vif->mode != UWE5622_MODE_STATION)
+		return;
+	ret = uwe5622_set_roam_offload(vif, UWE5622_ROAM_SET_FLAG, &on,
+				       sizeof(on));
+	if (ret && ret != -EOPNOTSUPP)
+		dev_warn(vif->wifi->dev,
+			 "firmware refused to follow transitions itself: %d\n",
+			 ret);
 }
 
 static u8 uwe5622_cipher(u32 cipher)
@@ -1337,6 +1384,7 @@ static int uwe5622_open_firmware(struct uwe5622_vif *vif)
 		return -ERANGE;
 	vif->ctx_id = ctx;
 	vif->opened = true;
+	uwe5622_arm_roam_offload(vif);
 	return 0;
 }
 
@@ -3422,6 +3470,8 @@ static int uwe5622_wifi_probe(struct auxiliary_device *adev,
 
 	if (wifi->fw_capa & UWE5622_GET_INFO_CAP_AP_SME)
 		wiphy->flags |= WIPHY_FLAG_HAVE_AP_SME;
+	if (wifi->fw_capa & UWE5622_GET_INFO_CAP_ROAM_OFFLOAD)
+		wiphy->flags |= WIPHY_FLAG_SUPPORTS_FW_ROAM;
 	/* Do not set NL80211_EXT_FEATURE_4WAY_HANDSHAKE_STA_PSK. */
 	ret = wiphy_register(wiphy);
 	if (ret)
