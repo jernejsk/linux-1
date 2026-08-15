@@ -2345,6 +2345,62 @@ static int uwe5622_set_mac_acl(struct wiphy *wiphy, struct net_device *ndev,
 }
 
 /*
+ * A master key the firmware keeps for an access point it has already
+ * authenticated with, so a later association can skip the exchange that
+ * derived it. The firmware holds the table; the host only says what goes in
+ * and what comes out.
+ */
+#define UWE5622_PMKSA_SET	2
+#define UWE5622_PMKSA_DEL	4
+#define UWE5622_PMKSA_FLUSH	5
+
+struct uwe5622_cmd_pmksa {
+	u8 subtype;
+	u8 bssid[ETH_ALEN];
+	u8 pmkid[WLAN_PMKID_LEN];
+} __packed;
+
+static int uwe5622_pmksa(struct uwe5622_vif *vif, u8 subtype,
+			 const u8 *bssid, const u8 *pmkid)
+{
+	struct uwe5622_cmd_pmksa cmd = { .subtype = subtype };
+
+	if (bssid)
+		ether_addr_copy(cmd.bssid, bssid);
+	if (pmkid)
+		memcpy(cmd.pmkid, pmkid, sizeof(cmd.pmkid));
+
+	return uwe5622_wifi_cmd(vif->wifi, vif->ctx_id, UWE5622_CMD_SET_PMKSA,
+				&cmd, sizeof(cmd), NULL, NULL, NULL);
+}
+
+static int uwe5622_set_pmksa(struct wiphy *wiphy, struct net_device *ndev,
+			     struct cfg80211_pmksa *pmksa)
+{
+	if (!pmksa->bssid || !pmksa->pmkid)
+		return -EOPNOTSUPP;
+
+	return uwe5622_pmksa(netdev_priv(ndev), UWE5622_PMKSA_SET,
+			     pmksa->bssid, pmksa->pmkid);
+}
+
+static int uwe5622_del_pmksa(struct wiphy *wiphy, struct net_device *ndev,
+			     struct cfg80211_pmksa *pmksa)
+{
+	if (!pmksa->bssid)
+		return -EOPNOTSUPP;
+
+	return uwe5622_pmksa(netdev_priv(ndev), UWE5622_PMKSA_DEL,
+			     pmksa->bssid, pmksa->pmkid);
+}
+
+static int uwe5622_flush_pmksa(struct wiphy *wiphy, struct net_device *ndev)
+{
+	return uwe5622_pmksa(netdev_priv(ndev), UWE5622_PMKSA_FLUSH, NULL,
+			     NULL);
+}
+
+/*
  * Ask the firmware to watch the signal for the host and say when it crosses a
  * threshold, rather than having the host poll for it. What the two words hold
  * is the threshold and the margin around it that a crossing has to clear
@@ -2640,6 +2696,9 @@ static const struct cfg80211_ops uwe5622_cfg80211_ops = {
 	.set_mac_acl = uwe5622_set_mac_acl,
 	.set_power_mgmt = uwe5622_set_power_mgmt,
 	.set_cqm_rssi_config = uwe5622_set_cqm_rssi_config,
+	.set_pmksa = uwe5622_set_pmksa,
+	.del_pmksa = uwe5622_del_pmksa,
+	.flush_pmksa = uwe5622_flush_pmksa,
 	.add_virtual_intf = uwe5622_add_virtual_intf,
 	.change_virtual_intf = uwe5622_change_virtual_intf,
 	.del_virtual_intf = uwe5622_del_virtual_intf,
