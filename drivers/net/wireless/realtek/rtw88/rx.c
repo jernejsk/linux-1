@@ -258,7 +258,8 @@ static void rtw_rx_fill_rx_status(struct rtw_dev *rtwdev,
 	 * and simply drop the packet.
 	 */
 	if (pkt_stat->pkt_len == 0 &&
-	    (rtwdev->chip->id == RTW_CHIP_TYPE_8703B || rtw_is_8723bs(rtwdev))) {
+	    (rtwdev->chip->id == RTW_CHIP_TYPE_8703B ||
+	     rtw_sdio_is_legacy_trx(rtwdev))) {
 		rx_status->flag |= RX_FLAG_NO_PSDU;
 		rtw_dbg(rtwdev, RTW_DBG_RX, "zero length packet");
 	}
