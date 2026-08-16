@@ -6,6 +6,7 @@
 #include <linux/firmware.h>
 #include <linux/ieee80211.h>
 #include <linux/inetdevice.h>
+#include <net/addrconf.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
@@ -58,6 +59,7 @@
 #define UWE5622_GET_INFO_CAP_PMK_OKC BIT(4)
 #define UWE5622_GET_INFO_CAP_ROAM_OFFLOAD BIT(5)
 #define UWE5622_GET_INFO_CAP_MC_FILTER BIT(8)
+#define UWE5622_GET_INFO_CAP_NS_OFFLOAD BIT(9)
 
 /* Subtypes of the roaming command, from the firmware's own numbering. */
 #define UWE5622_ROAM_SET_FLAG	1
@@ -1444,6 +1446,90 @@ static int uwe5622_inetaddr_event(struct notifier_block *nb, unsigned long event
 			     &ifa->ifa_address, sizeof(ifa->ifa_address),
 			     NULL, NULL, NULL))
 		dev_warn(wifi->dev, "firmware rejected the acquired address\n");
+
+	return NOTIFY_DONE;
+}
+
+/*
+ * The same for IPv6, where it buys more: with an address of its own the firmware
+ * answers neighbour solicitations and router advertisements while the host
+ * sleeps, instead of waking it for every neighbour that asks after it.
+ *
+ * Unlike the IPv4 chain this one is atomic, so the address is only collected
+ * here and handed over from a worker, where waiting for the firmware is allowed.
+ */
+struct uwe5622_ipv6_addr {
+	struct list_head node;
+	u8 ctx_id;
+	struct in6_addr addr;
+};
+
+static void uwe5622_ipv6_work(struct work_struct *work)
+{
+	struct uwe5622_wifi *wifi = container_of(work, struct uwe5622_wifi,
+						 ipv6_work);
+	struct uwe5622_ipv6_addr *entry;
+
+	for (;;) {
+		spin_lock_bh(&wifi->ipv6_lock);
+		entry = list_first_entry_or_null(&wifi->ipv6_list,
+						 struct uwe5622_ipv6_addr, node);
+		if (entry)
+			list_del(&entry->node);
+		spin_unlock_bh(&wifi->ipv6_lock);
+		if (!entry)
+			return;
+
+		/* The length of the address tells the firmware which it is. */
+		if (uwe5622_wifi_cmd(wifi, entry->ctx_id,
+				     UWE5622_CMD_NOTIFY_IP_ACQUIRED, &entry->addr,
+				     sizeof(entry->addr), NULL, NULL, NULL))
+			dev_warn(wifi->dev,
+				 "firmware rejected the acquired IPv6 address\n");
+		else
+			dev_dbg(wifi->dev, "firmware answers for %pI6c\n",
+				&entry->addr);
+		kfree(entry);
+	}
+}
+
+static void uwe5622_drop_ipv6_addresses(struct uwe5622_wifi *wifi)
+{
+	struct uwe5622_ipv6_addr *entry, *next;
+
+	list_for_each_entry_safe(entry, next, &wifi->ipv6_list, node) {
+		list_del(&entry->node);
+		kfree(entry);
+	}
+}
+
+static int uwe5622_inet6addr_event(struct notifier_block *nb,
+				   unsigned long event, void *data)
+{
+	struct uwe5622_wifi *wifi = container_of(nb, struct uwe5622_wifi,
+						 inet6addr_notifier);
+	struct inet6_ifaddr *ifa = data;
+	struct net_device *ndev = ifa->idev->dev;
+	struct uwe5622_ipv6_addr *entry;
+	struct uwe5622_vif *vif;
+
+	if (event != NETDEV_UP || ndev->netdev_ops != &uwe5622_netdev_ops)
+		return NOTIFY_DONE;
+
+	vif = netdev_priv(ndev);
+	if (vif->wifi != wifi || vif->mode != UWE5622_MODE_STATION)
+		return NOTIFY_DONE;
+
+	entry = kmalloc_obj(*entry, GFP_ATOMIC);
+	if (!entry)
+		return NOTIFY_DONE;
+	entry->ctx_id = vif->ctx_id;
+	entry->addr = ifa->addr;
+
+	spin_lock(&wifi->ipv6_lock);
+	list_add_tail(&entry->node, &wifi->ipv6_list);
+	spin_unlock(&wifi->ipv6_lock);
+	schedule_work(&wifi->ipv6_work);
 
 	return NOTIFY_DONE;
 }
@@ -3752,6 +3838,10 @@ static int uwe5622_wifi_probe(struct auxiliary_device *adev,
 	INIT_WORK(&wifi->hang_ack_work, uwe5622_hang_ack_work);
 	INIT_DELAYED_WORK(&wifi->hang_timeout_work, uwe5622_hang_timeout_work);
 	wifi->inetaddr_notifier.notifier_call = uwe5622_inetaddr_event;
+	wifi->inet6addr_notifier.notifier_call = uwe5622_inet6addr_event;
+	spin_lock_init(&wifi->ipv6_lock);
+	INIT_LIST_HEAD(&wifi->ipv6_list);
+	INIT_WORK(&wifi->ipv6_work, uwe5622_ipv6_work);
 	set_wiphy_dev(wiphy, &adev->dev);
 
 	wifi->cmd_client = uwe5622_client_register(&adev->dev,
@@ -3808,10 +3898,21 @@ static int uwe5622_wifi_probe(struct auxiliary_device *adev,
 	ret = register_inetaddr_notifier(&wifi->inetaddr_notifier);
 	if (ret)
 		goto err_wiphy_registered;
+	/*
+	 * Only worth doing where the firmware says it can answer for the host:
+	 * without that it is told an address it will never use.
+	 */
+	if (wifi->fw_capa & UWE5622_GET_INFO_CAP_NS_OFFLOAD) {
+		ret = register_inet6addr_notifier(&wifi->inet6addr_notifier);
+		if (ret)
+			goto err_inetaddr;
+	}
 	auxiliary_set_drvdata(adev, wifi);
 	dev_info(&adev->dev, "registered UWE5622 fullmac Wi-Fi\n");
 	return 0;
 
+err_inetaddr:
+	unregister_inetaddr_notifier(&wifi->inetaddr_notifier);
 err_wiphy_registered:
 	wiphy_unregister(wiphy);
 err_power:
@@ -3832,6 +3933,11 @@ static void uwe5622_wifi_remove(struct auxiliary_device *adev)
 	struct net_device *ndev;
 	int i;
 
+	if (wifi->fw_capa & UWE5622_GET_INFO_CAP_NS_OFFLOAD) {
+		unregister_inet6addr_notifier(&wifi->inet6addr_notifier);
+		cancel_work_sync(&wifi->ipv6_work);
+		uwe5622_drop_ipv6_addresses(wifi);
+	}
 	unregister_inetaddr_notifier(&wifi->inetaddr_notifier);
 	cancel_work_sync(&wifi->eapol_work);
 	skb_queue_purge(&wifi->eapol_queue);

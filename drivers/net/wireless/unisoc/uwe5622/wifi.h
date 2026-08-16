@@ -232,6 +232,11 @@ struct uwe5622_wifi {
 	struct sk_buff_head ba_queue;
 	struct work_struct ba_work;
 		struct notifier_block inetaddr_notifier;
+	struct notifier_block inet6addr_notifier;
+	/* Addresses waiting to be given to the firmware, and their lock. */
+	spinlock_t ipv6_lock;
+	struct list_head ipv6_list;
+	struct work_struct ipv6_work;
 	bool stopping;
 	/* Set while the firmware is parked for system sleep. */
 	bool parked;
