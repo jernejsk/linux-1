@@ -61,6 +61,7 @@
 #define UWE5622_GET_INFO_CAP_SCHED_SCAN BIT(6)
 #define UWE5622_GET_INFO_CAP_MC_FILTER BIT(8)
 #define UWE5622_GET_INFO_CAP_NS_OFFLOAD BIT(9)
+#define UWE5622_GET_INFO_CAP_LL_STATS BIT(11)
 
 /* Subtypes of the roaming command, from the firmware's own numbering. */
 #define UWE5622_ROAM_SET_FLAG	1
@@ -2619,11 +2620,55 @@ static void uwe5622_station_flags(struct uwe5622_vif *vif, const u8 *mac,
 	spin_unlock_bh(&wifi->vif_lock);
 }
 
+/*
+ * Link-layer statistics. What the firmware keeps here is per interface and per
+ * access category rather than per peer, so it adds the counters the station
+ * report has no room for and nothing an access point could say about the
+ * stations attached to it.
+ */
+#define UWE5622_LLSTAT_GET	1
+#define UWE5622_LLSTAT_AC_COUNT	4
+
+struct uwe5622_llstat_ac {
+	__le32 tx_mpdu;
+	__le32 rx_mpdu;
+	__le32 tx_mpdu_lost;
+	__le32 tx_retries;
+} __packed;
+
+struct uwe5622_llstat {
+	__le32 rssi_mgmt;
+	__le32 beacon_rx;
+	struct uwe5622_llstat_ac ac[UWE5622_LLSTAT_AC_COUNT];
+	__le32 on_time;
+	__le32 on_time_scan;
+	__le64 radio_tx_time;
+	__le64 radio_rx_time;
+} __packed;
+
+static int uwe5622_llstat(struct uwe5622_vif *vif, struct uwe5622_llstat *stat)
+{
+	u8 subtype = UWE5622_LLSTAT_GET;
+	size_t len = sizeof(*stat);
+	int ret;
+
+	if (!(vif->wifi->fw_capa & UWE5622_GET_INFO_CAP_LL_STATS))
+		return -EOPNOTSUPP;
+
+	ret = uwe5622_wifi_cmd(vif->wifi, vif->ctx_id, UWE5622_CMD_LLSTAT,
+			       &subtype, sizeof(subtype), stat, &len, NULL);
+	if (ret)
+		return ret;
+
+	return len < sizeof(*stat) ? -EIO : 0;
+}
+
 static int uwe5622_fill_station(struct uwe5622_vif *vif,
 				struct net_device *ndev, const u8 *mac,
 			       struct station_info *sinfo)
 {
 	struct uwe5622_station_report report = {};
+	struct uwe5622_llstat stat;
 	size_t len = sizeof(report);
 	u8 mode;
 	int ret;
@@ -2658,6 +2703,18 @@ static int uwe5622_fill_station(struct uwe5622_vif *vif,
 	sinfo->filled |= BIT_ULL(NL80211_STA_INFO_SIGNAL) |
 			 BIT_ULL(NL80211_STA_INFO_TX_FAILED) |
 			 BIT_ULL(NL80211_STA_INFO_TX_BITRATE);
+
+	if (!uwe5622_llstat(vif, &stat)) {
+		u32 retries = 0;
+		int i;
+
+		for (i = 0; i < UWE5622_LLSTAT_AC_COUNT; i++)
+			retries += le32_to_cpu(stat.ac[i].tx_retries);
+		sinfo->tx_retries = retries;
+		sinfo->rx_beacon = le32_to_cpu(stat.beacon_rx);
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_TX_RETRIES) |
+				 BIT_ULL(NL80211_STA_INFO_BEACON_RX);
+	}
 
 	if (report.rate_flags & UWE5622_RATE_BW_160)
 		sinfo->txrate.bw = RATE_INFO_BW_160;
