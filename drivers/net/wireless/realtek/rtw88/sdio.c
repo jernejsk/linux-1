@@ -588,7 +588,34 @@ static void rtw_sdio_legacy_store_free_txpg(struct rtw_dev *rtwdev,
  */
 static bool rtw_sdio_legacy_sync_free_txpg(struct rtw_dev *rtwdev)
 {
-	u32 free_txpg = rtw_read32(rtwdev, REG_SDIO_FREE_TXPG);
+	struct rtw_sdio *rtwsdio = (struct rtw_sdio *)rtwdev->priv;
+	u32 free_txpg;
+
+	/*
+	 * RTL8188F reports the four counters as 16-bit values spread over the
+	 * eight bytes at REG_SDIO_FREE_TXPG, taking bytes 0, 2, 4 and 6, while
+	 * RTL8723BS packs four byte-sized counters into a single dword. This
+	 * matches HalQueryTxBufferStatus8188FSdio() in the vendor driver.
+	 */
+	if (rtw_is_8189fs(rtwdev)) {
+		u16 pg[4];
+		int i;
+
+		for (i = 0; i < 4; i++)
+			pg[i] = rtw_read16(rtwdev, REG_SDIO_FREE_TXPG + i * 2);
+
+		if (!pg[0] && !pg[1] && !pg[2] && !pg[3])
+			return false;
+
+		atomic_set(&rtwsdio->free_pg_high, pg[0]);
+		atomic_set(&rtwsdio->free_pg_normal, pg[1]);
+		atomic_set(&rtwsdio->free_pg_low, pg[2]);
+		atomic_set(&rtwsdio->free_pg_pub, pg[3]);
+
+		return true;
+	}
+
+	free_txpg = rtw_read32(rtwdev, REG_SDIO_FREE_TXPG);
 
 	if (!free_txpg)
 		return false;
@@ -788,6 +815,14 @@ static int rtw_sdio_check_free_txpg(struct rtw_dev *rtwdev, u8 queue,
 	return 0;
 }
 
+static u32 rtw_sdio_oqt_free_pg_reg(struct rtw_dev *rtwdev)
+{
+	if (rtw_is_8189fs(rtwdev))
+		return REG_SDIO_OQT_FREE_PG_8188F;
+
+	return REG_SDIO_OQT_FREE_PG;
+}
+
 static int rtw_sdio_legacy_wait_tx_oqt(struct rtw_dev *rtwdev)
 {
 	struct rtw_sdio *rtwsdio = (struct rtw_sdio *)rtwdev->priv;
@@ -799,7 +834,7 @@ static int rtw_sdio_legacy_wait_tx_oqt(struct rtw_dev *rtwdev)
 
 	deadline = jiffies + msecs_to_jiffies(RTW_SDIO_OQT_TIMEOUT_MS);
 	do {
-		free = rtw_read8(rtwdev, REG_SDIO_OQT_FREE_PG);
+		free = rtw_read8(rtwdev, rtw_sdio_oqt_free_pg_reg(rtwdev));
 		if (free) {
 			atomic_set(&rtwsdio->tx_oqt_free, free - 1);
 			return 0;
@@ -931,6 +966,10 @@ static void rtw_sdio_enable_rx_aggregation(struct rtw_dev *rtwdev)
 	case RTW_CHIP_TYPE_8812A:
 		size = 0x6;
 		timeout = 0x6;
+		break;
+	case RTW_CHIP_TYPE_8188F:
+		size = 0xf;
+		timeout = 0x1;
 		break;
 	case RTW_CHIP_TYPE_8723D:
 		size = 0xa;
