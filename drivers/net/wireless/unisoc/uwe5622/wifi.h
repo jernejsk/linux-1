@@ -31,6 +31,7 @@ enum uwe5622_wifi_cmd_id {
 	UWE5622_CMD_SYNC_VERSION = 9,
 	UWE5622_CMD_CONNECT = 10,
 	UWE5622_CMD_SCAN = 11,
+	UWE5622_CMD_SCHED_SCAN = 12,
 	UWE5622_CMD_DISCONNECT = 13,
 	UWE5622_CMD_KEY = 14,
 	UWE5622_CMD_SET_PMKSA = 15,
@@ -220,6 +221,9 @@ struct uwe5622_wifi {
 	/* Protects the outstanding cfg80211 scan request. */
 	spinlock_t scan_lock;
 	struct cfg80211_scan_request *scan_request;
+	/* Identifies the scheduled scan whose results are reported. */
+	u64 sched_scan_reqid;
+	bool sched_scan_running;
 	/* Protects the four firmware-owned SDIO transmit credit pools. */
 	spinlock_t credit_lock;
 	u32 tx_credits[4];

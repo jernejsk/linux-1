@@ -58,6 +58,7 @@
 #define UWE5622_GET_INFO_CAP_AP_SME BIT(3)
 #define UWE5622_GET_INFO_CAP_PMK_OKC BIT(4)
 #define UWE5622_GET_INFO_CAP_ROAM_OFFLOAD BIT(5)
+#define UWE5622_GET_INFO_CAP_SCHED_SCAN BIT(6)
 #define UWE5622_GET_INFO_CAP_MC_FILTER BIT(8)
 #define UWE5622_GET_INFO_CAP_NS_OFFLOAD BIT(9)
 
@@ -2044,6 +2045,169 @@ out:
 	return ret;
 }
 
+/*
+ * A scheduled scan is described to the firmware as a run of tagged blocks: the
+ * parameters first, then the network names to look for, the names to report on,
+ * and the information elements to put in the probes. Only the blocks that carry
+ * anything are sent, and each says how long it is, so the firmware walks them
+ * without needing to know which of them the host chose to include.
+ */
+#define UWE5622_SCHED_SCAN_CHANNELS	39
+#define UWE5622_SCHED_SCAN_SSIDS	9
+#define UWE5622_SCHED_SCAN_IE_MAX	2304
+#define UWE5622_SCHED_SCAN_BUF_END	BIT(0)
+#define UWE5622_SCHED_SCAN_BLOCK_PARAMS	BIT(0)
+#define UWE5622_SCHED_SCAN_BLOCK_SSID	BIT(1)
+#define UWE5622_SCHED_SCAN_BLOCK_MATCH	BIT(2)
+#define UWE5622_SCHED_SCAN_BLOCK_IE	BIT(4)
+
+struct uwe5622_sched_scan_head {
+	__le16 started;
+	__le16 buf_flags;
+} __packed;
+
+struct uwe5622_sched_scan_block {
+	__le16 flag;
+	__le16 len;
+} __packed;
+
+struct uwe5622_sched_scan_params {
+	__le32 interval;
+	__le32 flags;
+	__le32 rssi_thold;
+	u8 channels[UWE5622_SCHED_SCAN_CHANNELS + 1];
+} __packed;
+
+static u8 *uwe5622_sched_scan_block(u8 *p, u16 flag, u16 len)
+{
+	struct uwe5622_sched_scan_block *block = (void *)p;
+
+	block->flag = cpu_to_le16(flag);
+	block->len = cpu_to_le16(len);
+
+	return p + sizeof(*block);
+}
+
+static int uwe5622_sched_scan_start(struct wiphy *wiphy,
+				    struct net_device *ndev,
+				    struct cfg80211_sched_scan_request *request)
+{
+	struct uwe5622_wifi *wifi = wiphy_priv(wiphy);
+	struct uwe5622_vif *vif = netdev_priv(ndev);
+	struct uwe5622_sched_scan_head *head;
+	struct uwe5622_sched_scan_params *params;
+	unsigned int n_ssids, n_match, i, count;
+	s32 rssi_thold;
+	size_t len;
+	u8 *data, *p;
+	int ret;
+
+	if (request->ie_len > UWE5622_SCHED_SCAN_IE_MAX)
+		return -EINVAL;
+	n_ssids = min_t(unsigned int, request->n_ssids,
+			UWE5622_SCHED_SCAN_SSIDS);
+	n_match = min_t(unsigned int, request->n_match_sets,
+			UWE5622_SCHED_SCAN_SSIDS);
+
+	len = sizeof(*head) + sizeof(struct uwe5622_sched_scan_block) +
+	      sizeof(*params);
+	if (n_ssids)
+		len += sizeof(struct uwe5622_sched_scan_block) +
+		       n_ssids * IEEE80211_MAX_SSID_LEN;
+	if (n_match)
+		len += sizeof(struct uwe5622_sched_scan_block) +
+		       n_match * IEEE80211_MAX_SSID_LEN;
+	if (request->ie_len)
+		len += sizeof(struct uwe5622_sched_scan_block) +
+		       request->ie_len;
+
+	data = kzalloc(len, GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	head = (void *)data;
+	head->started = cpu_to_le16(1);
+	head->buf_flags = cpu_to_le16(UWE5622_SCHED_SCAN_BUF_END);
+	p = data + sizeof(*head);
+
+	p = uwe5622_sched_scan_block(p, UWE5622_SCHED_SCAN_BLOCK_PARAMS,
+				     sizeof(*params));
+	params = (void *)p;
+	params->interval = cpu_to_le32(request->scan_plans[0].interval);
+	params->flags = cpu_to_le32(request->flags);
+	/*
+	 * The threshold is only meaningful as a negative level; anything at or
+	 * above zero means the host did not ask for one.
+	 */
+	rssi_thold = request->min_rssi_thold;
+	if (rssi_thold <= NL80211_SCAN_RSSI_THOLD_OFF)
+		rssi_thold = 0;
+	else
+		rssi_thold = max(rssi_thold, -127);
+	params->rssi_thold = cpu_to_le32(rssi_thold);
+	for (i = 0, count = 0; i < request->n_channels; i++) {
+		u16 channel = request->channels[i]->hw_value;
+
+		if (!channel || count >= UWE5622_SCHED_SCAN_CHANNELS)
+			continue;
+		params->channels[++count] = channel;
+	}
+	params->channels[0] = count;
+	p += sizeof(*params);
+
+	if (n_ssids) {
+		p = uwe5622_sched_scan_block(p, UWE5622_SCHED_SCAN_BLOCK_SSID,
+					     n_ssids * IEEE80211_MAX_SSID_LEN);
+		for (i = 0; i < n_ssids; i++)
+			memcpy(p + i * IEEE80211_MAX_SSID_LEN,
+			       request->ssids[i].ssid,
+			       request->ssids[i].ssid_len);
+		p += n_ssids * IEEE80211_MAX_SSID_LEN;
+	}
+
+	if (n_match) {
+		p = uwe5622_sched_scan_block(p, UWE5622_SCHED_SCAN_BLOCK_MATCH,
+					     n_match * IEEE80211_MAX_SSID_LEN);
+		for (i = 0; i < n_match; i++)
+			memcpy(p + i * IEEE80211_MAX_SSID_LEN,
+			       request->match_sets[i].ssid.ssid,
+			       request->match_sets[i].ssid.ssid_len);
+		p += n_match * IEEE80211_MAX_SSID_LEN;
+	}
+
+	if (request->ie_len) {
+		p = uwe5622_sched_scan_block(p, UWE5622_SCHED_SCAN_BLOCK_IE,
+					     request->ie_len);
+		memcpy(p, request->ie, request->ie_len);
+	}
+
+	ret = uwe5622_wifi_cmd(wifi, vif->ctx_id, UWE5622_CMD_SCHED_SCAN,
+			       data, len, NULL, NULL, NULL);
+	if (!ret) {
+		wifi->sched_scan_reqid = request->reqid;
+		WRITE_ONCE(wifi->sched_scan_running, true);
+	}
+	kfree(data);
+
+	return ret;
+}
+
+static int uwe5622_sched_scan_stop(struct wiphy *wiphy,
+				   struct net_device *ndev, u64 reqid)
+{
+	struct uwe5622_wifi *wifi = wiphy_priv(wiphy);
+	struct uwe5622_vif *vif = netdev_priv(ndev);
+	struct uwe5622_sched_scan_head head = {
+		.started = cpu_to_le16(0),
+		.buf_flags = cpu_to_le16(UWE5622_SCHED_SCAN_BUF_END),
+	};
+
+	WRITE_ONCE(wifi->sched_scan_running, false);
+
+	return uwe5622_wifi_cmd(wifi, vif->ctx_id, UWE5622_CMD_SCHED_SCAN,
+				&head, sizeof(head), NULL, NULL, NULL);
+}
+
 static int uwe5622_connect(struct wiphy *wiphy, struct net_device *ndev,
 			   struct cfg80211_connect_params *sme)
 {
@@ -3029,6 +3193,8 @@ static const struct cfg80211_ops uwe5622_cfg80211_ops = {
 	.change_virtual_intf = uwe5622_change_virtual_intf,
 	.del_virtual_intf = uwe5622_del_virtual_intf,
 	.scan = uwe5622_scan,
+	.sched_scan_start = uwe5622_sched_scan_start,
+	.sched_scan_stop = uwe5622_sched_scan_stop,
 	.abort_scan = uwe5622_abort_scan,
 	.connect = uwe5622_connect,
 	.disconnect = uwe5622_disconnect,
@@ -3299,6 +3465,35 @@ out:
 	dev_put(ndev);
 }
 
+/*
+ * One event ends every kind of scan, and says which kind it ended. A scheduled
+ * scan leaves its results with the firmware for the host to collect, so it is
+ * reported rather than completed, and must not be mistaken for the one-shot scan
+ * cfg80211 is waiting on.
+ */
+#define UWE5622_SCAN_DONE_ONE_SHOT	1
+#define UWE5622_SCAN_DONE_SCHEDULED	2
+
+static void uwe5622_event_scan_done(struct uwe5622_wifi *wifi,
+				    const void *data, unsigned int len)
+{
+	u8 type = len ? *(const u8 *)data : 0;
+
+	switch (type) {
+	case UWE5622_SCAN_DONE_ONE_SHOT:
+		uwe5622_finish_scan(wifi, false);
+		break;
+	case UWE5622_SCAN_DONE_SCHEDULED:
+		if (READ_ONCE(wifi->sched_scan_running))
+			cfg80211_sched_scan_results(wifi->wiphy,
+						    wifi->sched_scan_reqid);
+		break;
+	default:
+		uwe5622_finish_scan(wifi, true);
+		break;
+	}
+}
+
 void uwe5622_wifi_event(struct uwe5622_wifi *wifi,
 			const struct uwe5622_cmd_hdr *hdr,
 			const u8 *data, size_t len)
@@ -3317,7 +3512,7 @@ void uwe5622_wifi_event(struct uwe5622_wifi *wifi,
 		uwe5622_event_disconnect(wifi, ctx, data, len);
 		break;
 	case UWE5622_EVENT_SCAN_DONE:
-		uwe5622_finish_scan(wifi, !len || data[0] != 1);
+		uwe5622_event_scan_done(wifi, data, len);
 		break;
 	case UWE5622_EVENT_MGMT_FRAME:
 		uwe5622_event_mgmt_frame(wifi, ctx, data, len);
@@ -3935,6 +4130,13 @@ static int uwe5622_wifi_probe(struct auxiliary_device *adev,
 	if (wifi->fw_capa & UWE5622_GET_INFO_CAP_ROAM_OFFLOAD)
 		wiphy->flags |= WIPHY_FLAG_SUPPORTS_FW_ROAM;
 	wiphy->features |= NL80211_FEATURE_SUPPORTS_WMM_ADMISSION;
+	if (wifi->fw_capa & UWE5622_GET_INFO_CAP_SCHED_SCAN) {
+		wiphy->max_sched_scan_reqs = 1;
+		wiphy->max_sched_scan_ssids = UWE5622_SCHED_SCAN_SSIDS;
+		wiphy->max_match_sets = UWE5622_SCHED_SCAN_SSIDS;
+		wiphy->max_sched_scan_ie_len = UWE5622_SCHED_SCAN_IE_MAX;
+		wiphy->max_sched_scan_plans = 1;
+	}
 	/* Do not set NL80211_EXT_FEATURE_4WAY_HANDSHAKE_STA_PSK. */
 	ret = wiphy_register(wiphy);
 	if (ret)
