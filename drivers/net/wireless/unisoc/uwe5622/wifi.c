@@ -2694,6 +2694,47 @@ struct uwe5622_cmd_cqm_rssi {
 	__le32 hysteresis;
 } __packed;
 
+/*
+ * WMM admission control. The station asks the access point for airtime on one
+ * traffic stream, and what it was granted is handed to the firmware, which is
+ * what actually paces the queue it applies to.
+ */
+struct uwe5622_cmd_tx_ts {
+	u8 tsid;
+	u8 peer[ETH_ALEN];
+	u8 user_prio;
+	__le16 admitted_time;
+} __packed;
+
+static int uwe5622_add_tx_ts(struct wiphy *wiphy, struct net_device *ndev,
+			     u8 tsid, const u8 *peer, u8 user_prio,
+			     u16 admitted_time)
+{
+	struct uwe5622_vif *vif = netdev_priv(ndev);
+	struct uwe5622_cmd_tx_ts cmd = {
+		.tsid = tsid,
+		.user_prio = user_prio,
+		.admitted_time = cpu_to_le16(admitted_time),
+	};
+
+	ether_addr_copy(cmd.peer, peer);
+
+	return uwe5622_wifi_cmd(vif->wifi, vif->ctx_id, UWE5622_CMD_ADD_TX_TS,
+				&cmd, sizeof(cmd), NULL, NULL, NULL);
+}
+
+static int uwe5622_del_tx_ts(struct wiphy *wiphy, struct net_device *ndev,
+			     u8 tsid, const u8 *peer)
+{
+	struct uwe5622_vif *vif = netdev_priv(ndev);
+	struct uwe5622_cmd_tx_ts cmd = { .tsid = tsid };
+
+	ether_addr_copy(cmd.peer, peer);
+
+	return uwe5622_wifi_cmd(vif->wifi, vif->ctx_id, UWE5622_CMD_DEL_TX_TS,
+				&cmd, sizeof(cmd), NULL, NULL, NULL);
+}
+
 static int uwe5622_set_cqm_rssi_config(struct wiphy *wiphy,
 				       struct net_device *ndev,
 				       s32 rssi_thold, u32 rssi_hyst)
@@ -2979,6 +3020,8 @@ static const struct cfg80211_ops uwe5622_cfg80211_ops = {
 	.set_mac_acl = uwe5622_set_mac_acl,
 	.set_power_mgmt = uwe5622_set_power_mgmt,
 	.set_cqm_rssi_config = uwe5622_set_cqm_rssi_config,
+	.add_tx_ts = uwe5622_add_tx_ts,
+	.del_tx_ts = uwe5622_del_tx_ts,
 	.set_pmksa = uwe5622_set_pmksa,
 	.del_pmksa = uwe5622_del_pmksa,
 	.flush_pmksa = uwe5622_flush_pmksa,
@@ -3891,6 +3934,7 @@ static int uwe5622_wifi_probe(struct auxiliary_device *adev,
 		wiphy->flags |= WIPHY_FLAG_HAVE_AP_SME;
 	if (wifi->fw_capa & UWE5622_GET_INFO_CAP_ROAM_OFFLOAD)
 		wiphy->flags |= WIPHY_FLAG_SUPPORTS_FW_ROAM;
+	wiphy->features |= NL80211_FEATURE_SUPPORTS_WMM_ADMISSION;
 	/* Do not set NL80211_EXT_FEATURE_4WAY_HANDSHAKE_STA_PSK. */
 	ret = wiphy_register(wiphy);
 	if (ret)
