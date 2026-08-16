@@ -22747,6 +22747,14 @@ S:	Maintained
 F:	Documentation/devicetree/bindings/spi/realtek,rtl9301-snand.yaml
 F:	drivers/spi/spi-realtek-rtl-snand.c
 
+REALTEK RTL8188F WIRELESS DRIVER (rtw88)
+M:	Jernej Skrabec <jernej.skrabec@gmail.com>
+L:	linux-wireless@vger.kernel.org
+S:	Maintained
+F:	drivers/net/wireless/realtek/rtw88/rtw8188f*.c
+F:	drivers/net/wireless/realtek/rtw88/rtw8188f*.h
+F:	drivers/net/wireless/realtek/rtw88/rtw8189fs.c
+
 REALTEK SYSTIMER DRIVER
 M:	Hao-Wen Ting <haowen.ting@realtek.com>
 S:	Maintained
