@@ -558,7 +558,7 @@ static int rtw_sdio_read_port(struct rtw_dev *rtwdev, u8 *buf, size_t count)
  * The counters are atomic_t because rtw_sdio_start() seeds them outside
  * tx_credit_lock, which the transmit paths hold while using them.
  */
-static void rtw_sdio_8723bs_store_free_txpg(struct rtw_dev *rtwdev,
+static void rtw_sdio_legacy_store_free_txpg(struct rtw_dev *rtwdev,
 					    u32 free_txpg)
 {
 	struct rtw_sdio *rtwsdio = (struct rtw_sdio *)rtwdev->priv;
@@ -573,19 +573,19 @@ static void rtw_sdio_8723bs_store_free_txpg(struct rtw_dev *rtwdev,
 		   u32_get_bits(free_txpg, BIT_FREE_TXPG_PUB));
 }
 
-static bool rtw_sdio_8723bs_sync_free_txpg(struct rtw_dev *rtwdev)
+static bool rtw_sdio_legacy_sync_free_txpg(struct rtw_dev *rtwdev)
 {
 	u32 free_txpg = rtw_read32(rtwdev, REG_SDIO_FREE_TXPG);
 
 	if (!free_txpg)
 		return false;
 
-	rtw_sdio_8723bs_store_free_txpg(rtwdev, free_txpg);
+	rtw_sdio_legacy_store_free_txpg(rtwdev, free_txpg);
 
 	return true;
 }
 
-static int rtw_sdio_8723bs_pubq_num(struct rtw_dev *rtwdev, u16 *pubq_num)
+static int rtw_sdio_legacy_pubq_num(struct rtw_dev *rtwdev, u16 *pubq_num)
 {
 	const struct rtw_page_table *pg_tbl = &rtwdev->chip->page_table[0];
 	u16 acq_pg_num = rtwdev->fifo.acq_pg_num;
@@ -605,7 +605,7 @@ static int rtw_sdio_8723bs_pubq_num(struct rtw_dev *rtwdev, u16 *pubq_num)
 	return 0;
 }
 
-static int rtw_sdio_8723bs_init_free_txpg(struct rtw_dev *rtwdev)
+static int rtw_sdio_legacy_init_free_txpg(struct rtw_dev *rtwdev)
 {
 	struct rtw_sdio *rtwsdio = (struct rtw_sdio *)rtwdev->priv;
 	const struct rtw_page_table *pg_tbl;
@@ -613,8 +613,8 @@ static int rtw_sdio_8723bs_init_free_txpg(struct rtw_dev *rtwdev)
 	int ret;
 
 	/* Seed from the page table when the chip has nothing to report yet. */
-	if (!rtw_sdio_8723bs_sync_free_txpg(rtwdev)) {
-		ret = rtw_sdio_8723bs_pubq_num(rtwdev, &pubq_num);
+	if (!rtw_sdio_legacy_sync_free_txpg(rtwdev)) {
+		ret = rtw_sdio_legacy_pubq_num(rtwdev, &pubq_num);
 		if (ret)
 			return ret;
 
@@ -632,11 +632,11 @@ static int rtw_sdio_8723bs_init_free_txpg(struct rtw_dev *rtwdev)
 }
 
 /*
- * Clamped at zero: a lost update against rtw_sdio_8723bs_consume_txpg() can
+ * Clamped at zero: a lost update against rtw_sdio_legacy_consume_txpg() can
  * briefly drive a counter negative, and wrapping would hide the shortage
  * instead of triggering a resync from the chip.
  */
-static unsigned int rtw_sdio_8723bs_pages_free(struct rtw_dev *rtwdev,
+static unsigned int rtw_sdio_legacy_pages_free(struct rtw_dev *rtwdev,
 					       atomic_t *dedicated)
 {
 	struct rtw_sdio *rtwsdio = (struct rtw_sdio *)rtwdev->priv;
@@ -654,7 +654,7 @@ static unsigned int rtw_sdio_8723bs_pages_free(struct rtw_dev *rtwdev,
  * REG_SDIO_FREE_TXPG has no counter for and this chip allocates no pages to,
  * so it is accounted against the high pool and served from the public one.
  */
-static atomic_t *rtw_sdio_8723bs_free_txpg(struct rtw_dev *rtwdev, u8 queue)
+static atomic_t *rtw_sdio_legacy_free_txpg(struct rtw_dev *rtwdev, u8 queue)
 {
 	struct rtw_sdio *rtwsdio = (struct rtw_sdio *)rtwdev->priv;
 
@@ -680,22 +680,22 @@ static int rtw_sdio_check_free_txpg(struct rtw_dev *rtwdev, u8 queue,
 {
 	unsigned int pages_free, pages_needed;
 
-	if (rtw_is_8723bs(rtwdev)) {
+	if (rtw_sdio_is_legacy_trx(rtwdev)) {
 		atomic_t *dedicated;
 
-		dedicated = rtw_sdio_8723bs_free_txpg(rtwdev, queue);
+		dedicated = rtw_sdio_legacy_free_txpg(rtwdev, queue);
 		if (!dedicated) {
 			rtw_warn(rtwdev, "Unknown mapping for queue %u\n", queue);
 			return -EINVAL;
 		}
 
-		pages_free = rtw_sdio_8723bs_pages_free(rtwdev, dedicated);
+		pages_free = rtw_sdio_legacy_pages_free(rtwdev, dedicated);
 		pages_needed = DIV_ROUND_UP(count, rtwdev->chip->page_size);
 		if (pages_needed <= pages_free)
 			return 0;
 
-		rtw_sdio_8723bs_sync_free_txpg(rtwdev);
-		pages_free = rtw_sdio_8723bs_pages_free(rtwdev, dedicated);
+		rtw_sdio_legacy_sync_free_txpg(rtwdev);
+		pages_free = rtw_sdio_legacy_pages_free(rtwdev, dedicated);
 	} else if (rtw_chip_wcpu_8051(rtwdev)) {
 		u32 free_txpg;
 
@@ -775,7 +775,7 @@ static int rtw_sdio_check_free_txpg(struct rtw_dev *rtwdev, u8 queue,
 	return 0;
 }
 
-static int rtw_sdio_8723bs_wait_tx_oqt(struct rtw_dev *rtwdev)
+static int rtw_sdio_legacy_wait_tx_oqt(struct rtw_dev *rtwdev)
 {
 	struct rtw_sdio *rtwsdio = (struct rtw_sdio *)rtwdev->priv;
 	unsigned long deadline;
@@ -799,7 +799,7 @@ static int rtw_sdio_8723bs_wait_tx_oqt(struct rtw_dev *rtwdev)
 	return -EBUSY;
 }
 
-static void rtw_sdio_8723bs_consume_txpg(struct rtw_dev *rtwdev, u8 queue,
+static void rtw_sdio_legacy_consume_txpg(struct rtw_dev *rtwdev, u8 queue,
 					 unsigned int pages)
 {
 	struct rtw_sdio *rtwsdio = (struct rtw_sdio *)rtwdev->priv;
@@ -809,7 +809,7 @@ static void rtw_sdio_8723bs_consume_txpg(struct rtw_dev *rtwdev, u8 queue,
 
 	lockdep_assert_held(&rtwsdio->tx_credit_lock);
 
-	dedicated = rtw_sdio_8723bs_free_txpg(rtwdev, queue);
+	dedicated = rtw_sdio_legacy_free_txpg(rtwdev, queue);
 	if (!dedicated)
 		return;
 
@@ -853,7 +853,7 @@ static int rtw_sdio_write_to_port(struct rtw_dev *rtwdev, struct sk_buff *skb,
 	return ret;
 }
 
-static int rtw_sdio_write_port_8723bs(struct rtw_dev *rtwdev,
+static int rtw_sdio_write_port_legacy(struct rtw_dev *rtwdev,
 				      struct sk_buff *skb,
 				      enum rtw_tx_queue_type queue, u32 txaddr,
 				      size_t write_size)
@@ -872,7 +872,7 @@ static int rtw_sdio_write_port_8723bs(struct rtw_dev *rtwdev,
 	if (ret)
 		return ret;
 
-	ret = rtw_sdio_8723bs_wait_tx_oqt(rtwdev);
+	ret = rtw_sdio_legacy_wait_tx_oqt(rtwdev);
 	if (ret)
 		return ret;
 
@@ -884,7 +884,7 @@ static int rtw_sdio_write_port_8723bs(struct rtw_dev *rtwdev,
 	}
 
 	pages = DIV_ROUND_UP(txsize, rtwdev->chip->page_size);
-	rtw_sdio_8723bs_consume_txpg(rtwdev, queue, pages);
+	rtw_sdio_legacy_consume_txpg(rtwdev, queue, pages);
 
 	return 0;
 }
@@ -929,8 +929,8 @@ static int rtw_sdio_write_port(struct rtw_dev *rtwdev, struct sk_buff *skb,
 			return ret;
 	}
 
-	if (rtw_is_8723bs(rtwdev))
-		return rtw_sdio_write_port_8723bs(rtwdev, skb, queue, txaddr,
+	if (rtw_sdio_is_legacy_trx(rtwdev))
+		return rtw_sdio_write_port_legacy(rtwdev, skb, queue, txaddr,
 						  write_size);
 
 	return rtw_sdio_write_port_generic(rtwdev, skb, queue, txaddr,
@@ -943,7 +943,7 @@ static void rtw_sdio_init(struct rtw_dev *rtwdev)
 
 	mutex_init(&rtwsdio->irq_lock);
 
-	if (rtw_is_8723bs(rtwdev))
+	if (rtw_sdio_is_legacy_trx(rtwdev))
 		rtwsdio->irq_mask = REG_SDIO_HIMR_RX_REQUEST;
 	else
 		rtwsdio->irq_mask = REG_SDIO_HIMR_RX_REQUEST |
@@ -983,7 +983,7 @@ static void rtw_sdio_enable_rx_aggregation(struct rtw_dev *rtwdev)
 		    FIELD_PREP(BIT_DMA_AGG_TO_V1, timeout));
 
 	rtw_write8_set(rtwdev, REG_RXDMA_MODE, BIT_DMA_MODE);
-	if (rtw_is_8723bs(rtwdev))
+	if (rtw_sdio_is_legacy_trx(rtwdev))
 		rtw_write8_mask(rtwdev, REG_RXDMA_MODE, BIT_DMA_BURST_CNT, 0x3);
 }
 
@@ -1028,7 +1028,7 @@ static int rtw_sdio_setup(struct rtw_dev *rtwdev)
  * count means the allocation latched during power on and must be left alone,
  * and without a transmit page pool there is nothing to divide up either.
  */
-static int rtw_sdio_8723bs_check_rqpn(struct rtw_dev *rtwdev)
+static int rtw_sdio_legacy_check_rqpn(struct rtw_dev *rtwdev)
 {
 	const struct rtw_chip_info *chip = rtwdev->chip;
 	struct rtw_fifo_conf *fifo = &rtwdev->fifo;
@@ -1041,7 +1041,7 @@ static int rtw_sdio_8723bs_check_rqpn(struct rtw_dev *rtwdev)
 	if (free_txpg || !fifo->acq_pg_num)
 		return 0;
 
-	ret = rtw_sdio_8723bs_pubq_num(rtwdev, &pubq_num);
+	ret = rtw_sdio_legacy_pubq_num(rtwdev, &pubq_num);
 	if (ret)
 		return ret;
 
@@ -1059,13 +1059,13 @@ static int rtw_sdio_start(struct rtw_dev *rtwdev)
 	struct rtw_sdio *rtwsdio = (struct rtw_sdio *)rtwdev->priv;
 	u32 clear;
 
-	if (rtw_is_8723bs(rtwdev)) {
-		int ret = rtw_sdio_8723bs_check_rqpn(rtwdev);
+	if (rtw_sdio_is_legacy_trx(rtwdev)) {
+		int ret = rtw_sdio_legacy_check_rqpn(rtwdev);
 
 		if (ret)
 			return ret;
 
-		ret = rtw_sdio_8723bs_init_free_txpg(rtwdev);
+		ret = rtw_sdio_legacy_init_free_txpg(rtwdev);
 		if (ret)
 			return ret;
 	}
@@ -1074,7 +1074,7 @@ static int rtw_sdio_start(struct rtw_dev *rtwdev)
 
 	sdio_claim_host(rtwsdio->sdio_func);
 
-	if (rtw_is_8723bs(rtwdev)) {
+	if (rtw_sdio_is_legacy_trx(rtwdev)) {
 		clear = rtw_read32(rtwdev, REG_SDIO_HISR) & RTW_SDIO_HISR_CLEAR_MASK;
 		if (clear)
 			rtw_write32(rtwdev, REG_SDIO_HISR, clear);
@@ -1198,7 +1198,7 @@ static void rtw_sdio_interface_cfg(struct rtw_dev *rtwdev)
 
 	val = rtw_read32(rtwdev, REG_SDIO_TX_CTRL);
 	val &= 0xfff8;
-	if (rtw_is_8723bs(rtwdev))
+	if (rtw_sdio_is_legacy_trx(rtwdev))
 		val |= BIT_SDIO_TX_CTRL_ALWAYS_RECOGNIZE;
 	rtw_write32(rtwdev, REG_SDIO_TX_CTRL, val);
 }
@@ -1297,13 +1297,13 @@ static int rtw_sdio_write_data_h2c(struct rtw_dev *rtwdev, u8 *buf, u32 size)
  * above the watermark, and the drain path always sees the flag the producer
  * set.
  */
-static void rtw_sdio_8723bs_stop_tx_queue(struct rtw_dev *rtwdev,
+static void rtw_sdio_legacy_stop_tx_queue(struct rtw_dev *rtwdev,
 					  enum rtw_tx_queue_type queue,
 					  u16 q_map)
 {
 	struct rtw_sdio *rtwsdio = (struct rtw_sdio *)rtwdev->priv;
 
-	if (!rtw_is_8723bs(rtwdev) || queue >= RTW_TX_QUEUE_BCN)
+	if (!rtw_sdio_is_legacy_trx(rtwdev) || queue >= RTW_TX_QUEUE_BCN)
 		return;
 
 	guard(spinlock_irqsave)(&rtwsdio->tx_queue[queue].lock);
@@ -1318,13 +1318,13 @@ static void rtw_sdio_8723bs_stop_tx_queue(struct rtw_dev *rtwdev,
 	ieee80211_stop_queue(rtwdev->hw, q_map);
 }
 
-static void rtw_sdio_8723bs_wake_tx_queue(struct rtw_dev *rtwdev,
+static void rtw_sdio_legacy_wake_tx_queue(struct rtw_dev *rtwdev,
 					  enum rtw_tx_queue_type queue,
 					  u16 q_map)
 {
 	struct rtw_sdio *rtwsdio = (struct rtw_sdio *)rtwdev->priv;
 
-	if (!rtw_is_8723bs(rtwdev) || queue >= RTW_TX_QUEUE_BCN)
+	if (!rtw_sdio_is_legacy_trx(rtwdev) || queue >= RTW_TX_QUEUE_BCN)
 		return;
 
 	guard(spinlock_irqsave)(&rtwsdio->tx_queue[queue].lock);
@@ -1359,7 +1359,7 @@ static int rtw_sdio_tx_write(struct rtw_dev *rtwdev,
 	/* The TX worker may already have freed the skb, so do not touch it. */
 	skb_queue_tail(&rtwsdio->tx_queue[queue], skb);
 
-	rtw_sdio_8723bs_stop_tx_queue(rtwdev, queue, q_map);
+	rtw_sdio_legacy_stop_tx_queue(rtwdev, queue, q_map);
 
 	return 0;
 }
@@ -1532,7 +1532,7 @@ static void rtw_sdio_handle_interrupt_8051(struct rtw_dev *rtwdev, u32 hisr)
 	 * status bits are written back, so acknowledge only the bits this
 	 * driver defines. Other chips keep the existing behaviour.
 	 */
-	if (rtw_is_8723bs(rtwdev))
+	if (rtw_sdio_is_legacy_trx(rtwdev))
 		hisr &= RTW_SDIO_HISR_CLEAR_MASK;
 
 	rtw_write32(rtwdev, REG_SDIO_HISR, hisr);
@@ -1771,7 +1771,7 @@ static int rtw_sdio_process_tx_queue(struct rtw_dev *rtwdev,
 
 	rtw_sdio_indicate_tx_status(rtwdev, skb);
 
-	rtw_sdio_8723bs_wake_tx_queue(rtwdev, queue, q_map);
+	rtw_sdio_legacy_wake_tx_queue(rtwdev, queue, q_map);
 
 	return 0;
 }
@@ -1787,14 +1787,14 @@ static int rtw_sdio_process_tx_queue(struct rtw_dev *rtwdev,
  * After a management frame, restart from the highest priority queue so the
  * join sequence is not held up behind a data backlog.
  */
-static bool rtw_sdio_8723bs_reschedule_tx(struct rtw_dev *rtwdev,
+static bool rtw_sdio_legacy_reschedule_tx(struct rtw_dev *rtwdev,
 					  struct rtw_sdio_work_data *work_data,
 					  enum rtw_tx_queue_type queue, int ret)
 {
 	struct rtw_sdio *rtwsdio = (struct rtw_sdio *)rtwdev->priv;
 	unsigned long delay;
 
-	if (!rtw_is_8723bs(rtwdev))
+	if (!rtw_sdio_is_legacy_trx(rtwdev))
 		return false;
 
 	if (ret == -EBUSY || ret == -ENOMEM)
@@ -1835,7 +1835,7 @@ static void rtw_sdio_tx_handler(struct work_struct *work)
 			if (ret > 0)
 				break;
 
-			if (rtw_sdio_8723bs_reschedule_tx(rtwdev, work_data,
+			if (rtw_sdio_legacy_reschedule_tx(rtwdev, work_data,
 							  queue, ret))
 				return;
 
