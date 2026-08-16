@@ -195,6 +195,7 @@ enum rtw_chip_type {
 	RTW_CHIP_TYPE_8821C,
 	RTW_CHIP_TYPE_8703B,
 	RTW_CHIP_TYPE_8723B,
+	RTW_CHIP_TYPE_8188F,
 	RTW_CHIP_TYPE_8821A,
 	RTW_CHIP_TYPE_8812A,
 	RTW_CHIP_TYPE_8814A,
@@ -2198,6 +2199,22 @@ static inline bool rtw_is_8723bs(struct rtw_dev *rtwdev)
 {
 	return rtwdev->chip->id == RTW_CHIP_TYPE_8723B &&
 	       rtwdev->hci.type == RTW_HCI_TYPE_SDIO;
+}
+
+static inline bool rtw_is_8189fs(struct rtw_dev *rtwdev)
+{
+	return rtwdev->chip->id == RTW_CHIP_TYPE_8188F &&
+	       rtwdev->hci.type == RTW_HCI_TYPE_SDIO;
+}
+
+/*
+ * Both RTL8723BS and RTL8189FS use the older SDIO transmit path, where the
+ * driver keeps its own count of the free transmit pages and of the output
+ * queue credits instead of letting the hardware throttle it.
+ */
+static inline bool rtw_sdio_is_legacy_trx(struct rtw_dev *rtwdev)
+{
+	return rtw_is_8723bs(rtwdev) || rtw_is_8189fs(rtwdev);
 }
 
 static inline u8 rtw_acquire_macid(struct rtw_dev *rtwdev)
