@@ -336,7 +336,7 @@ static int uwe5622_at_command(struct uwe5622 *wcn, const char *cmd)
 
 static void uwe5622_quiet_firmware_log(struct uwe5622 *wcn)
 {
-	int ret = 0; /* Debug: leave the controller's log running. */
+	int ret = uwe5622_at_command(wcn, UWE5622_AT_ARMLOG_OFF);
 
 	/*
 	 * Worth reporting but not worth failing over: a controller that keeps
@@ -515,11 +515,6 @@ void uwe5622_core_rx(struct uwe5622 *wcn, u8 channel, struct sk_buff *skb)
 	client = srcu_dereference(wcn->channels[channel], &wcn->channel_srcu);
 	if (client) {
 		client->ops->rx(client->priv, skb);
-	} else if (channel == 14 || channel == 15 ||
-		   channel == wcn->services[UWE5622_SERVICE_WIFI_LOG].rx) {
-		dev_err(wcn->dev, "fwlog%u: %.*s\n", channel,
-			(int)min(skb->len, 240u), skb->data);
-		kfree_skb(skb);
 	} else if (channel == wcn->services[UWE5622_SERVICE_AT].rx) {
 		dev_dbg(wcn->dev, "AT answer: %*phN\n", (int)skb->len,
 			skb->data);

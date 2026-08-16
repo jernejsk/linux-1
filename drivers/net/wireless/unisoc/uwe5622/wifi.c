@@ -1009,6 +1009,101 @@ static void uwe5622_mc_filter_work(struct work_struct *work)
 	kfree(cmd);
 }
 
+/*
+ * The firmware announces a stall of its own before anything is lost, repairs
+ * itself, and says when it is done. Answering that announcement is what lets it
+ * reset the transmit credit it shares with the host; the alternative, taking its
+ * power away, costs the association and everything else it was holding. The
+ * host's part is to stop offering traffic, say it heard, and wait, with the
+ * reset still there for a firmware that never finishes.
+ */
+#define UWE5622_HANG_BEGIN	0
+#define UWE5622_HANG_END	1
+#define UWE5622_HANG_TIMEOUT	msecs_to_jiffies(3000)
+
+/* Debug: lets the acknowledgement be withheld, to see what it is worth. */
+static bool uwe5622_hang_ack = true;
+module_param_named(hang_ack, uwe5622_hang_ack, bool, 0644);
+
+static void uwe5622_hang_freeze(struct uwe5622_wifi *wifi, bool freeze)
+{
+	struct net_device *ndev;
+	int ctx;
+
+	for (ctx = 0; ctx < UWE5622_WIFI_MAX_CTX; ctx++) {
+		spin_lock_bh(&wifi->vif_lock);
+		ndev = wifi->vifs[ctx];
+		if (ndev)
+			dev_hold(ndev);
+		spin_unlock_bh(&wifi->vif_lock);
+		if (!ndev)
+			continue;
+		if (freeze)
+			netif_tx_stop_all_queues(ndev);
+		else
+			netif_tx_wake_all_queues(ndev);
+		dev_put(ndev);
+	}
+}
+
+static void uwe5622_hang_ack_work(struct work_struct *work)
+{
+	struct uwe5622_wifi *wifi = container_of(work, struct uwe5622_wifi,
+						 hang_ack_work);
+	int ret;
+
+	ret = uwe5622_wifi_cmd(wifi, 0, UWE5622_CMD_HANG_RECEIVED, NULL, 0,
+			       NULL, NULL, NULL);
+	if (ret) {
+		dev_err(wifi->dev,
+			"firmware would not be told its recovery was heard: %d\n",
+			ret);
+		uwe5622_recover(wifi->cmd_client);
+	}
+}
+
+static void uwe5622_hang_timeout_work(struct work_struct *work)
+{
+	struct uwe5622_wifi *wifi = container_of(to_delayed_work(work),
+						 struct uwe5622_wifi,
+						 hang_timeout_work);
+
+	if (!READ_ONCE(wifi->hang_recovering))
+		return;
+
+	dev_err(wifi->dev,
+		"firmware never finished repairing itself; resetting it\n");
+	uwe5622_recover(wifi->cmd_client);
+}
+
+static void uwe5622_event_hang(struct uwe5622_wifi *wifi, const void *data,
+			       unsigned int len)
+{
+	u32 action = len >= sizeof(u32) ? get_unaligned_le32(data) : 0;
+
+	switch (action) {
+	case UWE5622_HANG_BEGIN:
+		dev_warn(wifi->dev, "firmware is repairing itself\n");
+		WRITE_ONCE(wifi->hang_recovering, true);
+		uwe5622_hang_freeze(wifi, true);
+		if (uwe5622_hang_ack)
+			schedule_work(&wifi->hang_ack_work);
+		schedule_delayed_work(&wifi->hang_timeout_work,
+				      UWE5622_HANG_TIMEOUT);
+		break;
+	case UWE5622_HANG_END:
+		dev_info(wifi->dev, "firmware repaired itself\n");
+		WRITE_ONCE(wifi->hang_recovering, false);
+		cancel_delayed_work(&wifi->hang_timeout_work);
+		uwe5622_hang_freeze(wifi, false);
+		break;
+	default:
+		dev_err(wifi->dev, "firmware reported a hang: %#x\n", action);
+		uwe5622_recover(wifi->cmd_client);
+		break;
+	}
+}
+
 static void uwe5622_recover_work(struct work_struct *work)
 {
 	struct uwe5622_vif *vif = container_of(work, struct uwe5622_vif,
@@ -3197,9 +3292,7 @@ void uwe5622_wifi_event(struct uwe5622_wifi *wifi,
 		dev_put(ndev);
 		break;
 	case UWE5622_EVENT_HANG:
-		dev_err(wifi->dev, "firmware reported a hang: %*phN\n",
-			(int)min(len, 32u), data);
-		uwe5622_recover(wifi->cmd_client);
+		uwe5622_event_hang(wifi, data, len);
 		break;
 	default:
 		dev_dbg(wifi->dev, "unhandled event %#x\n", hdr->id);
@@ -3409,6 +3502,13 @@ static void uwe5622_wifi_restart(void *priv)
 	int i, ret;
 
 	uwe5622_set_parked(wifi, false);
+	/*
+	 * A firmware that had announced a repair has just been replaced by one
+	 * that never did. Nothing is waiting for it to finish any more, and the
+	 * queues held for it have to be offered the new firmware.
+	 */
+	WRITE_ONCE(wifi->hang_recovering, false);
+	uwe5622_hang_freeze(wifi, false);
 	for (i = 0; i < UWE5622_WIFI_MAX_CTX; i++)
 		ndev[i] = uwe5622_get_ndev(wifi, i);
 
@@ -3682,6 +3782,8 @@ static int uwe5622_wifi_probe(struct auxiliary_device *adev,
 	INIT_WORK(&wifi->eapol_work, uwe5622_eapol_work);
 	skb_queue_head_init(&wifi->ba_queue);
 	INIT_WORK(&wifi->ba_work, uwe5622_ba_work);
+	INIT_WORK(&wifi->hang_ack_work, uwe5622_hang_ack_work);
+	INIT_DELAYED_WORK(&wifi->hang_timeout_work, uwe5622_hang_timeout_work);
 	wifi->inetaddr_notifier.notifier_call = uwe5622_inetaddr_event;
 	set_wiphy_dev(wiphy, &adev->dev);
 
@@ -3768,6 +3870,8 @@ static void uwe5622_wifi_remove(struct auxiliary_device *adev)
 	skb_queue_purge(&wifi->eapol_queue);
 	cancel_work_sync(&wifi->ba_work);
 	skb_queue_purge(&wifi->ba_queue);
+	cancel_work_sync(&wifi->hang_ack_work);
+	cancel_delayed_work_sync(&wifi->hang_timeout_work);
 	cancel_delayed_work_sync(&wifi->wowlan_work);
 	uwe5622_finish_scan(wifi, true);
 	rtnl_lock();

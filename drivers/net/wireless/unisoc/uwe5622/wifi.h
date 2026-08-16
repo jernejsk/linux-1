@@ -45,6 +45,7 @@ enum uwe5622_wifi_cmd_id {
 	UWE5622_CMD_NOTIFY_IP_ACQUIRED = 26,
 	UWE5622_CMD_SET_CQM = 27,
 	UWE5622_CMD_SET_ROAM_OFFLOAD = 28,
+	UWE5622_CMD_HANG_RECEIVED = 78,
 	UWE5622_CMD_MULTICAST_FILTER = 39,
 	UWE5622_CMD_ADDBA_REQ = 40,
 	UWE5622_CMD_BA = 68,
@@ -238,6 +239,10 @@ struct uwe5622_wifi {
 	spinlock_t wowlan_lock;
 	struct uwe5622_wowlan wowlan;
 	struct delayed_work wowlan_work;
+	/* Set between the firmware announcing its own recovery and finishing it. */
+	bool hang_recovering;
+	struct work_struct hang_ack_work;
+	struct delayed_work hang_timeout_work;
 	u8 perm_addr[ETH_ALEN];
 	u32 fw_capa;
 	/* What the firmware said it can hold, for the limits cfg80211 enforces. */
