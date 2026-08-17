@@ -1181,6 +1181,17 @@ __fwnode_reset_control_get(struct fwnode_handle *fwnode, const char *id, int ind
 		ret = __reset_add_reset_gpio_device(fwnode, &args);
 		if (ret) {
 			fwnode_handle_put(args.fwnode);
+			/*
+			 * A consumer that asked for an optional reset has to be
+			 * able to cope without one, and knows how to drive the
+			 * GPIO itself.  Only a deferral is worth reporting, the
+			 * remaining errors just mean that this "reset-gpios"
+			 * cannot be represented as a reset controller - for
+			 * instance because its provider does not use two GPIO
+			 * cells.
+			 */
+			if (optional && ret != -EPROBE_DEFER)
+				return NULL;
 			return ERR_PTR(ret);
 		}
 	}

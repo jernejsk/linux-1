@@ -91,17 +91,9 @@ static int aic_fw_read_chip_id(struct aic_hw *hw)
 
 	hw->chip_rev = FIELD_GET(AIC_CHIP_ID_REV, val);
 
-	dev_info(hw->dev, "AIC8800D80%s revision u%02u\n",
+	dev_info(hw->dev, "AIC8800D80%s revision u%02u (id %08x)\n",
 		 FIELD_GET(AIC_CHIP_ID_H, val) == 3 ? "H" : "",
-		 hw->chip_rev);
-
-	if (hw->chip_rev != AIC_CHIP_REV_U01 &&
-	    hw->chip_rev != AIC_CHIP_REV_U02 &&
-	    hw->chip_rev != AIC_CHIP_REV_U03) {
-		dev_err(hw->dev, "unsupported chip revision %u\n",
-			hw->chip_rev);
-		return -ENODEV;
-	}
+		 hw->chip_rev, val);
 
 	return FIELD_GET(AIC_CHIP_ID_H, val) == 3;
 }
