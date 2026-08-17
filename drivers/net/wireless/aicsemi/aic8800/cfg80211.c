@@ -9,6 +9,8 @@
  */
 
 #include <linux/etherdevice.h>
+#include <linux/ip.h>
+#include <linux/udp.h>
 #include <linux/module.h>
 #include <linux/rtnetlink.h>
 #include <net/cfg80211.h>
@@ -201,6 +203,45 @@ static const struct ieee80211_iface_combination aic_iface_combinations[] = {
 		.max_interfaces = 2,
 		.num_different_channels = 1,
 	},
+};
+
+/*
+ * The firmware hands every management frame it does not consume itself to the
+ * host, and takes any management frame for transmission.
+ */
+static const struct ieee80211_txrx_stypes
+aic_mgmt_stypes[NUM_NL80211_IFTYPES] = {
+	[NL80211_IFTYPE_STATION] = {
+		.tx = 0xffff,
+		.rx = BIT(IEEE80211_STYPE_ACTION >> 4) |
+		      BIT(IEEE80211_STYPE_PROBE_REQ >> 4) |
+		      BIT(IEEE80211_STYPE_AUTH >> 4),
+	},
+	[NL80211_IFTYPE_AP] = {
+		.tx = 0xffff,
+		.rx = BIT(IEEE80211_STYPE_ASSOC_REQ >> 4) |
+		      BIT(IEEE80211_STYPE_REASSOC_REQ >> 4) |
+		      BIT(IEEE80211_STYPE_PROBE_REQ >> 4) |
+		      BIT(IEEE80211_STYPE_DISASSOC >> 4) |
+		      BIT(IEEE80211_STYPE_AUTH >> 4) |
+		      BIT(IEEE80211_STYPE_DEAUTH >> 4) |
+		      BIT(IEEE80211_STYPE_ACTION >> 4),
+	},
+};
+
+/*
+ * Wake up patterns are matched by the firmware against the whole received
+ * frame, with one mask byte per pattern byte.
+ */
+#define AIC_WOW_PATTERN_MAX_LEN		64
+#define AIC_WOW_PATTERN_MAX_OFFSET	255
+
+static const struct wiphy_wowlan_support aic_wowlan_support = {
+	.flags = WIPHY_WOWLAN_MAGIC_PKT | WIPHY_WOWLAN_ANY,
+	.n_patterns = 1,
+	.pattern_min_len = 1,
+	.pattern_max_len = AIC_WOW_PATTERN_MAX_LEN,
+	.max_pkt_offset = AIC_WOW_PATTERN_MAX_OFFSET,
 };
 
 static const u32 aic_cipher_suites[] = {
@@ -1115,6 +1156,147 @@ static int aic_cfg_cancel_remain_on_channel(struct wiphy *wiphy,
 	return ret;
 }
 
+/* Find the peer a management frame is addressed to, if the firmware knows it. */
+static struct aic_sta *aic_mgmt_peer(struct aic_vif *vif, const u8 *addr)
+{
+	struct aic_sta *sta;
+
+	switch (vif->wdev.iftype) {
+	case NL80211_IFTYPE_STATION:
+	case NL80211_IFTYPE_P2P_CLIENT:
+		sta = vif->sta.ap;
+		if (sta && sta->valid && ether_addr_equal(sta->addr, addr))
+			return sta;
+		break;
+	case NL80211_IFTYPE_AP:
+	case NL80211_IFTYPE_P2P_GO:
+		list_for_each_entry(sta, &vif->ap.sta_list, list)
+			if (sta->valid && ether_addr_equal(sta->addr, addr))
+				return sta;
+		break;
+	default:
+		break;
+	}
+
+	return NULL;
+}
+
+static int aic_cfg_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
+			   struct cfg80211_mgmt_tx_params *params, u64 *cookie)
+{
+	struct aic_vif *vif = container_of(wdev, struct aic_vif, wdev);
+	const struct ieee80211_mgmt *mgmt = (const void *)params->buf;
+	struct aic_hw *hw = wiphy_priv(wiphy);
+	struct aic_sta *sta;
+	int ret;
+
+	if (params->len < offsetof(struct ieee80211_mgmt, u))
+		return -EINVAL;
+
+	mutex_lock(&hw->mutex);
+
+	if (!vif->up) {
+		ret = -ENETDOWN;
+		goto out;
+	}
+
+	sta = aic_mgmt_peer(vif, mgmt->da);
+	ret = aic_mgmt_tx(vif, sta, params, cookie);
+
+out:
+	mutex_unlock(&hw->mutex);
+
+	return ret;
+}
+
+static int aic_cfg_mgmt_tx_cancel_wait(struct wiphy *wiphy,
+				       struct wireless_dev *wdev, u64 cookie)
+{
+	struct aic_vif *vif = container_of(wdev, struct aic_vif, wdev);
+	struct aic_hw *hw = wiphy_priv(wiphy);
+	int ret = 0;
+
+	mutex_lock(&hw->mutex);
+	if (hw->roc == wdev)
+		ret = aic_send_cancel_roc(hw, vif);
+	mutex_unlock(&hw->mutex);
+
+	return ret;
+}
+
+/*
+ * A wake on LAN magic packet carries six 0xff bytes at the start of the UDP
+ * payload, which for an untagged IPv4 frame sits at a fixed offset.
+ */
+#define AIC_WOW_MAGIC_OFFSET	(ETH_HLEN + sizeof(struct iphdr) + \
+				 sizeof(struct udphdr))
+#define AIC_WOW_MAGIC_LEN	6
+
+static int aic_cfg_suspend(struct wiphy *wiphy, struct cfg80211_wowlan *wow)
+{
+	struct aic_hw *hw = wiphy_priv(wiphy);
+	u8 mask[AIC_WOW_PATTERN_MAX_LEN];
+	u8 pattern[AIC_WOW_PATTERN_MAX_LEN];
+	u16 offset, len;
+	int ret;
+
+	if (!wow)
+		return 0;
+
+	if (wow->n_patterns) {
+		const struct cfg80211_pkt_pattern *pat = &wow->patterns[0];
+		int i;
+
+		len = min_t(int, pat->pattern_len, sizeof(pattern));
+		offset = pat->pkt_offset;
+
+		/*
+		 * cfg80211 masks are a bitmap with one bit per pattern byte,
+		 * the firmware wants a byte mask instead.
+		 */
+		for (i = 0; i < len; i++) {
+			mask[i] = pat->mask[i / 8] & BIT(i % 8) ? 0xff : 0x00;
+			pattern[i] = pat->pattern[i];
+		}
+	} else if (wow->magic_pkt) {
+		offset = AIC_WOW_MAGIC_OFFSET;
+		len = AIC_WOW_MAGIC_LEN;
+		memset(mask, 0xff, len);
+		memset(pattern, 0xff, len);
+	} else {
+		/* WIPHY_WOWLAN_ANY, any received frame wakes the host */
+		return 0;
+	}
+
+	mutex_lock(&hw->mutex);
+	ret = aic_send_wakeup_info(hw, offset, mask, pattern, len);
+	mutex_unlock(&hw->mutex);
+
+	if (ret)
+		dev_err(hw->dev, "failed to arm wake on wireless: %d\n", ret);
+
+	return ret;
+}
+
+static int aic_cfg_resume(struct wiphy *wiphy)
+{
+	struct aic_hw *hw = wiphy_priv(wiphy);
+	int ret;
+
+	mutex_lock(&hw->mutex);
+	ret = aic_send_wakeup_info(hw, 0, NULL, NULL, 0);
+	mutex_unlock(&hw->mutex);
+
+	return ret;
+}
+
+static void aic_cfg_set_wakeup(struct wiphy *wiphy, bool enabled)
+{
+	struct aic_hw *hw = wiphy_priv(wiphy);
+
+	hw->wakeup_enabled = enabled;
+}
+
 static int aic_cfg_dump_survey(struct wiphy *wiphy, struct net_device *ndev,
 			       int idx, struct survey_info *info)
 {
@@ -1180,6 +1362,11 @@ const struct cfg80211_ops aic_cfg80211_ops = {
 	.get_channel = aic_cfg_get_channel,
 	.remain_on_channel = aic_cfg_remain_on_channel,
 	.cancel_remain_on_channel = aic_cfg_cancel_remain_on_channel,
+	.suspend = aic_cfg_suspend,
+	.resume = aic_cfg_resume,
+	.set_wakeup = aic_cfg_set_wakeup,
+	.mgmt_tx = aic_cfg_mgmt_tx,
+	.mgmt_tx_cancel_wait = aic_cfg_mgmt_tx_cancel_wait,
 	.dump_survey = aic_cfg_dump_survey,
 };
 
@@ -1238,7 +1425,8 @@ int aic_cfg80211_init(struct aic_hw *hw)
 	wiphy->max_remain_on_channel_duration = 5000;
 	wiphy->cipher_suites = aic_cipher_suites;
 	wiphy->n_cipher_suites = ARRAY_SIZE(aic_cipher_suites);
-	wiphy->mgmt_stypes = NULL;
+	wiphy->mgmt_stypes = aic_mgmt_stypes;
+	wiphy->wowlan = &aic_wowlan_support;
 	wiphy->signal_type = CFG80211_SIGNAL_TYPE_MBM;
 
 	ret = aic_send_me_config(hw);

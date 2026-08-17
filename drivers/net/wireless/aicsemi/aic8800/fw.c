@@ -9,7 +9,9 @@
  * Copyright (C) 2026 Jernej Skrabec <jernej.skrabec@gmail.com>
  */
 
+#include <linux/delay.h>
 #include <linux/firmware.h>
+#include <linux/module.h>
 
 #include "aic8800.h"
 
@@ -24,9 +26,10 @@
 #define AIC_CHIP_ID_REV			GENMASK(21, 16)
 #define AIC_CHIP_ID_H			GENMASK(23, 22)
 
+/* Revision numbers as they appear in the chip id, not consecutive. */
 #define AIC_CHIP_REV_U01		1
-#define AIC_CHIP_REV_U02		2
-#define AIC_CHIP_REV_U03		3
+#define AIC_CHIP_REV_U02		3
+#define AIC_CHIP_REV_U04		7
 
 /* Bytes per DBG_MEM_BLOCK_WRITE_REQ. */
 #define AIC_FW_BLOCK_SIZE		1024
@@ -91,7 +94,7 @@ static int aic_fw_read_chip_id(struct aic_hw *hw)
 
 	hw->chip_rev = FIELD_GET(AIC_CHIP_ID_REV, val);
 
-	dev_info(hw->dev, "AIC8800D80%s revision u%02u (id %08x)\n",
+	dev_info(hw->dev, "AIC8800D80%s revision %u (chip id %08x)\n",
 		 FIELD_GET(AIC_CHIP_ID_H, val) == 3 ? "H" : "",
 		 hw->chip_rev, val);
 
@@ -217,6 +220,266 @@ static int aic_fw_apply_config(struct aic_hw *hw)
 	return 0;
 }
 
+/*
+ * The Bluetooth controller in the same package runs on the same firmware
+ * image, but needs a patch table of its own.  The table is a list of sections,
+ * each holding pairs of a device address and the value to write there.
+ */
+#define AIC_BT_PT_TAG			"AICBT_PT_TAG"
+#define AIC_BT_PT_TAG_LEN		16
+#define AIC_BT_PT_NAME_LEN		16
+
+enum aic_bt_pt_type {
+	AIC_BT_PT_INF	= 0,
+	AIC_BT_PT_TRAP	= 1,
+	AIC_BT_PT_B4	= 2,
+	AIC_BT_PT_BTMODE = 3,
+	AIC_BT_PT_PWRON	= 4,
+	AIC_BT_PT_AF	= 5,
+	AIC_BT_PT_VER	= 6,
+};
+
+struct aic_bt_pt_hdr {
+	char name[AIC_BT_PT_NAME_LEN];
+	__le32 type;
+	__le32 pairs;
+} __packed;
+
+/*
+ * Fields of an %AIC_BT_PT_INF section, in pairs.  Only the second word of each
+ * pair, the value, is used by the driver.
+ */
+enum aic_bt_inf_field {
+	AIC_BT_INF_ADID_ADDR	= 0,
+	AIC_BT_INF_PATCH_ADDR	= 1,
+	AIC_BT_INF_RESET	= 2,
+	AIC_BT_INF_ADID_FLAG	= 3,
+	AIC_BT_INF_EXT_PATCH_NB	= 4,
+	AIC_BT_INF_EXT_PATCH	= 5,
+};
+
+/* Fields of an %AIC_BT_PT_BTMODE section, again as pair indexes. */
+enum aic_bt_mode_field {
+	AIC_BT_MODE_HWINFO_AUTO	= 0,
+	AIC_BT_MODE_HWINFO	= 1,
+	AIC_BT_MODE_CPMODE	= 2,
+	AIC_BT_MODE_BTMODE	= 3,
+	AIC_BT_MODE_BTPORT	= 4,
+	AIC_BT_MODE_UART_BAUD	= 5,
+	AIC_BT_MODE_UART_FC	= 6,
+	AIC_BT_MODE_LPM		= 7,
+	AIC_BT_MODE_TXPWR	= 8,
+	AIC_BT_MODE_FIELDS,
+};
+
+/* Bluetooth only operation, sharing the antenna with the wireless part. */
+#define AIC_BT_MODE_BT_ONLY_COANT	5
+/* The controller is reachable over the UART rather than over the mailbox. */
+#define AIC_BT_PORT_UART		2
+#define AIC_BT_UART_BAUD		1500000
+#define AIC_BT_UART_FLOW_CTRL		1
+/* Minimum and maximum transmit power level, one byte each. */
+#define AIC_BT_TXPWR_LVL		0x00006f2f
+
+/* Fixed addresses of the two patch areas, unless the table says otherwise. */
+#define AIC_BT_ADID_ADDR		0x00201940
+#define AIC_BT_PATCH_ADDR		0x0020b43c
+
+static bool bluetooth = true;
+module_param(bluetooth, bool, 0444);
+MODULE_PARM_DESC(bluetooth, "load the firmware for the Bluetooth controller");
+
+static u32 aic_bt_pair_value(const struct aic_bt_pt_hdr *hdr, unsigned int pair)
+{
+	const __le32 *pairs = (const __le32 *)(hdr + 1);
+
+	return le32_to_cpu(pairs[2 * pair + 1]);
+}
+
+/* Write every pair of one section to the device. */
+static int aic_bt_pt_apply(struct aic_hw *hw, const struct aic_bt_pt_hdr *hdr,
+			   const u32 *btmode)
+{
+	const __le32 *pairs = (const __le32 *)(hdr + 1);
+	unsigned int i, n = le32_to_cpu(hdr->pairs);
+	int ret;
+
+	for (i = 0; i < n; i++) {
+		u32 addr = le32_to_cpu(pairs[2 * i]);
+		u32 val = le32_to_cpu(pairs[2 * i + 1]);
+
+		if (btmode && i < AIC_BT_MODE_FIELDS)
+			val = btmode[i];
+
+		ret = aic_send_dbg_mem_write(hw, addr, val);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+/**
+ * aic_bt_load - upload the Bluetooth patches and configuration
+ * @hw: device
+ * @rev: firmware file revision suffix
+ *
+ * Has to run before the wireless firmware is started, and only does anything if
+ * the wireless firmware image also carries the Bluetooth stack.
+ */
+static int aic_bt_load(struct aic_hw *hw, const char *rev)
+{
+	/*
+	 * Configuration written into the %AIC_BT_PT_BTMODE section.  The
+	 * hardware information word is left for the firmware to detect.
+	 */
+	static const u32 btmode[AIC_BT_MODE_FIELDS] = {
+		[AIC_BT_MODE_HWINFO_AUTO]	= 1,
+		[AIC_BT_MODE_HWINFO]		= 0xffffffff,
+		[AIC_BT_MODE_CPMODE]		= 0,
+		[AIC_BT_MODE_BTMODE]		= AIC_BT_MODE_BT_ONLY_COANT,
+		[AIC_BT_MODE_BTPORT]		= AIC_BT_PORT_UART,
+		[AIC_BT_MODE_UART_BAUD]		= AIC_BT_UART_BAUD,
+		[AIC_BT_MODE_UART_FC]		= AIC_BT_UART_FLOW_CTRL,
+		[AIC_BT_MODE_LPM]		= 0,
+		[AIC_BT_MODE_TXPWR]		= AIC_BT_TXPWR_LVL,
+	};
+	u32 adid_addr = AIC_BT_ADID_ADDR, patch_addr = AIC_BT_PATCH_ADDR;
+	u32 ext_patch_nb = 0, ext_patch[8][2];
+	const struct firmware *table;
+	const struct aic_bt_pt_hdr *hdr;
+	char name[64];
+	size_t off;
+	unsigned int i;
+	int ret;
+
+	snprintf(name, sizeof(name), "%sfw_patch_table_8800d80_%s.bin",
+		 AIC_FW_DIR, rev);
+	ret = request_firmware(&table, name, hw->dev);
+	if (ret) {
+		dev_err(hw->dev, "failed to load %s: %d\n", name, ret);
+		return ret;
+	}
+
+	if (table->size < AIC_BT_PT_TAG_LEN ||
+	    memcmp(table->data, AIC_BT_PT_TAG, strlen(AIC_BT_PT_TAG))) {
+		dev_err(hw->dev, "%s is not a Bluetooth patch table\n", name);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/*
+	 * First pass: pick up the addresses the patch binaries have to be
+	 * uploaded to.
+	 */
+	for (off = AIC_BT_PT_TAG_LEN; off + sizeof(*hdr) <= table->size;) {
+		unsigned int pairs;
+		size_t len;
+
+		hdr = (const struct aic_bt_pt_hdr *)(table->data + off);
+		pairs = le32_to_cpu(hdr->pairs);
+		/* section types above this are not patch data */
+		if (le32_to_cpu(hdr->type) >= 1000)
+			pairs = 0;
+
+		len = sizeof(*hdr) + 8 * pairs;
+		if (off + len > table->size) {
+			dev_err(hw->dev, "%s is truncated\n", name);
+			ret = -EINVAL;
+			goto out;
+		}
+
+		if (le32_to_cpu(hdr->type) == AIC_BT_PT_INF) {
+			if (pairs > AIC_BT_INF_ADID_ADDR)
+				adid_addr = aic_bt_pair_value(hdr,
+							AIC_BT_INF_ADID_ADDR);
+			if (pairs > AIC_BT_INF_PATCH_ADDR)
+				patch_addr = aic_bt_pair_value(hdr,
+							AIC_BT_INF_PATCH_ADDR);
+			if (pairs > AIC_BT_INF_EXT_PATCH_NB)
+				ext_patch_nb = aic_bt_pair_value(hdr,
+						AIC_BT_INF_EXT_PATCH_NB);
+
+			ext_patch_nb = min_t(u32, ext_patch_nb,
+					     ARRAY_SIZE(ext_patch));
+			if (pairs < AIC_BT_INF_EXT_PATCH + 2 * ext_patch_nb)
+				ext_patch_nb = 0;
+
+			for (i = 0; i < ext_patch_nb; i++) {
+				const __le32 *p = (const __le32 *)(hdr + 1);
+
+				p += 2 * AIC_BT_INF_EXT_PATCH + 2 * i;
+				ext_patch[i][0] = le32_to_cpu(p[0]);
+				ext_patch[i][1] = le32_to_cpu(p[1]);
+			}
+		}
+
+		off += len;
+	}
+
+	snprintf(name, sizeof(name), "%sfw_adid_8800d80_u02.bin", AIC_FW_DIR);
+	ret = aic_fw_upload(hw, adid_addr, name);
+	if (ret)
+		goto out;
+
+	snprintf(name, sizeof(name), "%sfw_patch_8800d80_%s.bin", AIC_FW_DIR,
+		 rev);
+	ret = aic_fw_upload(hw, patch_addr, name);
+	if (ret)
+		goto out;
+
+	for (i = 0; i < ext_patch_nb; i++) {
+		snprintf(name, sizeof(name),
+			 "%sfw_patch_8800d80_%s_ext%u.bin", AIC_FW_DIR, rev,
+			 ext_patch[i][0]);
+		ret = aic_fw_upload(hw, ext_patch[i][1], name);
+		if (ret)
+			goto out;
+	}
+
+	/* Second pass: apply the patches themselves. */
+	for (off = AIC_BT_PT_TAG_LEN; off + sizeof(*hdr) <= table->size;) {
+		unsigned int pairs, type;
+
+		hdr = (const struct aic_bt_pt_hdr *)(table->data + off);
+		type = le32_to_cpu(hdr->type);
+		pairs = le32_to_cpu(hdr->pairs);
+		if (type >= 1000)
+			pairs = 0;
+
+		switch (type) {
+		case AIC_BT_PT_VER:
+			dev_info(hw->dev, "Bluetooth patch version %.*s\n",
+				 8 * pairs, (const char *)(hdr + 1));
+			break;
+		case AIC_BT_PT_BTMODE:
+			if (pairs < AIC_BT_MODE_FIELDS) {
+				dev_err(hw->dev,
+					"short Bluetooth mode section\n");
+				ret = -EINVAL;
+				goto out;
+			}
+			ret = aic_bt_pt_apply(hw, hdr, btmode);
+			break;
+		default:
+			ret = aic_bt_pt_apply(hw, hdr, NULL);
+			/* the firmware needs time to bring its radio up */
+			if (!ret && type == AIC_BT_PT_PWRON)
+				msleep(100);
+			break;
+		}
+		if (ret)
+			goto out;
+
+		off += sizeof(*hdr) + 8 * pairs;
+	}
+
+out:
+	release_firmware(table);
+
+	return ret;
+}
+
 /**
  * aic_fw_load - bring the device firmware up
  * @hw: device
@@ -227,15 +490,26 @@ static int aic_fw_apply_config(struct aic_hw *hw)
 int aic_fw_load(struct aic_hw *hw)
 {
 	u32 boot_status;
+	const char *rev;
+	char name[64];
 	int ret, chip_h;
 
 	chip_h = aic_fw_read_chip_id(hw);
 	if (chip_h < 0)
 		return chip_h;
 
-	ret = aic_fw_upload(hw, aic_fw_ram_addr(hw),
-			    chip_h ? AIC_FW_DIR "fmacfw_8800d80_h_u02.bin"
-				   : AIC_FW_DIR "fmacfw_8800d80_u02.bin");
+	rev = hw->chip_rev >= AIC_CHIP_REV_U04 ? "u04" : "u02";
+
+	if (bluetooth) {
+		ret = aic_bt_load(hw, rev);
+		if (ret)
+			return ret;
+	}
+
+	snprintf(name, sizeof(name), "%sfmacfw%s_8800d80%s_u02.bin",
+		 AIC_FW_DIR, bluetooth ? "bt" : "", chip_h ? "_h" : "");
+
+	ret = aic_fw_upload(hw, aic_fw_ram_addr(hw), name);
 	if (ret)
 		return ret;
 
@@ -259,3 +533,10 @@ int aic_fw_load(struct aic_hw *hw)
 
 MODULE_FIRMWARE(AIC_FW_DIR "fmacfw_8800d80_u02.bin");
 MODULE_FIRMWARE(AIC_FW_DIR "fmacfw_8800d80_h_u02.bin");
+MODULE_FIRMWARE(AIC_FW_DIR "fmacfwbt_8800d80_u02.bin");
+MODULE_FIRMWARE(AIC_FW_DIR "fmacfwbt_8800d80_h_u02.bin");
+MODULE_FIRMWARE(AIC_FW_DIR "fw_adid_8800d80_u02.bin");
+MODULE_FIRMWARE(AIC_FW_DIR "fw_patch_8800d80_u02.bin");
+MODULE_FIRMWARE(AIC_FW_DIR "fw_patch_table_8800d80_u02.bin");
+MODULE_FIRMWARE(AIC_FW_DIR "fw_patch_8800d80_u04.bin");
+MODULE_FIRMWARE(AIC_FW_DIR "fw_patch_table_8800d80_u04.bin");

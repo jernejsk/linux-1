@@ -141,6 +141,96 @@ drop:
 }
 
 /**
+ * aic_txcfm_claim - take a slot in the confirmation ring
+ * @hw: device
+ * @skb: frame the firmware is going to confirm
+ * @wdev: interface to report a management frame status on, %NULL for data
+ * @cookie: cookie to report the status with
+ *
+ * Returns the slot index, or a negative error if the ring is full.  The caller
+ * owns @skb until the confirmation arrives.
+ */
+static int aic_txcfm_claim(struct aic_hw *hw, struct sk_buff *skb,
+			   struct wireless_dev *wdev, u64 cookie)
+{
+	int i, idx;
+
+	spin_lock_bh(&hw->tx_lock);
+	for (i = 0; i < AIC_TXCFM_RING_SIZE; i++) {
+		idx = (hw->cfm_idx + i) % AIC_TXCFM_RING_SIZE;
+		if (!hw->cfm_ring[idx].skb) {
+			hw->cfm_ring[idx].skb = skb;
+			hw->cfm_ring[idx].wdev = wdev;
+			hw->cfm_ring[idx].cookie = cookie;
+			hw->cfm_idx = (idx + 1) % AIC_TXCFM_RING_SIZE;
+			spin_unlock_bh(&hw->tx_lock);
+			return idx;
+		}
+	}
+	spin_unlock_bh(&hw->tx_lock);
+
+	return -ENOSPC;
+}
+
+/**
+ * aic_mgmt_tx - send one management frame
+ * @vif: interface to send it on
+ * @sta: peer the frame is addressed to, may be %NULL
+ * @params: frame and transmission parameters from cfg80211
+ * @cookie: filled in with the cookie the status will be reported with
+ *
+ * Management frames are handed to the firmware as complete 802.11 frames, with
+ * the Ethernet addresses in the descriptor left empty.
+ */
+int aic_mgmt_tx(struct aic_vif *vif, struct aic_sta *sta,
+		struct cfg80211_mgmt_tx_params *params, u64 *cookie)
+{
+	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)params->buf;
+	struct aic_hw *hw = vif->hw;
+	struct aic_txdesc *desc;
+	struct sk_buff *skb;
+	u16 flags = AIC_TXDESC_F_MGMT;
+	int idx;
+
+	skb = alloc_skb(sizeof(*desc) + params->len, GFP_KERNEL);
+	if (!skb)
+		return -ENOMEM;
+
+	if (params->no_cck)
+		flags |= AIC_TXDESC_F_MGMT_NO_CCK;
+	/*
+	 * Robust management frames are protected by the firmware, which needs to
+	 * be told so.  Deciding that needs the action category byte.
+	 */
+	if (params->len > offsetofend(struct ieee80211_hdr_3addr, seq_ctrl) &&
+	    _ieee80211_is_robust_mgmt_frame(hdr))
+		flags |= AIC_TXDESC_F_MGMT_ROBUST;
+
+	desc = skb_put_zero(skb, sizeof(*desc));
+	desc->packet_len = cpu_to_le16(params->len);
+	desc->staid = sta ? sta->sta_idx : AIC_INVALID_STA;
+	desc->vif_idx = vif->vif_index;
+	desc->tid = 0xff;
+	desc->ac = AIC_AC_VO;
+	desc->flags = cpu_to_le16(flags);
+	skb_put_data(skb, params->buf, params->len);
+
+	skb->priority = AIC_AC_VO;
+
+	*cookie = ++hw->mgmt_cookie;
+
+	idx = aic_txcfm_claim(hw, skb, &vif->wdev, *cookie);
+	if (idx < 0) {
+		dev_kfree_skb(skb);
+		return idx;
+	}
+
+	desc->hostid = cpu_to_le32(AIC_TXDESC_HOSTID_CFM | idx);
+
+	return hw->bus_ops->send_data(hw, skb);
+}
+
+/**
  * aic_txq_flush_vif - drop everything queued for one interface
  * @hw: device
  * @vif: interface going away
@@ -171,6 +261,45 @@ void aic_txq_flush_vif(struct aic_hw *hw, struct aic_vif *vif)
 
 	while ((skb = __skb_dequeue(&done)))
 		dev_kfree_skb_any(skb);
+
+	aic_txcfm_flush(hw, vif);
+}
+
+/**
+ * aic_txcfm_flush - give up on outstanding confirmations
+ * @hw: device
+ * @vif: interface going away, %NULL for all of them
+ *
+ * Management frames are reported as unacknowledged so that cfg80211 does not
+ * wait for a status that is never going to arrive.
+ */
+void aic_txcfm_flush(struct aic_hw *hw, struct aic_vif *vif)
+{
+	int i;
+
+	for (i = 0; i < AIC_TXCFM_RING_SIZE; i++) {
+		struct aic_txcfm_slot slot;
+
+		spin_lock_bh(&hw->tx_lock);
+		slot = hw->cfm_ring[i];
+		if (slot.skb && (!vif || slot.wdev == &vif->wdev))
+			memset(&hw->cfm_ring[i], 0, sizeof(hw->cfm_ring[i]));
+		else
+			slot.skb = NULL;
+		spin_unlock_bh(&hw->tx_lock);
+
+		if (!slot.skb)
+			continue;
+
+		if (slot.wdev) {
+			skb_pull(slot.skb, sizeof(struct aic_txdesc));
+			cfg80211_mgmt_tx_status(slot.wdev, slot.cookie,
+						slot.skb->data, slot.skb->len,
+						false, GFP_KERNEL);
+		}
+
+		dev_kfree_skb_any(slot.skb);
+	}
 }
 
 /* Receive. -----------------------------------------------------------------*/

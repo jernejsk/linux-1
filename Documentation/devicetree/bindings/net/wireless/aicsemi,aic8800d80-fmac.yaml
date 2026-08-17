@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/net/wireless/aicsemi,aic8800d80-fmac.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: AICSemi AIC8800D80 fullmac wireless SDIO device
+
+maintainers:
+  - Jernej Skrabec <jernej.skrabec@gmail.com>
+
+description:
+  The AIC8800D80 is an 802.11ax single stream part attached over SDIO.  The
+  same package also holds a Bluetooth controller attached over UART, which is
+  described in a separate binding.
+
+  The device is powered and reset through the SDIO slot it sits in, so its
+  regulators and its reset line belong to the MMC controller node.
+
+allOf:
+  - $ref: /schemas/net/wireless/wireless-controller.yaml#
+
+properties:
+  compatible:
+    enum:
+      - aicsemi,aic8800d80-fmac
+      - aicsemi,aic8800d80x2-fmac
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+    description:
+      Out of band host wake line, driven by the device while the host is
+      suspended.  Only needed on hosts that cannot wake from the in band SDIO
+      interrupt.
+
+  interrupt-names:
+    const: host-wake
+
+required:
+  - compatible
+  - reg
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/interrupt-controller/irq.h>
+
+    mmc {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        wifi@1 {
+            compatible = "aicsemi,aic8800d80-fmac";
+            reg = <1>;
+            interrupt-parent = <&pio>;
+            interrupts = <1 0 IRQ_TYPE_EDGE_RISING>;
+            interrupt-names = "host-wake";
+        };
+    };

@@ -446,6 +446,39 @@ int aic_send_set_filter(struct aic_hw *hw, u32 filter)
 	return aic_send_msg(hw, req, true, MM_SET_FILTER_CFM, NULL, 0);
 }
 
+/**
+ * aic_send_wakeup_info - tell the firmware what should wake the host
+ * @hw: device
+ * @offset: offset into the received frame the pattern starts at
+ * @mask: one byte per pattern byte, 0xff to compare it, 0 to ignore it
+ * @pattern: bytes to compare against
+ * @len: length of @mask and @pattern, zero clears the pattern
+ *
+ * The firmware compares every received frame against the pattern while the
+ * host is suspended and wakes it on a match.
+ */
+int aic_send_wakeup_info(struct aic_hw *hw, u16 offset, const u8 *mask,
+			 const u8 *pattern, u16 len)
+{
+	struct mm_set_wakeup_info_req *req;
+
+	req = aic_msg_alloc(MM_SET_VENDOR_HWCONFIG_REQ, TASK_MM, DRV_TASK_ID,
+			    struct_size(req, mask_and_pattern, 2 * len));
+	if (!req)
+		return -ENOMEM;
+
+	req->hwconfig_id = WAKEUP_INFO_REQ;
+	req->code = 1;
+	req->offset = offset;
+	req->length = len;
+	if (len) {
+		memcpy(req->mask_and_pattern, mask, len);
+		memcpy(req->mask_and_pattern + len, pattern, len);
+	}
+
+	return aic_send_msg(hw, req, true, MM_SET_VENDOR_HWCONFIG_CFM, NULL, 0);
+}
+
 int aic_send_chan_ctxt_add(struct aic_hw *hw,
 			   const struct cfg80211_chan_def *chandef, u8 *idx)
 {

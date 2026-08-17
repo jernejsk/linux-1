@@ -751,6 +751,15 @@ S:	Supported
 F:	fs/aio.c
 F:	include/linux/*aio*.h
 
+AICSEMI AIC8800 WIRELESS DRIVER
+M:	Jernej Skrabec <jernej.skrabec@gmail.com>
+L:	linux-wireless@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/net/bluetooth/aicsemi,aic8800d80-bt.yaml
+F:	Documentation/devicetree/bindings/net/wireless/aicsemi,aic8800d80-fmac.yaml
+F:	drivers/bluetooth/hci_aic.c
+F:	drivers/net/wireless/aicsemi/
+
 AIROHA ETHERNET DRIVER
 M:	Lorenzo Bianconi <lorenzo@kernel.org>
 L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)

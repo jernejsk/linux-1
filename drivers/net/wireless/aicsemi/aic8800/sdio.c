@@ -5,6 +5,8 @@
  * Copyright (C) 2026 Jernej Skrabec <jernej.skrabec@gmail.com>
  */
 
+#include <linux/delay.h>
+#include <linux/interrupt.h>
 #include <linux/kthread.h>
 #include <linux/mmc/card.h>
 #include <linux/mmc/host.h>
@@ -12,6 +14,8 @@
 #include <linux/mmc/sdio_func.h>
 #include <linux/mmc/sdio_ids.h>
 #include <linux/module.h>
+#include <linux/of_irq.h>
+#include <linux/pm.h>
 #include <linux/slab.h>
 #include <linux/unaligned.h>
 
@@ -42,6 +46,9 @@
 #define AIC_SDIO_PENDING_AWAKE		BIT(4)
 
 /* AIC_SDIO_INTR_TO_DEVICE */
+#define AIC_SDIO_TO_DEVICE_SOFT_IRQ	BIT(0)
+#define AIC_SDIO_TO_DEVICE_SLEEP	0x02
+#define AIC_SDIO_TO_DEVICE_AUTO_PS	0x08
 #define AIC_SDIO_TO_DEVICE_WAKEUP	0x11
 
 /*
@@ -108,6 +115,9 @@ struct aic_sdio {
 
 	/* control message staging buffer, serialised by aic_cmd_mgr.send_lock */
 	u8 *msg_buf;
+
+	/* optional out of band wake line, only used to wake the system */
+	int wake_irq;
 
 	bool up;
 };
@@ -596,6 +606,177 @@ static void aic_sdio_stop(struct aic_hw *hw)
 	sdio_release_host(sdio->func);
 }
 
+/* Power management. ---------------------------------------------------------*/
+
+/**
+ * aic_sdio_sleep - allow the device to stop its bus clock domain
+ * @sdio: transport
+ *
+ * The device keeps receiving while asleep and raises the host wake line, or
+ * the in band SDIO interrupt, when something has to be handled.
+ */
+static int aic_sdio_sleep(struct aic_sdio *sdio)
+{
+	int ret;
+
+	sdio_claim_host(sdio->func);
+	ret = aic_sdio_wr(sdio, AIC_SDIO_INTR_TO_DEVICE,
+			  AIC_SDIO_TO_DEVICE_SLEEP);
+	sdio_release_host(sdio->func);
+
+	return ret;
+}
+
+/**
+ * aic_sdio_wakeup - bring the device back out of sleep
+ * @sdio: transport
+ *
+ * The device clears the request bit once it is running again.
+ */
+static int aic_sdio_wakeup(struct aic_sdio *sdio)
+{
+	int retries = 50;
+	int ret;
+	u8 val;
+
+	sdio_claim_host(sdio->func);
+
+	ret = aic_sdio_wr(sdio, AIC_SDIO_INTR_TO_DEVICE,
+			  AIC_SDIO_TO_DEVICE_WAKEUP);
+	while (!ret && retries--) {
+		ret = aic_sdio_rd(sdio, AIC_SDIO_INTR_TO_DEVICE, &val);
+		if (ret || !(val & AIC_SDIO_TO_DEVICE_SOFT_IRQ))
+			break;
+
+		udelay(200);
+	}
+
+	sdio_release_host(sdio->func);
+
+	if (!ret && retries < 0) {
+		dev_err(&sdio->func->dev, "device did not wake up\n");
+		return -ETIMEDOUT;
+	}
+
+	return ret;
+}
+
+static int aic_sdio_suspend(struct device *dev)
+{
+	struct sdio_func *func = dev_to_sdio_func(dev);
+	struct aic_sdio *sdio = sdio_get_drvdata(func);
+	struct aic_hw *hw = sdio->hw;
+	mmc_pm_flag_t flags = MMC_PM_KEEP_POWER;
+	int ret;
+
+	if (!(sdio_get_host_pm_caps(func) & MMC_PM_KEEP_POWER)) {
+		dev_err(dev, "the host cannot keep this device powered\n");
+		return -ENOSYS;
+	}
+
+	/*
+	 * Without a host wake line the in band interrupt is the only way the
+	 * device can announce a wake up event.
+	 */
+	if (hw->wakeup_enabled && sdio->wake_irq <= 0)
+		flags |= MMC_PM_WAKE_SDIO_IRQ;
+
+	ret = sdio_set_host_pm_flags(func, flags);
+	if (ret)
+		return ret;
+
+	aic_hw_suspend(hw);
+
+	/* let the transmit thread finish what it has already queued */
+	wait_event_timeout(sdio->tx_wq, !atomic_read(&sdio->tx_pending),
+			   msecs_to_jiffies(100));
+
+	if (sdio->wake_irq > 0 && hw->wakeup_enabled) {
+		enable_irq(sdio->wake_irq);
+		enable_irq_wake(sdio->wake_irq);
+	}
+
+	return aic_sdio_sleep(sdio);
+}
+
+static int aic_sdio_resume(struct device *dev)
+{
+	struct sdio_func *func = dev_to_sdio_func(dev);
+	struct aic_sdio *sdio = sdio_get_drvdata(func);
+	struct aic_hw *hw = sdio->hw;
+	int ret;
+
+	if (sdio->wake_irq > 0 && hw->wakeup_enabled) {
+		disable_irq_wake(sdio->wake_irq);
+		disable_irq(sdio->wake_irq);
+	}
+
+	ret = aic_sdio_wakeup(sdio);
+	if (ret)
+		return ret;
+
+	aic_hw_resume(hw);
+
+	/* anything that arrived while suspended is waiting to be read */
+	aic_sdio_kick_tx(hw);
+	napi_schedule(&hw->napi);
+
+	return 0;
+}
+
+static DEFINE_SIMPLE_DEV_PM_OPS(aic_sdio_pm_ops, aic_sdio_suspend,
+				aic_sdio_resume);
+
+/**
+ * aic_sdio_wake_isr - host wake line went active
+ * @irq: interrupt number
+ * @data: transport
+ *
+ * The line is only used to wake the system, the pending work is picked up by
+ * the normal SDIO interrupt afterwards.
+ */
+static irqreturn_t aic_sdio_wake_isr(int irq, void *data)
+{
+	struct aic_sdio *sdio = data;
+
+	dev_dbg(&sdio->func->dev, "host wake\n");
+
+	return IRQ_HANDLED;
+}
+
+/**
+ * aic_sdio_wake_irq_init - claim the optional host wake line
+ * @sdio: transport
+ *
+ * Boards that cannot wake from the in band SDIO interrupt route a separate
+ * line from the device to a wake capable interrupt instead.  The line is only
+ * enabled while the system is suspended.
+ */
+static int aic_sdio_wake_irq_init(struct aic_sdio *sdio)
+{
+	struct device *dev = &sdio->func->dev;
+	int irq, ret;
+
+	irq = fwnode_irq_get_byname(dev_fwnode(dev), "host-wake");
+	if (irq == -EPROBE_DEFER)
+		return irq;
+	if (irq <= 0)
+		return 0;
+
+	ret = devm_request_irq(dev, irq, aic_sdio_wake_isr,
+			       IRQF_TRIGGER_RISING | IRQF_NO_AUTOEN,
+			       "aic8800-wake", sdio);
+	if (ret) {
+		dev_err(dev, "failed to claim the host wake line: %d\n", ret);
+		return ret;
+	}
+
+	sdio->wake_irq = irq;
+	device_set_wakeup_capable(dev, true);
+
+	return 0;
+}
+
 static const struct aic_bus_ops aic_sdio_bus_ops = {
 	.start = aic_sdio_start,
 	.stop = aic_sdio_stop,
@@ -731,6 +912,10 @@ static int aic_sdio_probe(struct sdio_func *func,
 		goto err_free_hw;
 	}
 
+	ret = aic_sdio_wake_irq_init(sdio);
+	if (ret)
+		goto err_free_hw;
+
 	sdio->tx_thread = kthread_run(aic_sdio_tx_thread, sdio, "aic8800-tx");
 	if (IS_ERR(sdio->tx_thread)) {
 		ret = PTR_ERR(sdio->tx_thread);
@@ -794,6 +979,7 @@ static struct sdio_driver aic_sdio_driver = {
 	.id_table = aic_sdio_ids,
 	.probe = aic_sdio_probe,
 	.remove = aic_sdio_remove,
+	.drv.pm = pm_sleep_ptr(&aic_sdio_pm_ops),
 };
 module_sdio_driver(aic_sdio_driver);
 
