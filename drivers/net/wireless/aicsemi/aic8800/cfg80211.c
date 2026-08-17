@@ -1451,14 +1451,17 @@ int aic_cfg80211_init(struct aic_hw *hw)
 				 BIT(NL80211_IFTYPE_MONITOR);
 	wiphy->iface_combinations = aic_iface_combinations;
 	wiphy->n_iface_combinations = ARRAY_SIZE(aic_iface_combinations);
-	wiphy->flags |= WIPHY_FLAG_HAVE_AP_SME |
-			WIPHY_FLAG_AP_PROBE_RESP_OFFLOAD |
-			WIPHY_FLAG_SUPPORTS_FW_ROAM |
-			WIPHY_FLAG_HAS_REMAIN_ON_CHANNEL;
+	/*
+	 * The firmware runs the MLME but leaves the SME to userspace, on an AP
+	 * interface as much as on a station one: it hands the authentication
+	 * and association frames over rather than answering them, and it does
+	 * not take a PSK to do the four way handshake with.
+	 */
+	wiphy->flags |= WIPHY_FLAG_HAS_REMAIN_ON_CHANNEL |
+			WIPHY_FLAG_4ADDR_STATION |
+			WIPHY_FLAG_4ADDR_AP;
 	wiphy->features |= NL80211_FEATURE_SAE |
 			   NL80211_FEATURE_NEED_OBSS_SCAN;
-	wiphy_ext_feature_set(wiphy, NL80211_EXT_FEATURE_4WAY_HANDSHAKE_STA_PSK);
-	wiphy_ext_feature_set(wiphy, NL80211_EXT_FEATURE_4WAY_HANDSHAKE_STA_1X);
 
 	wiphy->max_scan_ssids = SCAN_SSID_MAX;
 	wiphy->max_scan_ie_len = AIC_SCAN_IE_MAX;

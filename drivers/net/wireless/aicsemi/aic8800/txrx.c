@@ -388,6 +388,12 @@ void aic_txq_flush_vif(struct aic_hw *hw, struct aic_vif *vif)
 	}
 	spin_unlock_bh(&hw->tx_lock);
 
+	spin_lock_bh(&hw->tx_lock);
+	for (i = 0; i < AIC_MAX_STA; i++)
+		if (hw->sta[i].valid && hw->sta[i].vif_idx == vif->vif_index)
+			skb_queue_splice_tail_init(&hw->sta[i].ps_queue, &done);
+	spin_unlock_bh(&hw->tx_lock);
+
 	while ((skb = __skb_dequeue(&done)))
 		dev_kfree_skb_any(skb);
 
