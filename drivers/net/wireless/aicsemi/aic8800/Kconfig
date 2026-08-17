@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config AIC8800
+	tristate "AICSemi AIC8800 series wireless support"
+	depends on CFG80211
+	depends on MMC
+	select CRC8
+	help
+	  This is the driver for the AICSemi AIC8800 family of Wi-Fi chipsets.
+	  The AIC8800D80 is an 802.11ax (Wi-Fi 6) 1x1 combo device found on
+	  several Allwinner and Rockchip single board computers, where it is
+	  attached over SDIO.
+
+	  The driver talks to the on-chip full-MAC firmware, which has to be
+	  provided by userspace through the firmware loader.
+
+	  Say Y or M here if your board has an AIC8800 series device.
