@@ -9,6 +9,7 @@
  * (C) Copyright 2017 Sootech SA
  */
 
+#include <linux/bitfield.h>
 #include <linux/clk.h>
 #include <linux/clk/sunxi-ng.h>
 #include <linux/delay.h>
@@ -218,8 +219,17 @@
 #define SDXC_CLK_50M		2
 #define SDXC_CLK_50M_DDR	3
 #define SDXC_CLK_50M_DDR_8BIT	4
+#define SDXC_CLK_100M		5
+#define SDXC_CLK_MODES		6
 
+/* SDXC_REG_SD_NTSR bits */
 #define SDXC_2X_TIMING_MODE	BIT(31)
+#define SDXC_STIMING_DAT_PH	GENMASK(9, 8)
+#define SDXC_STIMING_CMD_PH	GENMASK(5, 4)
+
+/* SDXC_REG_DRV_DL bits, 0 selects 90 and 1 selects 180 degrees */
+#define SDXC_DAT_DRV_PH_SEL	BIT(17)
+#define SDXC_CMD_DRV_PH_SEL	BIT(16)
 
 #define SDXC_CAL_START		BIT(15)
 #define SDXC_CAL_DONE		BIT(14)
@@ -235,6 +245,18 @@ struct sunxi_mmc_clk_delay {
 	u32 sample;
 };
 
+/*
+ * Phases used under the new timing mode, where the delay chains are replaced
+ * by a choice of clock phases for driving and for sampling the CMD and DAT
+ * lines.
+ */
+struct sunxi_mmc_timing {
+	u8 cmd_drv_ph;
+	u8 dat_drv_ph;
+	u8 cmd_sample_ph;
+	u8 dat_sample_ph;
+};
+
 struct sunxi_idma_des {
 	__le32 config;
 	__le32 buf_size;
@@ -246,6 +268,9 @@ struct sunxi_mmc_cfg {
 	u32 idma_des_size_bits;
 	u32 idma_des_shift;
 	const struct sunxi_mmc_clk_delay *clk_delays;
+
+	/* phases to use under the new timing mode, one entry per clock mode */
+	const struct sunxi_mmc_timing *timings;
 
 	/* does the IP block support autocalibration? */
 	bool can_calibrate;
@@ -718,6 +743,27 @@ static int sunxi_mmc_calibrate(struct sunxi_mmc_host *host, int reg_off)
 	return 0;
 }
 
+/* Determine the clock mode the card clock rate and the bus timing fall into. */
+static int sunxi_mmc_clk_mode(struct mmc_ios *ios, u32 rate)
+{
+	if (rate <= 400000)
+		return SDXC_CLK_400K;
+
+	if (rate <= 25000000)
+		return SDXC_CLK_25M;
+
+	if (rate <= 52000000) {
+		if (ios->timing != MMC_TIMING_UHS_DDR50 &&
+		    ios->timing != MMC_TIMING_MMC_DDR52)
+			return SDXC_CLK_50M;
+		if (ios->bus_width == MMC_BUS_WIDTH_8)
+			return SDXC_CLK_50M_DDR_8BIT;
+		return SDXC_CLK_50M_DDR;
+	}
+
+	return SDXC_CLK_100M;
+}
+
 static int sunxi_mmc_clk_set_phase(struct sunxi_mmc_host *host,
 				   struct mmc_ios *ios, u32 rate)
 {
@@ -731,27 +777,66 @@ static int sunxi_mmc_clk_set_phase(struct sunxi_mmc_host *host,
 	if (!host->cfg->clk_delays)
 		return 0;
 
-	/* determine delays */
-	if (rate <= 400000) {
-		index = SDXC_CLK_400K;
-	} else if (rate <= 25000000) {
-		index = SDXC_CLK_25M;
-	} else if (rate <= 52000000) {
-		if (ios->timing != MMC_TIMING_UHS_DDR50 &&
-		    ios->timing != MMC_TIMING_MMC_DDR52) {
-			index = SDXC_CLK_50M;
-		} else if (ios->bus_width == MMC_BUS_WIDTH_8) {
-			index = SDXC_CLK_50M_DDR_8BIT;
-		} else {
-			index = SDXC_CLK_50M_DDR;
-		}
-	} else {
+	index = sunxi_mmc_clk_mode(ios, rate);
+	if (index == SDXC_CLK_100M) {
 		dev_dbg(mmc_dev(host->mmc), "Invalid clock... returning\n");
 		return -EINVAL;
 	}
 
 	clk_set_phase(host->clk_sample, host->cfg->clk_delays[index].sample);
 	clk_set_phase(host->clk_output, host->cfg->clk_delays[index].output);
+
+	return 0;
+}
+
+/**
+ * sunxi_mmc_set_timing_phase - select the driving and sampling clock phases
+ * @host: controller
+ * @ios: bus settings the phases are for
+ * @rate: card clock rate
+ *
+ * Controllers that only know the new timing mode have no delay chain on the
+ * CMD and DAT lines.  Instead both the phase the lines are driven with and the
+ * phase they are sampled with are selected per clock mode.  Sampling with the
+ * reset default phase does not work above 25 MHz.
+ */
+static int sunxi_mmc_set_timing_phase(struct sunxi_mmc_host *host,
+				      struct mmc_ios *ios, u32 rate)
+{
+	const struct sunxi_mmc_timing *timing;
+	u32 rval;
+	int ret;
+
+	if (!host->cfg->timings || !host->use_new_timings)
+		return 0;
+
+	timing = &host->cfg->timings[sunxi_mmc_clk_mode(ios, rate)];
+
+	/*
+	 * The drive phase is taken from the card clock, so the module clock
+	 * has to be off while it is changed.
+	 */
+	clk_disable_unprepare(host->clk_mmc);
+
+	rval = mmc_readl(host, REG_DRV_DL);
+	rval &= ~(SDXC_CMD_DRV_PH_SEL | SDXC_DAT_DRV_PH_SEL);
+	if (timing->cmd_drv_ph)
+		rval |= SDXC_CMD_DRV_PH_SEL;
+	if (timing->dat_drv_ph)
+		rval |= SDXC_DAT_DRV_PH_SEL;
+	mmc_writel(host, REG_DRV_DL, rval);
+
+	ret = clk_prepare_enable(host->clk_mmc);
+	if (ret) {
+		dev_err(mmc_dev(host->mmc), "error enabling mmc clk: %d\n", ret);
+		return ret;
+	}
+
+	rval = mmc_readl(host, REG_SD_NTSR);
+	rval &= ~(SDXC_STIMING_CMD_PH | SDXC_STIMING_DAT_PH);
+	rval |= FIELD_PREP(SDXC_STIMING_CMD_PH, timing->cmd_sample_ph);
+	rval |= FIELD_PREP(SDXC_STIMING_DAT_PH, timing->dat_sample_ph);
+	mmc_writel(host, REG_SD_NTSR, rval);
 
 	return 0;
 }
@@ -840,6 +925,10 @@ static int sunxi_mmc_clk_set_rate(struct sunxi_mmc_host *host,
 
 	/* sunxi_mmc_clk_set_phase expects the actual card clock rate */
 	ret = sunxi_mmc_clk_set_phase(host, ios, rate);
+	if (ret)
+		return ret;
+
+	ret = sunxi_mmc_set_timing_phase(host, ios, rate);
 	if (ret)
 		return ret;
 
@@ -1198,6 +1287,27 @@ static const struct sunxi_mmc_cfg sun50i_h616_cfg = {
 	.needs_new_timings = true,
 };
 
+static const struct sunxi_mmc_timing sun55i_a523_timings[SDXC_CLK_MODES] = {
+	[SDXC_CLK_400K]		= { .cmd_drv_ph = 1, },
+	[SDXC_CLK_25M]		= { .cmd_drv_ph = 1, },
+	[SDXC_CLK_50M]		= { .cmd_drv_ph = 1, .dat_drv_ph = 1,
+				    .cmd_sample_ph = 1, .dat_sample_ph = 1, },
+	[SDXC_CLK_50M_DDR]	= { .cmd_drv_ph = 1, .dat_drv_ph = 1,
+				    .cmd_sample_ph = 1, .dat_sample_ph = 1, },
+	[SDXC_CLK_50M_DDR_8BIT]	= { .cmd_drv_ph = 1, .dat_drv_ph = 1,
+				    .cmd_sample_ph = 1, .dat_sample_ph = 1, },
+	[SDXC_CLK_100M]		= { .cmd_drv_ph = 1, },
+};
+
+static const struct sunxi_mmc_cfg sun55i_a523_cfg = {
+	.idma_des_size_bits = 13,
+	.idma_des_shift = 2,
+	.can_calibrate = true,
+	.mask_data0 = true,
+	.needs_new_timings = true,
+	.timings = sun55i_a523_timings,
+};
+
 static const struct sunxi_mmc_cfg sun50i_a100_emmc_cfg = {
 	.idma_des_size_bits = 13,
 	.idma_des_shift = 2,
@@ -1218,6 +1328,7 @@ static const struct of_device_id sunxi_mmc_of_match[] = {
 	{ .compatible = "allwinner,sun50i-a100-mmc", .data = &sun20i_d1_cfg },
 	{ .compatible = "allwinner,sun50i-a100-emmc", .data = &sun50i_a100_emmc_cfg },
 	{ .compatible = "allwinner,sun50i-h616-mmc", .data = &sun50i_h616_cfg },
+	{ .compatible = "allwinner,sun55i-a523-mmc", .data = &sun55i_a523_cfg },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, sunxi_mmc_of_match);
