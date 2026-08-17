@@ -129,6 +129,17 @@ netdev_tx_t aic_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	vif->stats.tx_packets++;
 	vif->stats.tx_bytes += len;
 
+	spin_lock_bh(&hw->tx_lock);
+	if (sta->ps_active) {
+		__skb_queue_tail(&sta->ps_queue, skb);
+		spin_unlock_bh(&hw->tx_lock);
+
+		schedule_work(&hw->ps_work);
+
+		return NETDEV_TX_OK;
+	}
+	spin_unlock_bh(&hw->tx_lock);
+
 	hw->bus_ops->send_data(hw, skb);
 
 	return NETDEV_TX_OK;
@@ -138,6 +149,124 @@ drop:
 	dev_kfree_skb_any(skb);
 
 	return NETDEV_TX_OK;
+}
+
+/**
+ * aic_sta_init - prepare a peer entry for use
+ * @sta: peer entry, previously unused or released
+ * @sta_idx: firmware index of the peer
+ */
+void aic_sta_init(struct aic_sta *sta, u8 sta_idx)
+{
+	memset(sta, 0, sizeof(*sta));
+	skb_queue_head_init(&sta->ps_queue);
+	sta->sta_idx = sta_idx;
+	sta->valid = true;
+}
+
+/**
+ * aic_sta_release - drop a peer entry and everything held for it
+ * @sta: peer entry
+ */
+void aic_sta_release(struct aic_sta *sta)
+{
+	sta->valid = false;
+	sta->ps_active = false;
+	skb_queue_purge(&sta->ps_queue);
+}
+
+/**
+ * aic_txq_ps_work - tell the firmware which peers have traffic waiting
+ * @work: work item in &aic_hw
+ *
+ * The firmware sets the traffic indication bit in the beacon from this, and it
+ * cannot be told from the contexts frames are queued in, so it happens here.
+ */
+void aic_txq_ps_work(struct work_struct *work)
+{
+	struct aic_hw *hw = container_of(work, struct aic_hw, ps_work);
+	int i;
+
+	mutex_lock(&hw->mutex);
+
+	for (i = 0; i < AIC_MAX_STA; i++) {
+		struct aic_sta *sta = &hw->sta[i];
+		bool waiting;
+
+		if (!sta->valid)
+			continue;
+
+		spin_lock_bh(&hw->tx_lock);
+		waiting = !skb_queue_empty(&sta->ps_queue);
+		spin_unlock_bh(&hw->tx_lock);
+
+		if (waiting == sta->ps_announced)
+			continue;
+
+		if (!aic_send_me_traffic_ind(hw, sta->sta_idx, false, waiting))
+			sta->ps_announced = waiting;
+	}
+
+	mutex_unlock(&hw->mutex);
+}
+
+/**
+ * aic_txq_ps_change - a peer went to sleep or woke up
+ * @hw: device
+ * @sta: peer
+ * @asleep: the peer is now asleep
+ *
+ * Frames for a sleeping peer are held back until the firmware asks for them,
+ * which it does once the peer polls for its traffic.
+ */
+void aic_txq_ps_change(struct aic_hw *hw, struct aic_sta *sta, bool asleep)
+{
+	struct sk_buff_head release;
+	struct sk_buff *skb;
+
+	__skb_queue_head_init(&release);
+
+	spin_lock_bh(&hw->tx_lock);
+	sta->ps_active = asleep;
+	if (!asleep)
+		skb_queue_splice_tail_init(&sta->ps_queue, &release);
+	spin_unlock_bh(&hw->tx_lock);
+
+	if (asleep)
+		return;
+
+	while ((skb = __skb_dequeue(&release)))
+		hw->bus_ops->send_data(hw, skb);
+
+	schedule_work(&hw->ps_work);
+}
+
+/**
+ * aic_txq_ps_release - let a sleeping peer have some of its traffic
+ * @hw: device
+ * @sta: peer
+ * @pkt_cnt: number of frames to release, zero for all of them
+ */
+void aic_txq_ps_release(struct aic_hw *hw, struct aic_sta *sta, u8 pkt_cnt)
+{
+	struct sk_buff_head release;
+	struct sk_buff *skb;
+
+	__skb_queue_head_init(&release);
+
+	spin_lock_bh(&hw->tx_lock);
+	while (!skb_queue_empty(&sta->ps_queue)) {
+		if (pkt_cnt && release.qlen == pkt_cnt)
+			break;
+
+		__skb_queue_tail(&release, __skb_dequeue(&sta->ps_queue));
+	}
+	spin_unlock_bh(&hw->tx_lock);
+
+	while ((skb = __skb_dequeue(&release)))
+		hw->bus_ops->send_data(hw, skb);
+
+	schedule_work(&hw->ps_work);
 }
 
 /**

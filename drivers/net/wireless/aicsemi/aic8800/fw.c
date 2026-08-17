@@ -498,6 +498,15 @@ int aic_fw_load(struct aic_hw *hw)
 	if (chip_h < 0)
 		return chip_h;
 
+	/*
+	 * Reloading the driver or a warm boot leaves the firmware running, and
+	 * it is the same image the driver would load, so keep it.
+	 */
+	if (aic_fw_probe_running(hw)) {
+		dev_info(hw->dev, "firmware is already running\n");
+		return 0;
+	}
+
 	rev = hw->chip_rev >= AIC_CHIP_REV_U04 ? "u04" : "u02";
 
 	if (bluetooth) {

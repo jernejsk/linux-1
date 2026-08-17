@@ -540,6 +540,11 @@ static int aic_cfg_scan(struct wiphy *wiphy,
 		goto out;
 	}
 
+	/* the elements are kept by the firmware until the next scan */
+	ret = aic_send_scanu_vendor_ie(hw, vif, request->ie, request->ie_len);
+	if (ret)
+		goto out;
+
 	hw->scan_req = request;
 	ret = aic_send_scanu_req(hw, vif, request);
 	if (ret)
@@ -748,9 +753,7 @@ static int aic_cfg_add_station(struct wiphy *wiphy, struct wireless_dev *wdev,
 	}
 
 	sta = &hw->sta[sta_idx];
-	memset(sta, 0, sizeof(*sta));
-	sta->valid = true;
-	sta->sta_idx = sta_idx;
+	aic_sta_init(sta, sta_idx);
 	sta->vif_idx = vif->vif_index;
 	sta->ch_idx = vif->ch_index;
 	ether_addr_copy(sta->addr, mac);
@@ -773,7 +776,7 @@ static void aic_sta_forget(struct aic_hw *hw, struct aic_vif *vif,
 	if (vif->wdev.iftype == NL80211_IFTYPE_AP ||
 	    vif->wdev.iftype == NL80211_IFTYPE_P2P_GO)
 		list_del(&sta->list);
-	sta->valid = false;
+	aic_sta_release(sta);
 }
 
 static int aic_cfg_del_station(struct wiphy *wiphy, struct wireless_dev *wdev,
@@ -803,7 +806,7 @@ static int aic_cfg_del_station(struct wiphy *wiphy, struct wireless_dev *wdev,
 		}
 	} else if (vif->sta.ap) {
 		ret = aic_send_me_sta_del(hw, vif->sta.ap->sta_idx);
-		vif->sta.ap->valid = false;
+		aic_sta_release(vif->sta.ap);
 		vif->sta.ap = NULL;
 	}
 
@@ -858,6 +861,45 @@ static int aic_cfg_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
 	sinfo->tx_bytes = vif->stats.tx_bytes;
 
 	return 0;
+}
+
+static int aic_cfg_dump_station(struct wiphy *wiphy, struct wireless_dev *wdev,
+				int idx, u8 *mac, struct station_info *sinfo)
+{
+	struct aic_vif *vif = container_of(wdev, struct aic_vif, wdev);
+	struct aic_hw *hw = wiphy_priv(wiphy);
+	struct aic_sta *sta = NULL;
+	int i = 0;
+
+	mutex_lock(&hw->mutex);
+
+	switch (vif->wdev.iftype) {
+	case NL80211_IFTYPE_STATION:
+	case NL80211_IFTYPE_P2P_CLIENT:
+		if (idx == 0)
+			sta = vif->sta.ap;
+		break;
+	case NL80211_IFTYPE_AP:
+	case NL80211_IFTYPE_P2P_GO:
+		list_for_each_entry(sta, &vif->ap.sta_list, list)
+			if (i++ == idx)
+				break;
+		if (i <= idx)
+			sta = NULL;
+		break;
+	default:
+		break;
+	}
+
+	if (sta && sta->valid)
+		ether_addr_copy(mac, sta->addr);
+
+	mutex_unlock(&hw->mutex);
+
+	if (!sta || !sta->valid)
+		return -ENOENT;
+
+	return aic_cfg_get_station(wiphy, wdev, mac, sinfo);
 }
 
 /* AP mode. -----------------------------------------------------------------*/
@@ -920,9 +962,7 @@ static int aic_cfg_start_ap(struct wiphy *wiphy, struct net_device *ndev,
 
 	if (bcmc_idx < AIC_MAX_STA) {
 		bcmc = &hw->sta[bcmc_idx];
-		memset(bcmc, 0, sizeof(*bcmc));
-		bcmc->valid = true;
-		bcmc->sta_idx = bcmc_idx;
+		aic_sta_init(bcmc, bcmc_idx);
 		bcmc->vif_idx = vif->vif_index;
 		bcmc->ch_idx = ch_idx;
 		eth_broadcast_addr(bcmc->addr);
@@ -983,7 +1023,7 @@ static int aic_cfg_stop_ap(struct wiphy *wiphy, struct net_device *ndev,
 
 	aic_send_apm_stop(hw, vif->vif_index);
 	if (vif->ap.bcmc_idx < AIC_MAX_STA)
-		hw->sta[vif->ap.bcmc_idx].valid = false;
+		aic_sta_release(&hw->sta[vif->ap.bcmc_idx]);
 	vif->ap.started = false;
 
 	netif_carrier_off(ndev);
@@ -1349,6 +1389,7 @@ const struct cfg80211_ops aic_cfg80211_ops = {
 	.del_station = aic_cfg_del_station,
 	.change_station = aic_cfg_change_station,
 	.get_station = aic_cfg_get_station,
+	.dump_station = aic_cfg_dump_station,
 	.start_ap = aic_cfg_start_ap,
 	.change_beacon = aic_cfg_change_beacon,
 	.stop_ap = aic_cfg_stop_ap,
@@ -1420,7 +1461,7 @@ int aic_cfg80211_init(struct aic_hw *hw)
 	wiphy_ext_feature_set(wiphy, NL80211_EXT_FEATURE_4WAY_HANDSHAKE_STA_1X);
 
 	wiphy->max_scan_ssids = SCAN_SSID_MAX;
-	wiphy->max_scan_ie_len = 0;
+	wiphy->max_scan_ie_len = AIC_SCAN_IE_MAX;
 	wiphy->max_num_pmkids = 4;
 	wiphy->max_remain_on_channel_duration = 5000;
 	wiphy->cipher_suites = aic_cipher_suites;

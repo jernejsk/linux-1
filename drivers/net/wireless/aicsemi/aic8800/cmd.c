@@ -96,20 +96,23 @@ void aic_msg_free(const void *param)
 }
 
 /**
- * aic_send_msg - send a request to the firmware
+ * aic_send_msg_timeout - send a request to the firmware
  * @hw: device
  * @param: parameter area returned by aic_msg_alloc(), freed on return
- * @need_cfm: wait for the confirmation before returning
- * @cfm_id: id of the expected confirmation
+ * @cfm_id: id of the expected confirmation, zero to not wait for one
  * @cfm: buffer for the confirmation payload, may be %NULL
  * @cfm_len: size of @cfm
+ * @timeout_ms: how long to wait for the confirmation
+ * @fatal: treat a timeout as the firmware having died
  */
-int aic_send_msg(struct aic_hw *hw, const void *param, bool need_cfm,
-		 u16 cfm_id, void *cfm, u16 cfm_len)
+int aic_send_msg_timeout(struct aic_hw *hw, const void *param, u16 cfm_id,
+			 void *cfm, u16 cfm_len, unsigned int timeout_ms,
+			 bool fatal)
 {
 	struct aic_msg_hdr *msg = aic_msg_of(param);
 	struct aic_cmd_mgr *mgr = &hw->cmd_mgr;
 	unsigned int len = struct_size(msg, param, le16_to_cpu(msg->param_len));
+	bool need_cfm = cfm_id != 0;
 	struct aic_cmd cmd = {};
 	int ret;
 
@@ -148,10 +151,13 @@ int aic_send_msg(struct aic_hw *hw, const void *param, bool need_cfm,
 		goto out;
 
 	if (!wait_for_completion_timeout(&cmd.done,
-					 msecs_to_jiffies(AIC_CMD_TIMEOUT_MS))) {
-		dev_err(hw->dev, "message %04x timed out waiting for %04x\n",
-			cmd.id, cfm_id);
-		mgr->crashed = true;
+					 msecs_to_jiffies(timeout_ms))) {
+		if (fatal) {
+			dev_err(hw->dev,
+				"message %04x timed out waiting for %04x\n",
+				cmd.id, cfm_id);
+			mgr->crashed = true;
+		}
 		ret = -ETIMEDOUT;
 		goto out;
 	}
@@ -169,6 +175,22 @@ out:
 	aic_msg_free(param);
 
 	return ret;
+}
+
+/**
+ * aic_send_msg - send a request and wait for its confirmation
+ * @hw: device
+ * @param: parameter area returned by aic_msg_alloc(), freed on return
+ * @need_cfm: wait for the confirmation before returning
+ * @cfm_id: id of the expected confirmation
+ * @cfm: buffer for the confirmation payload, may be %NULL
+ * @cfm_len: size of @cfm
+ */
+int aic_send_msg(struct aic_hw *hw, const void *param, bool need_cfm,
+		 u16 cfm_id, void *cfm, u16 cfm_len)
+{
+	return aic_send_msg_timeout(hw, param, need_cfm ? cfm_id : 0, cfm,
+				    cfm_len, AIC_CMD_TIMEOUT_MS, true);
 }
 
 /**

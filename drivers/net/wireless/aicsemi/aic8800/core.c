@@ -168,6 +168,8 @@ struct aic_hw *aic_hw_alloc(struct device *dev, const struct aic_bus_ops *ops,
 	for (i = 0; i < AIC_TXQ_CNT; i++)
 		skb_queue_head_init(&hw->txq[i]);
 
+	INIT_WORK(&hw->ps_work, aic_txq_ps_work);
+
 	aic_cmd_mgr_init(&hw->cmd_mgr);
 
 	hw->napi_dev = alloc_netdev_dummy(0);
@@ -190,6 +192,11 @@ void aic_hw_free(struct aic_hw *hw)
 	free_netdev(hw->napi_dev);
 
 	aic_cmd_mgr_deinit(&hw->cmd_mgr);
+
+	cancel_work_sync(&hw->ps_work);
+
+	for (i = 0; i < AIC_MAX_STA; i++)
+		aic_sta_release(&hw->sta[i]);
 
 	aic_txcfm_flush(hw, NULL);
 
