@@ -124,6 +124,7 @@ struct aic_sta {
 	u8 acm;
 	u8 uapsd_tids;
 	u8 ch_idx;
+	u8 hw_key_idx;
 	u16 listen_interval;
 };
 
@@ -154,19 +155,37 @@ struct aic_vif {
 	bool up;
 	bool use_4addr;
 
+	/* hardware key index per default key slot */
+	u8 key_hw_idx[4];
+
+	/* channel the interface is operating on, valid while connected or up */
+	struct cfg80211_chan_def chandef;
+
 	union {
 		struct {
 			struct aic_sta *ap;
-			struct cfg80211_bss *bss;
 			bool external_auth;
-			u8 tdls_sta_idx;
 		} sta;
 		struct {
 			struct list_head sta_list;
 			bool started;
-			bool flushing;
+			u8 bcmc_idx;
 		} ap;
 	};
+};
+
+/**
+ * struct aic_survey - per channel survey data reported by the firmware
+ * @filled: the firmware has reported this channel at least once
+ * @chan_time_ms: time spent on the channel
+ * @chan_time_busy_ms: of which the channel was busy
+ * @noise_dbm: measured noise floor
+ */
+struct aic_survey {
+	bool filled;
+	u32 chan_time_ms;
+	u32 chan_time_busy_ms;
+	s8 noise_dbm;
 };
 
 /**
@@ -242,7 +261,10 @@ struct aic_hw {
 
 	struct cfg80211_scan_request *scan_req;
 	struct wireless_dev *roc;
+	struct ieee80211_channel *roc_chan;
 	bool roc_started;
+
+	struct aic_survey survey[64];
 
 	u8 monitor_vif;
 	struct cfg80211_chan_def chandef_monitor;
@@ -335,6 +357,7 @@ int aic_fw_load(struct aic_hw *hw);
 void aic_rx_handle_event(struct aic_hw *hw, u16 id, const void *param, u16 len);
 
 /* cfg80211.c */
+extern const struct cfg80211_ops aic_cfg80211_ops;
 int aic_cfg80211_init(struct aic_hw *hw);
 void aic_cfg80211_deinit(struct aic_hw *hw);
 struct aic_vif *aic_vif_from_fw_idx(struct aic_hw *hw, u8 vif_idx);

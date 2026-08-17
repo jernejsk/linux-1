@@ -14,21 +14,6 @@
 
 #define AIC_NAPI_WEIGHT		64
 
-static void aic_rx_data(struct aic_hw *hw, const u8 *data, unsigned int len)
-{
-	const struct aic_rxhdr *rxhdr = (const struct aic_rxhdr *)data;
-
-	/*
-	 * Data path is added by txrx.c; until then just account for the frame
-	 * so that a firmware that starts sending traffic does not go unnoticed.
-	 */
-	dev_dbg_ratelimited(hw->dev,
-			    "rx frame: %u bytes, vif %u, sta %u, flags %s%s\n",
-			    len, rxhdr->flags_vif_idx, rxhdr->flags_sta_idx,
-			    rxhdr->flags_is_amsdu ? "amsdu " : "",
-			    rxhdr->flags_is_80211_mpdu ? "mpdu " : "");
-}
-
 static void aic_rx_data_cfm(struct aic_hw *hw, const void *param,
 			    unsigned int len)
 {
@@ -88,7 +73,8 @@ static int aic_rx_process(struct aic_hw *hw, struct sk_buff *skb)
 			if (off + AIC_RX_HDR_LEN + len > skb->len)
 				break;
 
-			aic_rx_data(hw, hdr, len);
+			aic_rx_frame(hw, (const struct aic_rxhdr *)hdr,
+				     hdr + AIC_RX_HDR_LEN, len);
 			frames++;
 		} else {
 			stride = round_up(len, AIC_BUS_ALIGN) + AIC_BUS_HDR_LEN;
@@ -147,11 +133,16 @@ struct aic_hw *aic_hw_alloc(struct device *dev, const struct aic_bus_ops *ops,
 			    void *bus_priv)
 {
 	struct aic_hw *hw;
+	struct wiphy *wiphy;
 	int i;
 
-	hw = kzalloc(sizeof(*hw), GFP_KERNEL);
-	if (!hw)
+	wiphy = wiphy_new(&aic_cfg80211_ops, sizeof(*hw));
+	if (!wiphy)
 		return ERR_PTR(-ENOMEM);
+
+	hw = wiphy_priv(wiphy);
+	hw->wiphy = wiphy;
+	set_wiphy_dev(wiphy, dev);
 
 	hw->dev = dev;
 	hw->bus_ops = ops;
@@ -171,7 +162,7 @@ struct aic_hw *aic_hw_alloc(struct device *dev, const struct aic_bus_ops *ops,
 	hw->napi_dev = alloc_netdev_dummy(0);
 	if (!hw->napi_dev) {
 		mutex_destroy(&hw->mutex);
-		kfree(hw);
+		wiphy_free(wiphy);
 		return ERR_PTR(-ENOMEM);
 	}
 
@@ -194,7 +185,7 @@ void aic_hw_free(struct aic_hw *hw)
 		skb_queue_purge(&hw->txq[i]);
 
 	mutex_destroy(&hw->mutex);
-	kfree(hw);
+	wiphy_free(hw->wiphy);
 }
 
 int aic_hw_start(struct aic_hw *hw)
@@ -234,6 +225,10 @@ int aic_hw_start(struct aic_hw *hw)
 		goto err_bus;
 	}
 
+	ret = aic_cfg80211_init(hw);
+	if (ret)
+		goto err_bus;
+
 	return 0;
 
 err_bus:
@@ -246,6 +241,7 @@ err_napi:
 
 void aic_hw_stop(struct aic_hw *hw)
 {
+	aic_cfg80211_deinit(hw);
 	hw->bus_ops->stop(hw);
 	napi_disable(&hw->napi);
 }
