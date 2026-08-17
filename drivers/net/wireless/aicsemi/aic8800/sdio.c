@@ -68,6 +68,31 @@
 
 #define AIC_FLOW_CTRL_RETRIES		50
 
+/* Buffers read from the device per interrupt before yielding the bus. */
+#define AIC_SDIO_RX_BUDGET		32
+
+/*
+ * Function 0 registers of the device SDIO block that control how it samples
+ * the bus.  The defaults only work up to 25 MHz on some boards.
+ */
+#define AIC_SDIO_F0_IOPAD_CTRL		0xf0
+#define AIC_SDIO_F0_IOPAD_DELAY1		0xf1
+#define AIC_SDIO_F0_IOPAD_DELAY2		0xf8
+#define AIC_SDIO_F0_DRIVE		0xf2
+
+#define AIC_SDIO_IOPAD_CTRL_SDR		0x01
+#define AIC_SDIO_IOPAD_CTRL_DDR		0x21
+#define AIC_SDIO_IOPAD_CTRL_FREE_CLK	BIT(6)
+
+static int iopad_delay = 0x40;
+module_param(iopad_delay, int, 0644);
+MODULE_PARM_DESC(iopad_delay,
+		 "device side SDIO input delay, -1 to leave it alone");
+
+static int iopad_delay2;
+module_param(iopad_delay2, int, 0644);
+MODULE_PARM_DESC(iopad_delay2, "device side SDIO output delay");
+
 struct aic_sdio {
 	struct sdio_func *func;
 	struct aic_hw *hw;
@@ -468,20 +493,22 @@ static void aic_sdio_irq(struct sdio_func *func)
 	struct aic_sdio *sdio = sdio_get_drvdata(func);
 	struct aic_hw *hw = sdio->hw;
 	bool queued = false;
-	int ret;
+	int ret, i;
 
 	if (!hw || !sdio->up)
 		return;
 
 	/*
 	 * The host is already claimed for us.  Drain the device in a bounded
-	 * loop so that a busy device cannot starve the transmit thread.
+	 * loop: a busy device must not starve the transmit thread, and a device
+	 * that reports data that never goes away must not wedge the bus.
 	 */
-	do {
+	for (i = 0; i < AIC_SDIO_RX_BUDGET; i++) {
 		ret = aic_sdio_rx_one(sdio);
-		if (ret > 0)
-			queued = true;
-	} while (ret > 0);
+		if (ret <= 0)
+			break;
+		queued = true;
+	}
 
 	if (queued)
 		napi_schedule(&hw->napi);
@@ -607,9 +634,32 @@ static int aic_sdio_func_init(struct aic_sdio *sdio)
 		goto out;
 	}
 
-	sdio_f0_writeb(func, 0x7f, 0xf2, &ret);
+	sdio_f0_writeb(func, 0x7f, AIC_SDIO_F0_DRIVE, &ret);
 	if (ret)
 		goto out;
+
+	/*
+	 * Tell the device how to sample the bus.  Without this it answers
+	 * writes with a CRC error as soon as the clock goes past 25 MHz.
+	 */
+	if (iopad_delay >= 0) {
+		u8 ctrl = AIC_SDIO_IOPAD_CTRL_FREE_CLK;
+
+		ctrl |= func->card->host->ios.timing == MMC_TIMING_UHS_DDR50 ?
+			AIC_SDIO_IOPAD_CTRL_DDR : AIC_SDIO_IOPAD_CTRL_SDR;
+
+		sdio_f0_writeb(func, ctrl, AIC_SDIO_F0_IOPAD_CTRL, &ret);
+		if (!ret)
+			sdio_f0_writeb(func, iopad_delay2,
+				       AIC_SDIO_F0_IOPAD_DELAY2, &ret);
+		if (!ret)
+			sdio_f0_writeb(func, iopad_delay,
+				       AIC_SDIO_F0_IOPAD_DELAY1, &ret);
+		if (ret)
+			goto out;
+
+		usleep_range(1000, 2000);
+	}
 
 	/* block mode only, the driver never uses byte mode transfers */
 	ret = aic_sdio_wr(sdio, AIC_SDIO_BYTEMODE_ENABLE, 1);

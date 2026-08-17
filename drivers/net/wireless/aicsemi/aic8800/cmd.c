@@ -171,28 +171,6 @@ out:
 	return ret;
 }
 
-/* Table of handlers for unsolicited messages, filled in by event.c. */
-static const struct aic_event_handler {
-	u16 id;
-	void (*fn)(struct aic_hw *hw, const void *param, u16 len);
-} aic_event_handlers[] = {
-};
-
-static void aic_handle_event(struct aic_hw *hw, u16 id, const void *param,
-			     u16 len)
-{
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(aic_event_handlers); i++) {
-		if (aic_event_handlers[i].id == id) {
-			aic_event_handlers[i].fn(hw, param, len);
-			return;
-		}
-	}
-
-	dev_dbg(hw->dev, "unhandled firmware message %04x\n", id);
-}
-
 /**
  * aic_rx_handle_msg - process one message coming from the firmware
  * @hw: device
@@ -238,7 +216,7 @@ void aic_rx_handle_msg(struct aic_hw *hw, const void *buf, unsigned int len)
 	spin_unlock_bh(&mgr->lock);
 
 	if (!found)
-		aic_handle_event(hw, id, ind->param, param_len);
+		aic_rx_handle_event(hw, id, ind->param, param_len);
 }
 
 /**
