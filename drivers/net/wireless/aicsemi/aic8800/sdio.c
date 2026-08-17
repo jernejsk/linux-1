@@ -653,7 +653,7 @@ static int aic_sdio_wakeup(struct aic_sdio *sdio)
 		if (ret || !(val & AIC_SDIO_TO_DEVICE_SOFT_IRQ))
 			break;
 
-		udelay(200);
+		usleep_range(200, 400);
 	}
 
 	sdio_release_host(sdio->func);
@@ -676,7 +676,7 @@ static int aic_sdio_suspend(struct device *dev)
 
 	if (!(sdio_get_host_pm_caps(func) & MMC_PM_KEEP_POWER)) {
 		dev_err(dev, "the host cannot keep this device powered\n");
-		return -ENOSYS;
+		return -EOPNOTSUPP;
 	}
 
 	/*
