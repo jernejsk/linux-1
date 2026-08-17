@@ -120,6 +120,7 @@ struct aic_sdio {
 	int wake_irq;
 
 	bool up;
+	bool suspended;
 };
 
 /*
@@ -406,13 +407,17 @@ static int aic_sdio_tx_thread(void *data)
 
 	while (!kthread_should_stop()) {
 		wait_event_interruptible(sdio->tx_wq,
-					 atomic_read(&sdio->tx_pending) ||
+					 (atomic_read(&sdio->tx_pending) &&
+					  !sdio->suspended) ||
 					 kthread_should_stop());
 		if (kthread_should_stop())
 			break;
 
 		atomic_set(&sdio->tx_pending, 0);
 		aic_sdio_tx_work(sdio);
+
+		/* let a waiting suspend know that the queues are drained */
+		wake_up(&sdio->tx_wq);
 	}
 
 	return 0;
@@ -687,9 +692,13 @@ static int aic_sdio_suspend(struct device *dev)
 
 	aic_hw_suspend(hw);
 
-	/* let the transmit thread finish what it has already queued */
+	/*
+	 * Let the transmit thread finish what it has already queued and keep it
+	 * off the bus from here on, the host is about to suspend the card.
+	 */
 	wait_event_timeout(sdio->tx_wq, !atomic_read(&sdio->tx_pending),
 			   msecs_to_jiffies(100));
+	sdio->suspended = true;
 
 	if (sdio->wake_irq > 0 && hw->wakeup_enabled) {
 		enable_irq(sdio->wake_irq);
@@ -715,6 +724,7 @@ static int aic_sdio_resume(struct device *dev)
 	if (ret)
 		return ret;
 
+	sdio->suspended = false;
 	aic_hw_resume(hw);
 
 	/* anything that arrived while suspended is waiting to be read */
