@@ -153,8 +153,11 @@
 	mmc-pwrseq = <&wifi_pwrseq>;
 	bus-width = <4>;
 	non-removable;
-	sd-uhs-sdr50;
-	sd-uhs-sdr104;
+	/*
+	 * The controller has no tuning support, so the SDR50 and SDR104 modes
+	 * cannot be used even though both ends would allow them.
+	 */
+	max-frequency = <25000000>;
 	status = "okay";
 
 	wifi@1 {

@@ -205,7 +205,12 @@ static int aic_sdio_send_msg(struct aic_hw *hw, const void *msg,
 	if (len + AIC_SDIO_TAIL_LEN > AIC_MSG_BUF_SIZE)
 		return -EMSGSIZE;
 
-	memset(buf, 0, len + AIC_SDIO_TAIL_LEN);
+	/*
+	 * The device keeps parsing packet headers until it finds a zero length,
+	 * so everything that goes out on the wire has to be initialised, not
+	 * just the message itself.
+	 */
+	memset(buf, 0, round_up(len + AIC_SDIO_TAIL_LEN, AIC_SDIO_BLOCK_SIZE));
 	put_unaligned_le16(msg_len + 4, buf);
 	buf[2] = AIC_PKT_CFG_CMD_RSP;
 	buf[3] = aic_crc8(buf, 3);
@@ -219,6 +224,7 @@ static int aic_sdio_send_msg(struct aic_hw *hw, const void *msg,
 
 	credits = aic_sdio_credits(sdio, false);
 	if (credits < 0) {
+		dev_err(hw->dev, "no room for a message: %d\n", credits);
 		ret = credits;
 		goto out;
 	}
@@ -228,6 +234,9 @@ static int aic_sdio_send_msg(struct aic_hw *hw, const void *msg,
 	}
 
 	ret = aic_sdio_write_fifo(sdio, buf, len);
+	if (ret)
+		dev_err(hw->dev, "message write of %u bytes failed: %d\n", len,
+			ret);
 
 out:
 	sdio_release_host(sdio->func);
@@ -574,12 +583,17 @@ static const struct aic_bus_ops aic_sdio_bus_ops = {
 static int aic_sdio_func_init(struct aic_sdio *sdio)
 {
 	struct sdio_func *func = sdio->func;
-	u8 val;
 	int ret;
 
 	sdio_claim_host(func);
 
-	func->card->quirks |= MMC_QUIRK_LENIENT_FN0;
+	/*
+	 * The device only accepts block mode transfers, but the SDIO core picks
+	 * byte mode whenever a transfer is not larger than one block.  Capping
+	 * byte mode at 511 bytes makes it use block mode from one block on.
+	 */
+	func->card->quirks |= MMC_QUIRK_LENIENT_FN0 |
+			      MMC_QUIRK_BROKEN_BYTE_MODE_512;
 
 	ret = sdio_set_block_size(func, AIC_SDIO_BLOCK_SIZE);
 	if (ret) {
@@ -599,28 +613,6 @@ static int aic_sdio_func_init(struct aic_sdio *sdio)
 
 	/* block mode only, the driver never uses byte mode transfers */
 	ret = aic_sdio_wr(sdio, AIC_SDIO_BYTEMODE_ENABLE, 1);
-	if (ret)
-		goto out;
-
-	ret = aic_sdio_wr(sdio, AIC_SDIO_INTR_TO_DEVICE,
-			  AIC_SDIO_TO_DEVICE_WAKEUP);
-	if (ret)
-		goto out;
-
-	sdio_release_host(func);
-
-	usleep_range(5000, 6000);
-
-	sdio_claim_host(func);
-	ret = aic_sdio_rd(sdio, AIC_SDIO_INTR_PENDING, &val);
-	if (ret)
-		goto out;
-
-	if (!(val & AIC_SDIO_PENDING_AWAKE)) {
-		dev_err(&func->dev, "device did not wake up (pending %02x)\n",
-			val);
-		ret = -EIO;
-	}
 
 out:
 	sdio_release_host(func);

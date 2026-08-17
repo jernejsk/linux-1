@@ -115,6 +115,7 @@ struct aic_cmd_mgr {
  * @listen_interval: as announced by the peer
  */
 struct aic_sta {
+	struct list_head list;
 	bool valid;
 	u8 sta_idx;
 	u8 vif_idx;
@@ -265,6 +266,11 @@ int aic_send_msg(struct aic_hw *hw, const void *param, bool need_cfm,
 void aic_rx_handle_msg(struct aic_hw *hw, const void *buf, unsigned int len);
 void aic_rx_handle_print(struct aic_hw *hw, const void *buf, unsigned int len);
 
+/* chan.c */
+u8 aic_chan_width_to_fw(enum nl80211_chan_width width);
+void aic_chandef_to_fw(const struct cfg80211_chan_def *chandef,
+		       struct mac_chan_op *op);
+
 /* msg_tx.c */
 int aic_send_reset(struct aic_hw *hw);
 int aic_send_version_req(struct aic_hw *hw);
@@ -275,9 +281,70 @@ int aic_send_dbg_mem_block_write(struct aic_hw *hw, u32 addr, const void *data,
 				 u32 len);
 int aic_send_dbg_start_app(struct aic_hw *hw, u32 boot_addr, u32 boot_type,
 			   u32 *boot_status);
+int aic_send_me_config(struct aic_hw *hw);
+int aic_send_me_chan_config(struct aic_hw *hw);
+int aic_send_start(struct aic_hw *hw);
+int aic_send_get_mac_addr(struct aic_hw *hw, u8 *addr);
+int aic_send_add_if(struct aic_hw *hw, const u8 *mac, enum nl80211_iftype type,
+		    bool p2p, u8 *vif_idx);
+int aic_send_remove_if(struct aic_hw *hw, u8 vif_idx);
+int aic_send_set_filter(struct aic_hw *hw, u32 filter);
+int aic_send_chan_ctxt_add(struct aic_hw *hw,
+			   const struct cfg80211_chan_def *chandef, u8 *idx);
+int aic_send_chan_ctxt_del(struct aic_hw *hw, u8 idx);
+int aic_send_chan_ctxt_link(struct aic_hw *hw, u8 vif_idx, u8 chan_idx,
+			    bool chan_switch);
+int aic_send_chan_ctxt_unlink(struct aic_hw *hw, u8 vif_idx);
+int aic_send_key_add(struct aic_hw *hw, u8 vif_idx, u8 sta_idx, bool pairwise,
+		     const u8 *key, u8 key_len, u8 key_idx, u8 cipher_suite,
+		     u8 *hw_key_idx);
+int aic_send_key_del(struct aic_hw *hw, u8 hw_key_idx);
+int aic_send_scanu_req(struct aic_hw *hw, struct aic_vif *vif,
+		       struct cfg80211_scan_request *req);
+int aic_send_scanu_cancel(struct aic_hw *hw);
+int aic_send_sm_connect(struct aic_hw *hw, struct aic_vif *vif,
+			struct cfg80211_connect_params *sme);
+int aic_send_sm_disconnect(struct aic_hw *hw, struct aic_vif *vif,
+			   u16 reason);
+int aic_send_sm_external_auth_rsp(struct aic_hw *hw, u8 vif_idx, u16 status);
+int aic_send_me_sta_add(struct aic_hw *hw, struct aic_vif *vif,
+			struct station_parameters *params, const u8 *mac,
+			u8 *sta_idx);
+int aic_send_me_sta_del(struct aic_hw *hw, u8 sta_idx);
+int aic_send_me_set_control_port(struct aic_hw *hw, u8 sta_idx, bool open);
+int aic_send_me_set_ps_mode(struct aic_hw *hw, bool enable);
+int aic_send_me_config_monitor(struct aic_hw *hw,
+			       const struct cfg80211_chan_def *chandef,
+			       u8 *chan_idx);
+int aic_send_apm_start(struct aic_hw *hw, struct aic_vif *vif,
+		       struct cfg80211_ap_settings *settings,
+		       struct sk_buff *bcn, u16 tim_oft, u8 tim_len,
+		       u8 *ch_idx, u8 *bcmc_idx);
+int aic_send_apm_stop(struct aic_hw *hw, u8 vif_idx);
+int aic_send_bcn_change(struct aic_hw *hw, u8 vif_idx, struct sk_buff *bcn,
+			u16 tim_oft, u8 tim_len, const u16 *csa_oft);
+int aic_send_roc(struct aic_hw *hw, struct aic_vif *vif,
+		 struct ieee80211_channel *chan, unsigned int duration);
+int aic_send_cancel_roc(struct aic_hw *hw, struct aic_vif *vif);
+int aic_send_set_power(struct aic_hw *hw, u8 vif_idx, s8 pwr);
 
 /* fw.c */
 int aic_fw_load(struct aic_hw *hw);
+
+/* event.c */
+void aic_rx_handle_event(struct aic_hw *hw, u16 id, const void *param, u16 len);
+
+/* cfg80211.c */
+int aic_cfg80211_init(struct aic_hw *hw);
+void aic_cfg80211_deinit(struct aic_hw *hw);
+struct aic_vif *aic_vif_from_fw_idx(struct aic_hw *hw, u8 vif_idx);
+struct aic_sta *aic_sta_from_fw_idx(struct aic_hw *hw, u8 sta_idx);
+
+/* txrx.c */
+netdev_tx_t aic_start_xmit(struct sk_buff *skb, struct net_device *ndev);
+void aic_rx_frame(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
+		  const u8 *frame, unsigned int len);
+void aic_txq_flush_vif(struct aic_hw *hw, struct aic_vif *vif);
 
 /* core.c */
 struct aic_hw *aic_hw_alloc(struct device *dev, const struct aic_bus_ops *ops,
