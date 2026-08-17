@@ -18,8 +18,10 @@ static void aic_rx_data_cfm(struct aic_hw *hw, const void *param,
 			    unsigned int len)
 {
 	const struct aic_txcfm *cfm = param;
+	struct aic_txcfm_slot slot;
 	struct sk_buff *skb;
 	u32 idx;
+	bool acked;
 
 	if (len < sizeof(*cfm))
 		return;
@@ -27,15 +29,24 @@ static void aic_rx_data_cfm(struct aic_hw *hw, const void *param,
 	idx = le32_to_cpu(cfm->idx) % AIC_TXCFM_RING_SIZE;
 
 	spin_lock_bh(&hw->tx_lock);
-	skb = hw->cfm_ring[idx];
-	hw->cfm_ring[idx] = NULL;
+	slot = hw->cfm_ring[idx];
+	memset(&hw->cfm_ring[idx], 0, sizeof(hw->cfm_ring[idx]));
 	spin_unlock_bh(&hw->tx_lock);
 
+	skb = slot.skb;
 	if (!skb) {
 		dev_warn_ratelimited(hw->dev,
 				     "transmit confirmation for unknown frame %u\n",
 				     idx);
 		return;
+	}
+
+	if (slot.wdev) {
+		acked = !!(le32_to_cpu(cfm->status) & AIC_TXCFM_S_ACKNOWLEDGED);
+
+		skb_pull(skb, sizeof(struct aic_txdesc));
+		cfg80211_mgmt_tx_status(slot.wdev, slot.cookie, skb->data,
+					skb->len, acked, GFP_ATOMIC);
 	}
 
 	dev_consume_skb_any(skb);
@@ -180,6 +191,8 @@ void aic_hw_free(struct aic_hw *hw)
 
 	aic_cmd_mgr_deinit(&hw->cmd_mgr);
 
+	aic_txcfm_flush(hw, NULL);
+
 	skb_queue_purge(&hw->rx_queue);
 	for (i = 0; i < AIC_TXQ_CNT; i++)
 		skb_queue_purge(&hw->txq[i]);
@@ -237,6 +250,39 @@ err_napi:
 	napi_disable(&hw->napi);
 
 	return ret;
+}
+
+/**
+ * aic_hw_suspend - stop using the device without tearing it down
+ * @hw: device
+ *
+ * The firmware keeps running and keeps the connection up while the host is
+ * suspended, so only the host side of the data path is stopped.
+ */
+void aic_hw_suspend(struct aic_hw *hw)
+{
+	struct aic_vif *vif;
+
+	mutex_lock(&hw->mutex);
+	list_for_each_entry(vif, &hw->vifs, list)
+		if (vif->ndev)
+			netif_device_detach(vif->ndev);
+	mutex_unlock(&hw->mutex);
+
+	napi_disable(&hw->napi);
+}
+
+void aic_hw_resume(struct aic_hw *hw)
+{
+	struct aic_vif *vif;
+
+	napi_enable(&hw->napi);
+
+	mutex_lock(&hw->mutex);
+	list_for_each_entry(vif, &hw->vifs, list)
+		if (vif->ndev)
+			netif_device_attach(vif->ndev);
+	mutex_unlock(&hw->mutex);
 }
 
 void aic_hw_stop(struct aic_hw *hw)

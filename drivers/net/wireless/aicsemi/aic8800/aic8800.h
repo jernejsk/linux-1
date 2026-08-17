@@ -129,6 +129,18 @@ struct aic_sta {
 };
 
 /**
+ * struct aic_txcfm_slot - one frame waiting for a transmit confirmation
+ * @skb: frame, still carrying its transmit descriptor
+ * @wdev: interface to report the status on, %NULL for data frames
+ * @cookie: cookie cfg80211 knows the frame by
+ */
+struct aic_txcfm_slot {
+	struct sk_buff *skb;
+	struct wireless_dev *wdev;
+	u64 cookie;
+};
+
+/**
  * struct aic_vif - a virtual interface
  * @list: link in &aic_hw.vifs
  * @hw: owning device
@@ -252,8 +264,12 @@ struct aic_hw {
 
 	spinlock_t tx_lock;
 	struct sk_buff_head txq[AIC_TXQ_CNT];
-	struct sk_buff *cfm_ring[AIC_TXCFM_RING_SIZE];
+	struct aic_txcfm_slot cfm_ring[AIC_TXCFM_RING_SIZE];
 	u32 cfm_idx;
+	u64 mgmt_cookie;
+
+	/* the system was told to keep this device able to wake it */
+	bool wakeup_enabled;
 
 	struct napi_struct napi;
 	struct net_device *napi_dev;
@@ -311,6 +327,8 @@ int aic_send_add_if(struct aic_hw *hw, const u8 *mac, enum nl80211_iftype type,
 		    bool p2p, u8 *vif_idx);
 int aic_send_remove_if(struct aic_hw *hw, u8 vif_idx);
 int aic_send_set_filter(struct aic_hw *hw, u32 filter);
+int aic_send_wakeup_info(struct aic_hw *hw, u16 offset, const u8 *mask,
+			 const u8 *pattern, u16 len);
 int aic_send_chan_ctxt_add(struct aic_hw *hw,
 			   const struct cfg80211_chan_def *chandef, u8 *idx);
 int aic_send_chan_ctxt_del(struct aic_hw *hw, u8 idx);
@@ -368,6 +386,9 @@ netdev_tx_t aic_start_xmit(struct sk_buff *skb, struct net_device *ndev);
 void aic_rx_frame(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 		  const u8 *frame, unsigned int len);
 void aic_txq_flush_vif(struct aic_hw *hw, struct aic_vif *vif);
+void aic_txcfm_flush(struct aic_hw *hw, struct aic_vif *vif);
+int aic_mgmt_tx(struct aic_vif *vif, struct aic_sta *sta,
+		struct cfg80211_mgmt_tx_params *params, u64 *cookie);
 
 /* core.c */
 struct aic_hw *aic_hw_alloc(struct device *dev, const struct aic_bus_ops *ops,
@@ -375,5 +396,7 @@ struct aic_hw *aic_hw_alloc(struct device *dev, const struct aic_bus_ops *ops,
 void aic_hw_free(struct aic_hw *hw);
 int aic_hw_start(struct aic_hw *hw);
 void aic_hw_stop(struct aic_hw *hw);
+void aic_hw_suspend(struct aic_hw *hw);
+void aic_hw_resume(struct aic_hw *hw);
 
 #endif /* AIC8800_H */

@@ -184,6 +184,18 @@ config BT_HCIUART_LL
 
 	  Say Y here to compile support for HCILL protocol.
 
+config BT_HCIUART_AIC
+	bool "AICSemi protocol support"
+	depends on BT_HCIUART_SERDEV
+	select BT_HCIUART_H4
+	help
+	  The AICSemi AIC8800 series combines a Bluetooth controller reached
+	  over a serial port with a wireless device reached over SDIO.  Both
+	  run one firmware image, which the wireless driver loads, so this
+	  only sets the serial port up and speaks H:4 over it.
+
+	  Say Y here to compile support for AICSemi Bluetooth controllers.
+
 config BT_HCIUART_3WIRE
 	bool "Three-wire UART (H5) protocol support"
 	depends on BT_HCIUART
