@@ -113,6 +113,8 @@ struct aic_cmd_mgr {
  * @uapsd_tids: bitmap of TIDs configured for U-APSD
  * @ch_idx: channel context the peer is on
  * @listen_interval: as announced by the peer
+ * @ps_active: the peer is asleep and its traffic has to be held back
+ * @ps_queue: frames held while the peer is asleep
  */
 struct aic_sta {
 	struct list_head list;
@@ -126,6 +128,10 @@ struct aic_sta {
 	u8 ch_idx;
 	u8 hw_key_idx;
 	u16 listen_interval;
+
+	bool ps_active;
+	bool ps_announced;
+	struct sk_buff_head ps_queue;
 };
 
 /**
@@ -271,6 +277,8 @@ struct aic_hw {
 	/* the system was told to keep this device able to wake it */
 	bool wakeup_enabled;
 
+	struct work_struct ps_work;
+
 	struct napi_struct napi;
 	struct net_device *napi_dev;
 	struct sk_buff_head rx_queue;
@@ -299,6 +307,9 @@ void aic_cmd_mgr_init(struct aic_cmd_mgr *mgr);
 void aic_cmd_mgr_deinit(struct aic_cmd_mgr *mgr);
 void *aic_msg_alloc(u16 id, u16 dst, u16 src, u16 param_len);
 void aic_msg_free(const void *param);
+int aic_send_msg_timeout(struct aic_hw *hw, const void *param, u16 cfm_id,
+			 void *cfm, u16 cfm_len, unsigned int timeout_ms,
+			 bool fatal);
 int aic_send_msg(struct aic_hw *hw, const void *param, bool need_cfm,
 		 u16 cfm_id, void *cfm, u16 cfm_len);
 void aic_rx_handle_msg(struct aic_hw *hw, const void *buf, unsigned int len);
@@ -312,6 +323,13 @@ void aic_chandef_to_fw(const struct cfg80211_chan_def *chandef,
 /* msg_tx.c */
 int aic_send_reset(struct aic_hw *hw);
 int aic_send_version_req(struct aic_hw *hw);
+bool aic_fw_probe_running(struct aic_hw *hw);
+
+/* Room the firmware has for elements to add to a probe request. */
+#define AIC_SCAN_IE_MAX			256
+
+/* The boot ROM never answers a firmware message, so do not wait long. */
+#define AIC_FW_PROBE_TIMEOUT_MS		300
 int aic_send_dbg_mem_read(struct aic_hw *hw, u32 addr, u32 *val);
 int aic_send_dbg_mem_write(struct aic_hw *hw, u32 addr, u32 val);
 int aic_send_dbg_mem_mask_write(struct aic_hw *hw, u32 addr, u32 mask, u32 val);
@@ -341,6 +359,8 @@ int aic_send_key_add(struct aic_hw *hw, u8 vif_idx, u8 sta_idx, bool pairwise,
 int aic_send_key_del(struct aic_hw *hw, u8 hw_key_idx);
 int aic_send_scanu_req(struct aic_hw *hw, struct aic_vif *vif,
 		       struct cfg80211_scan_request *req);
+int aic_send_scanu_vendor_ie(struct aic_hw *hw, struct aic_vif *vif,
+			     const u8 *ie, size_t ie_len);
 int aic_send_scanu_cancel(struct aic_hw *hw);
 int aic_send_sm_connect(struct aic_hw *hw, struct aic_vif *vif,
 			struct cfg80211_connect_params *sme);
@@ -352,6 +372,8 @@ int aic_send_me_sta_add(struct aic_hw *hw, struct aic_vif *vif,
 			u8 *sta_idx);
 int aic_send_me_sta_del(struct aic_hw *hw, u8 sta_idx);
 int aic_send_me_set_control_port(struct aic_hw *hw, u8 sta_idx, bool open);
+int aic_send_me_traffic_ind(struct aic_hw *hw, u8 sta_idx, bool uapsd,
+			    bool tx_avail);
 int aic_send_me_set_ps_mode(struct aic_hw *hw, bool enable);
 int aic_send_me_config_monitor(struct aic_hw *hw,
 			       const struct cfg80211_chan_def *chandef,
@@ -387,6 +409,11 @@ void aic_rx_frame(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 		  const u8 *frame, unsigned int len);
 void aic_txq_flush_vif(struct aic_hw *hw, struct aic_vif *vif);
 void aic_txcfm_flush(struct aic_hw *hw, struct aic_vif *vif);
+void aic_sta_init(struct aic_sta *sta, u8 sta_idx);
+void aic_sta_release(struct aic_sta *sta);
+void aic_txq_ps_work(struct work_struct *work);
+void aic_txq_ps_change(struct aic_hw *hw, struct aic_sta *sta, bool asleep);
+void aic_txq_ps_release(struct aic_hw *hw, struct aic_sta *sta, u8 pkt_cnt);
 int aic_mgmt_tx(struct aic_vif *vif, struct aic_sta *sta,
 		struct cfg80211_mgmt_tx_params *params, u64 *cookie);
 

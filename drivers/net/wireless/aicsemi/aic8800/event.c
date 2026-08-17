@@ -63,9 +63,7 @@ static void aic_event_connect(struct aic_hw *hw, const void *param, u16 len)
 	if (ind->status_code == WLAN_STATUS_SUCCESS &&
 	    ind->ap_idx < AIC_MAX_STA) {
 		sta = &hw->sta[ind->ap_idx];
-		memset(sta, 0, sizeof(*sta));
-		sta->valid = true;
-		sta->sta_idx = ind->ap_idx;
+		aic_sta_init(sta, ind->ap_idx);
 		sta->vif_idx = ind->vif_idx;
 		sta->ch_idx = ind->ch_idx;
 		sta->qos = ind->qos;
@@ -133,7 +131,7 @@ static void aic_event_disconnect(struct aic_hw *hw, const void *param, u16 len)
 		return;
 
 	if (vif->sta.ap) {
-		vif->sta.ap->valid = false;
+		aic_sta_release(vif->sta.ap);
 		vif->sta.ap = NULL;
 	}
 	memset(&vif->chandef, 0, sizeof(vif->chandef));
@@ -230,6 +228,36 @@ static void aic_event_roc_done(struct aic_hw *hw, const void *param, u16 len)
 	hw->roc_started = false;
 }
 
+static void aic_event_ps_change(struct aic_hw *hw, const void *param, u16 len)
+{
+	const struct mm_ps_change_ind *ind = param;
+	struct aic_sta *sta;
+
+	if (len < sizeof(*ind) || ind->sta_idx >= AIC_MAX_STA)
+		return;
+
+	sta = &hw->sta[ind->sta_idx];
+	if (!sta->valid)
+		return;
+
+	aic_txq_ps_change(hw, sta, ind->ps_state);
+}
+
+static void aic_event_traffic_req(struct aic_hw *hw, const void *param, u16 len)
+{
+	const struct mm_traffic_req_ind *ind = param;
+	struct aic_sta *sta;
+
+	if (len < sizeof(*ind) || ind->sta_idx >= AIC_MAX_STA)
+		return;
+
+	sta = &hw->sta[ind->sta_idx];
+	if (!sta->valid)
+		return;
+
+	aic_txq_ps_release(hw, sta, ind->pkt_cnt);
+}
+
 static void aic_event_tkip_mic_failure(struct aic_hw *hw, const void *param,
 				       u16 len)
 {
@@ -259,6 +287,8 @@ static const struct {
 	{ SM_DISCONNECT_IND,		aic_event_disconnect },
 	{ SM_EXTERNAL_AUTH_REQUIRED_IND, aic_event_external_auth },
 	{ MM_CHANNEL_SURVEY_IND,	aic_event_channel_survey },
+	{ MM_PS_CHANGE_IND,		aic_event_ps_change },
+	{ MM_TRAFFIC_REQ_IND,		aic_event_traffic_req },
 	{ MM_CHANNEL_SWITCH_IND,	aic_event_roc_start },
 	{ MM_REMAIN_ON_CHANNEL_EXP_IND,	aic_event_roc_done },
 	{ ME_TKIP_MIC_FAILURE_IND,	aic_event_tkip_mic_failure },

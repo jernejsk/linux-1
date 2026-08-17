@@ -18,6 +18,26 @@ int aic_send_reset(struct aic_hw *hw)
 	return aic_send_msg(hw, req, true, MM_RESET_CFM, NULL, 0);
 }
 
+/**
+ * aic_fw_probe_running - find out whether the firmware is already up
+ * @hw: device
+ *
+ * The device keeps running when the driver is unloaded, and a warm boot leaves
+ * it running as well, so the firmware may well answer before it was loaded.
+ * The boot ROM ignores this message, which is what the short timeout is for.
+ */
+bool aic_fw_probe_running(struct aic_hw *hw)
+{
+	void *req;
+
+	req = aic_msg_alloc(MM_VERSION_REQ, TASK_MM, DRV_TASK_ID, 0);
+	if (!req)
+		return false;
+
+	return !aic_send_msg_timeout(hw, req, MM_VERSION_CFM, NULL, 0,
+				     AIC_FW_PROBE_TIMEOUT_MS, false);
+}
+
 int aic_send_version_req(struct aic_hw *hw)
 {
 	struct mm_version_cfm cfm = {};
@@ -639,14 +659,41 @@ int aic_send_scanu_req(struct aic_hw *hw, struct aic_vif *vif,
 	}
 
 	/*
-	 * The firmware fetches the extra information elements itself, but this
-	 * family reads them straight out of the message instead of from host
-	 * memory, so there is nothing to map here.
+	 * The additional information elements are passed in a message of their
+	 * own on this family, rather than being fetched from host memory.
 	 */
 	req->add_ies = 0;
 	req->add_ie_len = 0;
 
 	return aic_send_msg(hw, req, true, SCANU_START_CFM, NULL, 0);
+}
+
+/**
+ * aic_send_scanu_vendor_ie - hand over the elements to add to probe requests
+ * @hw: device
+ * @vif: interface that is going to scan
+ * @ie: elements, may be %NULL
+ * @ie_len: length of @ie
+ */
+int aic_send_scanu_vendor_ie(struct aic_hw *hw, struct aic_vif *vif,
+			     const u8 *ie, size_t ie_len)
+{
+	struct scanu_vendor_ie_req *req;
+
+	if (ie_len > sizeof(req->ie))
+		return -EINVAL;
+
+	req = aic_msg_alloc(SCANU_VENDOR_IE_REQ, TASK_SCANU, DRV_TASK_ID,
+			    sizeof(*req));
+	if (!req)
+		return -ENOMEM;
+
+	req->vif_idx = vif->vif_index;
+	req->add_ie_len = ie_len;
+	if (ie_len)
+		memcpy(req->ie, ie, ie_len);
+
+	return aic_send_msg(hw, req, true, SCANU_VENDOR_IE_CFM, NULL, 0);
 }
 
 int aic_send_scanu_cancel(struct aic_hw *hw)
@@ -860,6 +907,23 @@ int aic_send_me_sta_del(struct aic_hw *hw, u8 sta_idx)
 	req->tdls_sta = false;
 
 	return aic_send_msg(hw, req, true, ME_STA_DEL_CFM, NULL, 0);
+}
+
+int aic_send_me_traffic_ind(struct aic_hw *hw, u8 sta_idx, bool uapsd,
+			    bool tx_avail)
+{
+	struct me_traffic_ind_req *req;
+
+	req = aic_msg_alloc(ME_TRAFFIC_IND_REQ, TASK_ME, DRV_TASK_ID,
+			    sizeof(*req));
+	if (!req)
+		return -ENOMEM;
+
+	req->sta_idx = sta_idx;
+	req->tx_avail = tx_avail;
+	req->uapsd = uapsd;
+
+	return aic_send_msg(hw, req, true, ME_TRAFFIC_IND_CFM, NULL, 0);
 }
 
 int aic_send_me_set_control_port(struct aic_hw *hw, u8 sta_idx, bool open)
