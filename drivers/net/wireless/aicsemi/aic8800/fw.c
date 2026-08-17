@@ -254,7 +254,10 @@ enum aic_bt_inf_field {
 	AIC_BT_INF_PATCH_ADDR	= 1,
 	AIC_BT_INF_RESET	= 2,
 	AIC_BT_INF_ADID_FLAG	= 3,
+	/* only the pairs up to here are writes the device wants */
+	AIC_BT_INF_WRITES	= 4,
 	AIC_BT_INF_EXT_PATCH_NB	= 4,
+	/* one pair per extension patch from here on, an id and an address */
 	AIC_BT_INF_EXT_PATCH	= 5,
 };
 
@@ -296,12 +299,12 @@ static u32 aic_bt_pair_value(const struct aic_bt_pt_hdr *hdr, unsigned int pair)
 	return le32_to_cpu(pairs[2 * pair + 1]);
 }
 
-/* Write every pair of one section to the device. */
+/* Write the pairs of one section to the device. */
 static int aic_bt_pt_apply(struct aic_hw *hw, const struct aic_bt_pt_hdr *hdr,
-			   const u32 *btmode)
+			   unsigned int n, const u32 *btmode)
 {
 	const __le32 *pairs = (const __le32 *)(hdr + 1);
-	unsigned int i, n = le32_to_cpu(hdr->pairs);
+	unsigned int i;
 	int ret;
 
 	for (i = 0; i < n; i++) {
@@ -402,7 +405,7 @@ static int aic_bt_load(struct aic_hw *hw, const char *rev)
 
 			ext_patch_nb = min_t(u32, ext_patch_nb,
 					     ARRAY_SIZE(ext_patch));
-			if (pairs < AIC_BT_INF_EXT_PATCH + 2 * ext_patch_nb)
+			if (pairs < AIC_BT_INF_EXT_PATCH + ext_patch_nb)
 				ext_patch_nb = 0;
 
 			for (i = 0; i < ext_patch_nb; i++) {
@@ -459,10 +462,19 @@ static int aic_bt_load(struct aic_hw *hw, const char *rev)
 				ret = -EINVAL;
 				goto out;
 			}
-			ret = aic_bt_pt_apply(hw, hdr, btmode);
+			ret = aic_bt_pt_apply(hw, hdr, pairs, btmode);
+			break;
+		case AIC_BT_PT_INF:
+			/*
+			 * The tail of this section is where the patches go and
+			 * which extensions there are, not something to write.
+			 */
+			ret = aic_bt_pt_apply(hw, hdr,
+					      min(pairs, (unsigned int)AIC_BT_INF_WRITES),
+					      NULL);
 			break;
 		default:
-			ret = aic_bt_pt_apply(hw, hdr, NULL);
+			ret = aic_bt_pt_apply(hw, hdr, pairs, NULL);
 			/* the firmware needs time to bring its radio up */
 			if (!ret && type == AIC_BT_PT_PWRON)
 				msleep(100);
