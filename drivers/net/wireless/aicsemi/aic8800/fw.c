@@ -392,13 +392,13 @@ static int aic_bt_load(struct aic_hw *hw, const char *rev)
 		if (le32_to_cpu(hdr->type) == AIC_BT_PT_INF) {
 			if (pairs > AIC_BT_INF_ADID_ADDR)
 				adid_addr = aic_bt_pair_value(hdr,
-							AIC_BT_INF_ADID_ADDR);
+					AIC_BT_INF_ADID_ADDR);
 			if (pairs > AIC_BT_INF_PATCH_ADDR)
 				patch_addr = aic_bt_pair_value(hdr,
-							AIC_BT_INF_PATCH_ADDR);
+					AIC_BT_INF_PATCH_ADDR);
 			if (pairs > AIC_BT_INF_EXT_PATCH_NB)
 				ext_patch_nb = aic_bt_pair_value(hdr,
-						AIC_BT_INF_EXT_PATCH_NB);
+					AIC_BT_INF_EXT_PATCH_NB);
 
 			ext_patch_nb = min_t(u32, ext_patch_nb,
 					     ARRAY_SIZE(ext_patch));
