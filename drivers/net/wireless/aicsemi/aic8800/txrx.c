@@ -192,6 +192,7 @@ struct aic_sta *aic_sta_find(struct aic_hw *hw, struct aic_vif *vif,
  */
 void aic_sta_init(struct aic_sta *sta, u8 sta_idx)
 {
+	/* the queue was drained by aic_sta_release() before we got here */
 	memset(sta, 0, sizeof(*sta));
 	skb_queue_head_init(&sta->ps_queue);
 	sta->sta_idx = sta_idx;

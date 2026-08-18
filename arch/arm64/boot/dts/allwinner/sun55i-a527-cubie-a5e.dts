@@ -157,7 +157,7 @@
 	 * The controller has no tuning support, so the SDR50 and SDR104 modes
 	 * cannot be used even though both ends would allow them.
 	 */
-	max-frequency = <50000000>;
+	max-frequency = <25000000>;
 	status = "okay";
 
 	wifi@1 {

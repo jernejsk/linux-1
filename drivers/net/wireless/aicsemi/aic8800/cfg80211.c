@@ -180,16 +180,18 @@ static struct ieee80211_supported_band aic_band_5ghz = {
 	},
 };
 
+/*
+ * Every type named here has to be advertised in wiphy::interface_modes as
+ * well, or cfg80211 refuses the whole combination.
+ */
 static const struct ieee80211_iface_limit aic_iface_limits[] = {
 	{
 		.max = 1,
-		.types = BIT(NL80211_IFTYPE_STATION) |
-			 BIT(NL80211_IFTYPE_P2P_CLIENT),
+		.types = BIT(NL80211_IFTYPE_STATION),
 	},
 	{
 		.max = 1,
-		.types = BIT(NL80211_IFTYPE_AP) |
-			 BIT(NL80211_IFTYPE_P2P_GO),
+		.types = BIT(NL80211_IFTYPE_AP),
 	},
 	{
 		.max = 1,

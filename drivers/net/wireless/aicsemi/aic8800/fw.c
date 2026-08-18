@@ -26,10 +26,13 @@
 #define AIC_CHIP_ID_REV			GENMASK(21, 16)
 #define AIC_CHIP_ID_H			GENMASK(23, 22)
 
-/* Revision numbers as they appear in the chip id, not consecutive. */
+/*
+ * Revision numbers as they appear in the chip id, not consecutive.  Every
+ * revision of this part takes the same firmware files.
+ */
 #define AIC_CHIP_REV_U01		1
 #define AIC_CHIP_REV_U02		3
-#define AIC_CHIP_REV_U04		7
+#define AIC_CHIP_REV_U03		7
 
 /* Bytes per DBG_MEM_BLOCK_WRITE_REQ. */
 #define AIC_FW_BLOCK_SIZE		1024
@@ -325,7 +328,7 @@ static int aic_bt_pt_apply(struct aic_hw *hw, const struct aic_bt_pt_hdr *hdr,
 /**
  * aic_bt_load - upload the Bluetooth patches and configuration
  * @hw: device
- * @rev: firmware file revision suffix
+ * @rev: revision suffix of the firmware files
  *
  * Has to run before the wireless firmware is started, and only does anything if
  * the wireless firmware image also carries the Bluetooth stack.
@@ -502,7 +505,6 @@ out:
 int aic_fw_load(struct aic_hw *hw)
 {
 	u32 boot_status;
-	const char *rev;
 	char name[64];
 	int ret, chip_h;
 
@@ -519,10 +521,8 @@ int aic_fw_load(struct aic_hw *hw)
 		return 0;
 	}
 
-	rev = hw->chip_rev >= AIC_CHIP_REV_U04 ? "u04" : "u02";
-
 	if (bluetooth) {
-		ret = aic_bt_load(hw, rev);
+		ret = aic_bt_load(hw, "u02");
 		if (ret)
 			return ret;
 	}
@@ -559,5 +559,3 @@ MODULE_FIRMWARE(AIC_FW_DIR "fmacfwbt_8800d80_h_u02.bin");
 MODULE_FIRMWARE(AIC_FW_DIR "fw_adid_8800d80_u02.bin");
 MODULE_FIRMWARE(AIC_FW_DIR "fw_patch_8800d80_u02.bin");
 MODULE_FIRMWARE(AIC_FW_DIR "fw_patch_table_8800d80_u02.bin");
-MODULE_FIRMWARE(AIC_FW_DIR "fw_patch_8800d80_u04.bin");
-MODULE_FIRMWARE(AIC_FW_DIR "fw_patch_table_8800d80_u04.bin");

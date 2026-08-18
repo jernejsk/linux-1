@@ -168,6 +168,13 @@ struct aic_hw *aic_hw_alloc(struct device *dev, const struct aic_bus_ops *ops,
 	for (i = 0; i < AIC_TXQ_CNT; i++)
 		skb_queue_head_init(&hw->txq[i]);
 
+	/*
+	 * Every peer entry owns a queue, and the teardown path walks all of
+	 * them whether they were ever used or not.
+	 */
+	for (i = 0; i < AIC_MAX_STA; i++)
+		skb_queue_head_init(&hw->sta[i].ps_queue);
+
 	INIT_WORK(&hw->ps_work, aic_txq_ps_work);
 
 	aic_cmd_mgr_init(&hw->cmd_mgr);
