@@ -113,6 +113,7 @@ struct aic_cmd_mgr {
  * @uapsd_tids: bitmap of TIDs configured for U-APSD
  * @ch_idx: channel context the peer is on
  * @listen_interval: as announced by the peer
+ * @last_rssi: signal of the last frame received from this peer
  * @ps_active: the peer is asleep and its traffic has to be held back
  * @ps_queue: frames held while the peer is asleep
  */
@@ -129,6 +130,7 @@ struct aic_sta {
 	u8 hw_key_idx;
 	u16 listen_interval;
 
+	s8 last_rssi;
 	bool ps_active;
 	bool ps_announced;
 	struct sk_buff_head ps_queue;
@@ -277,6 +279,12 @@ struct aic_hw {
 	/* the system was told to keep this device able to wake it */
 	bool wakeup_enabled;
 
+	/* the firmware has been told about the channel list at least once */
+	bool chan_config_done;
+
+	/* power save as last asked for by userspace */
+	bool ps_enabled;
+
 	struct work_struct ps_work;
 
 	struct napi_struct napi;
@@ -383,6 +391,7 @@ int aic_send_apm_start(struct aic_hw *hw, struct aic_vif *vif,
 		       struct sk_buff *bcn, u16 tim_oft, u8 tim_len,
 		       u8 *ch_idx, u8 *bcmc_idx);
 int aic_send_apm_stop(struct aic_hw *hw, u8 vif_idx);
+int aic_send_bcn(struct aic_hw *hw, u8 vif_idx, struct sk_buff *bcn);
 int aic_send_bcn_change(struct aic_hw *hw, u8 vif_idx, struct sk_buff *bcn,
 			u16 tim_oft, u8 tim_len, const u16 *csa_oft);
 int aic_send_roc(struct aic_hw *hw, struct aic_vif *vif,
@@ -409,6 +418,8 @@ void aic_rx_frame(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 		  const u8 *frame, unsigned int len);
 void aic_txq_flush_vif(struct aic_hw *hw, struct aic_vif *vif);
 void aic_txcfm_flush(struct aic_hw *hw, struct aic_vif *vif);
+struct aic_sta *aic_sta_find(struct aic_hw *hw, struct aic_vif *vif,
+			     const u8 *addr);
 void aic_sta_init(struct aic_sta *sta, u8 sta_idx);
 void aic_sta_release(struct aic_sta *sta);
 void aic_txq_ps_work(struct work_struct *work);
