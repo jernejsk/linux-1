@@ -152,6 +152,40 @@ drop:
 }
 
 /**
+ * aic_sta_find - look a peer of one interface up by address
+ * @hw: device
+ * @vif: interface the peer belongs to
+ * @addr: peer address, %NULL for the peer of a station interface
+ */
+struct aic_sta *aic_sta_find(struct aic_hw *hw, struct aic_vif *vif,
+			     const u8 *addr)
+{
+	struct aic_sta *sta;
+
+	switch (vif->wdev.iftype) {
+	case NL80211_IFTYPE_STATION:
+	case NL80211_IFTYPE_P2P_CLIENT:
+		sta = vif->sta.ap;
+		if (sta && sta->valid &&
+		    (!addr || ether_addr_equal(sta->addr, addr)))
+			return sta;
+		break;
+	case NL80211_IFTYPE_AP:
+	case NL80211_IFTYPE_P2P_GO:
+		if (!addr)
+			break;
+		list_for_each_entry(sta, &vif->ap.sta_list, list)
+			if (sta->valid && ether_addr_equal(sta->addr, addr))
+				return sta;
+		break;
+	default:
+		break;
+	}
+
+	return NULL;
+}
+
+/**
  * aic_sta_init - prepare a peer entry for use
  * @sta: peer entry, previously unused or released
  * @sta_idx: firmware index of the peer
@@ -442,6 +476,7 @@ void aic_txcfm_flush(struct aic_hw *hw, struct aic_vif *vif)
 static void aic_rx_mgmt(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 			const u8 *frame, unsigned int len)
 {
+	const struct ieee80211_mgmt *mgmt = (const struct ieee80211_mgmt *)frame;
 	struct aic_vif *vif = aic_vif_from_fw_idx(hw, rxhdr->flags_vif_idx);
 	struct cfg80211_rx_info info = {
 		.freq = rxhdr->phy_info.phy_prim20_freq,
@@ -450,8 +485,36 @@ static void aic_rx_mgmt(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 		.len = len,
 	};
 
-	if (!vif)
+	if (!vif || len < offsetof(struct ieee80211_mgmt, u))
 		return;
+
+	/*
+	 * Beacons and probe responses of other networks are only of interest
+	 * for the overlapping BSS scan an AP interface runs.
+	 */
+	if (ieee80211_is_beacon(mgmt->frame_control) ||
+	    ieee80211_is_probe_resp(mgmt->frame_control)) {
+		cfg80211_report_obss_beacon(hw->wiphy, frame, len,
+					    rxhdr->phy_info.phy_prim20_freq,
+					    rxhdr->vect.rx_vect1.rssi1);
+		return;
+	}
+
+	/*
+	 * An unprotected disconnect from a peer that thinks it is not
+	 * associated has to reach userspace as such, so that it can run an SA
+	 * query rather than tear the connection down on a forged frame.
+	 */
+	if ((ieee80211_is_deauth(mgmt->frame_control) ||
+	     ieee80211_is_disassoc(mgmt->frame_control)) && vif->ndev &&
+	    len >= offsetofend(struct ieee80211_mgmt, u.deauth.reason_code) &&
+	    (le16_to_cpu(mgmt->u.deauth.reason_code) ==
+	     WLAN_REASON_CLASS2_FRAME_FROM_NONAUTH_STA ||
+	     le16_to_cpu(mgmt->u.deauth.reason_code) ==
+	     WLAN_REASON_CLASS3_FRAME_FROM_NONASSOC_STA)) {
+		cfg80211_rx_unprot_mlme_mgmt(vif->ndev, frame, len);
+		return;
+	}
 
 	cfg80211_rx_mgmt_ext(&vif->wdev, &info);
 }
@@ -530,6 +593,11 @@ void aic_rx_frame(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 
 	if (!rxhdr->flags_upload)
 		return;
+
+	if (rxhdr->flags_sta_idx < AIC_MAX_STA &&
+	    hw->sta[rxhdr->flags_sta_idx].valid)
+		hw->sta[rxhdr->flags_sta_idx].last_rssi =
+			rxhdr->vect.rx_vect1.rssi1;
 
 	vif = aic_vif_from_fw_idx(hw, rxhdr->flags_vif_idx);
 	if (!vif || !vif->ndev)

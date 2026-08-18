@@ -707,6 +707,12 @@ int aic_send_scanu_cancel(struct aic_hw *hw)
 	return aic_send_msg(hw, req, true, SCANU_CANCEL_CFM, NULL, 0);
 }
 
+static bool aic_cipher_is_wep(u32 cipher)
+{
+	return cipher == WLAN_CIPHER_SUITE_WEP40 ||
+	       cipher == WLAN_CIPHER_SUITE_WEP104;
+}
+
 static u8 aic_auth_type_to_fw(enum nl80211_auth_type type)
 {
 	switch (type) {
@@ -760,12 +766,21 @@ int aic_send_sm_connect(struct aic_hw *hw, struct aic_vif *vif,
 		req->flags |= CONTROL_PORT_HOST;
 	if (sme->crypto.control_port_no_encrypt)
 		req->flags |= CONTROL_PORT_NO_ENC;
-	if (sme->privacy)
+	/* the flag means "not WEP" rather than what its name suggests */
+	if (!aic_cipher_is_wep(sme->crypto.cipher_group))
 		req->flags |= WPA_WPA2_IN_USE;
 	if (sme->mfp == NL80211_MFP_REQUIRED)
 		req->flags |= MFP_IN_USE;
-	if (sme->flags & ASSOC_REQ_USE_RRM)
+	if (vif->sta.ap)
 		req->flags |= REASSOCIATION;
+	/*
+	 * WEP and TKIP are not allowed with HT, and a peer that offers them
+	 * anyway has to be talked to without it.
+	 */
+	if (sme->crypto.n_ciphers_pairwise &&
+	    (aic_cipher_is_wep(sme->crypto.ciphers_pairwise[0]) ||
+	     sme->crypto.ciphers_pairwise[0] == WLAN_CIPHER_SUITE_TKIP))
+		req->flags |= DISABLE_HT;
 
 	req->ctrl_port_ethertype = sme->crypto.control_port_ethertype;
 	req->auth_type = aic_auth_type_to_fw(sme->auth_type);
@@ -994,7 +1009,7 @@ int aic_send_apm_start(struct aic_hw *hw, struct aic_vif *vif,
 	struct cfg80211_chan_def *chandef = &settings->chandef;
 	struct apm_start_cfm cfm = {};
 	struct apm_start_req *req;
-	int ret, i;
+	int ret;
 
 	req = aic_msg_alloc(APM_START_REQ, TASK_APM, DRV_TASK_ID, sizeof(*req));
 	if (!req)
@@ -1021,9 +1036,14 @@ int aic_send_apm_start(struct aic_hw *hw, struct aic_vif *vif,
 	req->center_freq2 = chandef->center_freq2;
 	req->ch_width = aic_chan_width_to_fw(chandef->width);
 
+	/* the firmware works out the rate set from the beacon itself */
 	req->basic_rates.length = 0;
-	for (i = 0; i < settings->beacon.tail_len && i < 0; i++)
-		;
+
+	ret = aic_send_bcn(hw, vif->vif_index, bcn);
+	if (ret) {
+		aic_msg_free(req);
+		return ret;
+	}
 
 	ret = aic_send_msg(hw, req, true, APM_START_CFM, &cfm, sizeof(cfm));
 	if (ret)
@@ -1052,6 +1072,34 @@ int aic_send_apm_stop(struct aic_hw *hw, u8 vif_idx)
 	req->vif_idx = vif_idx;
 
 	return aic_send_msg(hw, req, true, APM_STOP_CFM, NULL, 0);
+}
+
+/**
+ * aic_send_bcn - hand the beacon template to the firmware
+ * @hw: device
+ * @vif_idx: interface the beacon belongs to
+ * @bcn: beacon, from the first byte of the header
+ *
+ * On this family the template travels in the message itself rather than being
+ * fetched from host memory, which also bounds how large it can be.
+ */
+int aic_send_bcn(struct aic_hw *hw, u8 vif_idx, struct sk_buff *bcn)
+{
+	struct apm_set_bcn_ie_req *req;
+
+	if (bcn->len > sizeof(req->bcn_ie))
+		return -E2BIG;
+
+	req = aic_msg_alloc(APM_SET_BEACON_IE_REQ, TASK_APM, DRV_TASK_ID,
+			    sizeof(*req));
+	if (!req)
+		return -ENOMEM;
+
+	req->vif_idx = vif_idx;
+	req->bcn_ie_len = bcn->len;
+	memcpy(req->bcn_ie, bcn->data, bcn->len);
+
+	return aic_send_msg(hw, req, true, APM_SET_BEACON_IE_CFM, NULL, 0);
 }
 
 int aic_send_bcn_change(struct aic_hw *hw, u8 vif_idx, struct sk_buff *bcn,

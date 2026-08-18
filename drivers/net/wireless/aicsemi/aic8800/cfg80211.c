@@ -9,6 +9,7 @@
  */
 
 #include <linux/etherdevice.h>
+#include <linux/if_arp.h>
 #include <linux/ip.h>
 #include <linux/udp.h>
 #include <linux/module.h>
@@ -306,7 +307,79 @@ static u8 aic_cipher_to_fw(u32 cipher)
 	}
 }
 
+static void aic_scan_abort(struct aic_hw *hw, struct wireless_dev *wdev);
+
 /* Network device. ----------------------------------------------------------*/
+
+/**
+ * aic_iface_start - let the firmware know about an interface
+ * @hw: device
+ * @vif: interface
+ *
+ * Must be called with the device mutex held.
+ */
+static int aic_iface_start(struct aic_hw *hw, struct aic_vif *vif)
+{
+	int ret;
+
+	if (list_empty(&hw->vifs)) {
+		ret = aic_send_start(hw);
+		if (ret)
+			return ret;
+	}
+
+	ret = aic_send_add_if(hw, vif->ndev->dev_addr, vif->wdev.iftype, false,
+			      &vif->vif_index);
+	if (ret)
+		return ret;
+
+	list_add_tail(&vif->list, &hw->vifs);
+	vif->up = true;
+
+	if (vif->wdev.iftype != NL80211_IFTYPE_MONITOR) {
+		/* a power save setting from before the interface was up */
+		aic_send_me_set_ps_mode(hw, hw->ps_enabled);
+		return 0;
+	}
+
+	hw->monitor_vif = vif->vif_index;
+
+	/* the channel may only be set after the interface is up */
+	if (hw->chandef_monitor.chan) {
+		ret = aic_send_me_config_monitor(hw, &hw->chandef_monitor, NULL);
+		if (ret)
+			return ret;
+	}
+
+	/* the firmware only forwards what its receive filter lets in */
+	return aic_send_set_filter(hw, AIC_RX_FILTER_MONITOR);
+}
+
+/**
+ * aic_iface_stop - take an interface away from the firmware
+ * @hw: device
+ * @vif: interface
+ *
+ * Must be called with the device mutex held.
+ */
+static void aic_iface_stop(struct aic_hw *hw, struct aic_vif *vif)
+{
+	if (!vif->up)
+		return;
+
+	aic_scan_abort(hw, &vif->wdev);
+	aic_txq_flush_vif(hw, vif);
+	aic_send_remove_if(hw, vif->vif_index);
+
+	if (hw->monitor_vif == vif->vif_index) {
+		hw->monitor_vif = AIC_INVALID_VIF;
+		aic_send_set_filter(hw, AIC_RX_FILTER_DEFAULT);
+	}
+
+	list_del(&vif->list);
+	vif->vif_index = AIC_INVALID_VIF;
+	vif->up = false;
+}
 
 static int aic_open(struct net_device *ndev)
 {
@@ -316,31 +389,12 @@ static int aic_open(struct net_device *ndev)
 
 	mutex_lock(&hw->mutex);
 
-	if (list_empty(&hw->vifs)) {
-		ret = aic_send_start(hw);
-		if (ret)
-			goto out;
+	ret = aic_iface_start(hw, vif);
+	if (!ret) {
+		netif_carrier_off(ndev);
+		netif_tx_start_all_queues(ndev);
 	}
 
-	ret = aic_send_add_if(hw, ndev->dev_addr, vif->wdev.iftype, false,
-			      &vif->vif_index);
-	if (ret)
-		goto out;
-
-	list_add_tail(&vif->list, &hw->vifs);
-	vif->up = true;
-
-	if (vif->wdev.iftype == NL80211_IFTYPE_MONITOR) {
-		hw->monitor_vif = vif->vif_index;
-		ret = aic_send_me_config_monitor(hw, &hw->chandef_monitor, NULL);
-		if (ret)
-			goto out;
-	}
-
-	netif_carrier_off(ndev);
-	netif_tx_start_all_queues(ndev);
-
-out:
 	mutex_unlock(&hw->mutex);
 
 	return ret;
@@ -356,15 +410,7 @@ static int aic_stop(struct net_device *ndev)
 	netif_tx_stop_all_queues(ndev);
 	netif_carrier_off(ndev);
 
-	if (vif->up) {
-		aic_txq_flush_vif(hw, vif);
-		aic_send_remove_if(hw, vif->vif_index);
-		if (hw->monitor_vif == vif->vif_index)
-			hw->monitor_vif = AIC_INVALID_VIF;
-		list_del(&vif->list);
-		vif->vif_index = AIC_INVALID_VIF;
-		vif->up = false;
-	}
+	aic_iface_stop(hw, vif);
 
 	mutex_unlock(&hw->mutex);
 
@@ -422,6 +468,8 @@ static struct aic_vif *aic_interface_add(struct aic_hw *hw, const char *name,
 
 	ndev->netdev_ops = &aic_netdev_ops;
 	ndev->ieee80211_ptr = &vif->wdev;
+	if (type == NL80211_IFTYPE_MONITOR)
+		ndev->type = ARPHRD_IEEE80211_RADIOTAP;
 	ndev->needed_headroom = sizeof(struct aic_txdesc);
 	ndev->features |= NETIF_F_SG;
 	SET_NETDEV_DEV(ndev, wiphy_dev(hw->wiphy));
@@ -490,14 +538,10 @@ static int aic_cfg_change_iface(struct wiphy *wiphy, struct net_device *ndev,
 	struct aic_hw *hw = wiphy_priv(wiphy);
 	int ret = 0;
 
-	if (vif->up) {
-		/* the firmware cannot change the type of a running interface */
-		ret = aic_send_remove_if(hw, vif->vif_index);
-		if (ret)
-			return ret;
-		list_del(&vif->list);
-		vif->up = false;
-	}
+	mutex_lock(&hw->mutex);
+
+	/* the firmware cannot change the type of an interface it knows */
+	aic_iface_stop(hw, vif);
 
 	vif->wdev.iftype = type;
 	if (params->use_4addr != -1)
@@ -508,14 +552,13 @@ static int aic_cfg_change_iface(struct wiphy *wiphy, struct net_device *ndev,
 	else
 		memset(&vif->sta, 0, sizeof(vif->sta));
 
-	if (netif_running(ndev)) {
-		ret = aic_send_add_if(hw, ndev->dev_addr, type, false,
-				      &vif->vif_index);
-		if (!ret) {
-			list_add_tail(&vif->list, &hw->vifs);
-			vif->up = true;
-		}
-	}
+	ndev->type = type == NL80211_IFTYPE_MONITOR ?
+		     ARPHRD_IEEE80211_RADIOTAP : ARPHRD_ETHER;
+
+	if (netif_running(ndev))
+		ret = aic_iface_start(hw, vif);
+
+	mutex_unlock(&hw->mutex);
 
 	return ret;
 }
@@ -556,13 +599,34 @@ out:
 	return ret;
 }
 
+/**
+ * aic_scan_abort - stop a scan and tell cfg80211 it is over
+ * @hw: device
+ * @wdev: interface the scan has to belong to, %NULL for any
+ *
+ * The firmware answers a cancelled scan with the same confirmation as a
+ * completed one, but not reliably, so the scan is completed here and the
+ * confirmation is then ignored.  Must be called with the device mutex held.
+ */
+static void aic_scan_abort(struct aic_hw *hw, struct wireless_dev *wdev)
+{
+	struct cfg80211_scan_info info = { .aborted = true };
+	struct cfg80211_scan_request *req = hw->scan_req;
+
+	if (!req || (wdev && req->wdev != wdev))
+		return;
+
+	hw->scan_req = NULL;
+	aic_send_scanu_cancel(hw);
+	cfg80211_scan_done(req, &info);
+}
+
 static void aic_cfg_abort_scan(struct wiphy *wiphy, struct wireless_dev *wdev)
 {
 	struct aic_hw *hw = wiphy_priv(wiphy);
 
 	mutex_lock(&hw->mutex);
-	if (hw->scan_req)
-		aic_send_scanu_cancel(hw);
+	aic_scan_abort(hw, wdev);
 	mutex_unlock(&hw->mutex);
 }
 
@@ -593,7 +657,16 @@ static int aic_cfg_disconnect(struct wiphy *wiphy, struct net_device *ndev,
 	int ret;
 
 	mutex_lock(&hw->mutex);
-	ret = aic_send_sm_disconnect(hw, vif, reason_code);
+
+	/*
+	 * Both supplicants disconnect interfaces they never connected, and the
+	 * firmware answers that with an error.
+	 */
+	if (!vif->up || !vif->sta.ap)
+		ret = 0;
+	else
+		ret = aic_send_sm_disconnect(hw, vif, reason_code);
+
 	mutex_unlock(&hw->mutex);
 
 	return ret;
@@ -821,35 +894,43 @@ static int aic_cfg_change_station(struct wiphy *wiphy,
 {
 	struct aic_vif *vif = container_of(wdev, struct aic_vif, wdev);
 	struct aic_hw *hw = wiphy_priv(wiphy);
-	struct aic_sta *sta = NULL, *iter;
+	struct aic_sta *sta;
+	int ret = 0;
 
 	if (!vif->up)
 		return -EBUSY;
 
-	if (vif->wdev.iftype == NL80211_IFTYPE_STATION) {
-		sta = vif->sta.ap;
-	} else {
-		list_for_each_entry(iter, &vif->ap.sta_list, list)
-			if (ether_addr_equal(iter->addr, mac)) {
-				sta = iter;
-				break;
-			}
+	mutex_lock(&hw->mutex);
+
+	sta = aic_sta_find(hw, vif, mac);
+	if (!sta) {
+		ret = -ENOENT;
+		goto out;
 	}
-	if (!sta)
-		return -ENOENT;
 
-	if (params->sta_flags_mask & BIT(NL80211_STA_FLAG_AUTHORIZED))
-		return aic_send_me_set_control_port(hw, sta->sta_idx,
-			!!(params->sta_flags_set &
-			   BIT(NL80211_STA_FLAG_AUTHORIZED)));
+	/*
+	 * Both supplicants open the control port this way once the handshake
+	 * they ran themselves is done.
+	 */
+	if (params->sta_flags_mask & BIT(NL80211_STA_FLAG_AUTHORIZED)) {
+		bool authorized = params->sta_flags_set &
+				  BIT(NL80211_STA_FLAG_AUTHORIZED);
 
-	return 0;
+		ret = aic_send_me_set_control_port(hw, sta->sta_idx, authorized);
+	}
+
+out:
+	mutex_unlock(&hw->mutex);
+
+	return ret;
 }
 
 static int aic_cfg_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
 			       const u8 *mac, struct station_info *sinfo)
 {
 	struct aic_vif *vif = container_of(wdev, struct aic_vif, wdev);
+	struct aic_hw *hw = wiphy_priv(wiphy);
+	struct aic_sta *sta;
 
 	sinfo->filled = BIT_ULL(NL80211_STA_INFO_RX_PACKETS) |
 			BIT_ULL(NL80211_STA_INFO_TX_PACKETS) |
@@ -859,6 +940,16 @@ static int aic_cfg_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
 	sinfo->tx_packets = vif->stats.tx_packets;
 	sinfo->rx_bytes = vif->stats.rx_bytes;
 	sinfo->tx_bytes = vif->stats.tx_bytes;
+
+	/*
+	 * Both supplicants poll the signal of the peer they are connected to,
+	 * and roam on it, so report the last one the receive path saw.
+	 */
+	sta = aic_sta_find(hw, vif, mac);
+	if (sta && sta->last_rssi) {
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_SIGNAL);
+		sinfo->signal = sta->last_rssi;
+	}
 
 	return 0;
 }
@@ -995,8 +1086,10 @@ static int aic_cfg_change_beacon(struct wiphy *wiphy, struct net_device *ndev,
 		return -ENOMEM;
 
 	mutex_lock(&hw->mutex);
-	ret = aic_send_bcn_change(hw, vif->vif_index, bcn, tim_oft, tim_len,
-				  NULL);
+	ret = aic_send_bcn(hw, vif->vif_index, bcn);
+	if (!ret)
+		ret = aic_send_bcn_change(hw, vif->vif_index, bcn, tim_oft,
+					  tim_len, NULL);
 	mutex_unlock(&hw->mutex);
 
 	dev_kfree_skb(bcn);
@@ -1115,10 +1208,18 @@ static int aic_cfg_set_power_mgmt(struct wiphy *wiphy, struct net_device *ndev,
 				  bool enabled, int timeout)
 {
 	struct aic_hw *hw = wiphy_priv(wiphy);
-	int ret;
+	int ret = 0;
 
 	mutex_lock(&hw->mutex);
-	ret = aic_send_me_set_ps_mode(hw, enabled);
+
+	/*
+	 * Userspace sets this on interfaces that are still down, which the
+	 * firmware has no state for yet.
+	 */
+	if (!list_empty(&hw->vifs))
+		ret = aic_send_me_set_ps_mode(hw, enabled);
+	hw->ps_enabled = enabled;
+
 	mutex_unlock(&hw->mutex);
 
 	return ret;
@@ -1196,31 +1297,6 @@ static int aic_cfg_cancel_remain_on_channel(struct wiphy *wiphy,
 	return ret;
 }
 
-/* Find the peer a management frame is addressed to, if the firmware knows it. */
-static struct aic_sta *aic_mgmt_peer(struct aic_vif *vif, const u8 *addr)
-{
-	struct aic_sta *sta;
-
-	switch (vif->wdev.iftype) {
-	case NL80211_IFTYPE_STATION:
-	case NL80211_IFTYPE_P2P_CLIENT:
-		sta = vif->sta.ap;
-		if (sta && sta->valid && ether_addr_equal(sta->addr, addr))
-			return sta;
-		break;
-	case NL80211_IFTYPE_AP:
-	case NL80211_IFTYPE_P2P_GO:
-		list_for_each_entry(sta, &vif->ap.sta_list, list)
-			if (sta->valid && ether_addr_equal(sta->addr, addr))
-				return sta;
-		break;
-	default:
-		break;
-	}
-
-	return NULL;
-}
-
 static int aic_cfg_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 			   struct cfg80211_mgmt_tx_params *params, u64 *cookie)
 {
@@ -1240,7 +1316,7 @@ static int aic_cfg_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 		goto out;
 	}
 
-	sta = aic_mgmt_peer(vif, mgmt->da);
+	sta = aic_sta_find(hw, vif, mgmt->da);
 	ret = aic_mgmt_tx(vif, sta, params, cookie);
 
 out:
@@ -1352,12 +1428,15 @@ static int aic_cfg_dump_survey(struct wiphy *wiphy, struct net_device *ndev,
 		info->channel = &band->channels[idx];
 	} else {
 		band = wiphy->bands[NL80211_BAND_5GHZ];
-		idx -= n2;
-		if (!band || idx >= band->n_channels)
+		if (!band || idx - n2 >= band->n_channels)
 			return -ENOENT;
-		info->channel = &band->channels[idx];
+		info->channel = &band->channels[idx - n2];
 	}
 
+	if (idx >= ARRAY_SIZE(hw->survey))
+		return -ENOENT;
+
+	/* the survey is indexed the same way, 2.4 GHz channels first */
 	info->filled = 0;
 	if (hw->survey[idx].filled) {
 		info->filled = SURVEY_INFO_TIME |
@@ -1410,6 +1489,30 @@ const struct cfg80211_ops aic_cfg80211_ops = {
 	.mgmt_tx_cancel_wait = aic_cfg_mgmt_tx_cancel_wait,
 	.dump_survey = aic_cfg_dump_survey,
 };
+
+/**
+ * aic_reg_notifier - the regulatory domain changed
+ * @wiphy: cfg80211 device
+ * @request: what changed and who asked for it
+ *
+ * cfg80211 has already applied the new domain to the channel list, so the
+ * firmware only needs to be handed that list again.
+ */
+static void aic_reg_notifier(struct wiphy *wiphy,
+			     struct regulatory_request *request)
+{
+	struct aic_hw *hw = wiphy_priv(wiphy);
+
+	/* the initial domain is applied before the firmware is configured */
+	if (!hw->chan_config_done)
+		return;
+
+	mutex_lock(&hw->mutex);
+	if (aic_send_me_chan_config(hw))
+		dev_warn(hw->dev, "failed to update the channel list for %c%c\n",
+			 request->alpha2[0], request->alpha2[1]);
+	mutex_unlock(&hw->mutex);
+}
 
 /* Setup. -------------------------------------------------------------------*/
 
@@ -1465,10 +1568,12 @@ int aic_cfg80211_init(struct aic_hw *hw)
 
 	wiphy->max_scan_ssids = SCAN_SSID_MAX;
 	wiphy->max_scan_ie_len = AIC_SCAN_IE_MAX;
-	wiphy->max_num_pmkids = 4;
+	/* the firmware does no PMKSA caching of its own */
+	wiphy->max_num_pmkids = 0;
 	wiphy->max_remain_on_channel_duration = 5000;
 	wiphy->cipher_suites = aic_cipher_suites;
 	wiphy->n_cipher_suites = ARRAY_SIZE(aic_cipher_suites);
+	wiphy->reg_notifier = aic_reg_notifier;
 	wiphy->mgmt_stypes = aic_mgmt_stypes;
 	wiphy->wowlan = &aic_wowlan_support;
 	wiphy->signal_type = CFG80211_SIGNAL_TYPE_MBM;
@@ -1486,6 +1591,8 @@ int aic_cfg80211_init(struct aic_hw *hw)
 	ret = aic_send_me_chan_config(hw);
 	if (ret)
 		goto err_unregister;
+
+	hw->chan_config_done = true;
 
 	rtnl_lock();
 	vif = aic_interface_add(hw, "wlan%d", NET_NAME_ENUM,
