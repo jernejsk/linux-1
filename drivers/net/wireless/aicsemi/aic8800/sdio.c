@@ -100,6 +100,11 @@ static int iopad_delay2;
 module_param(iopad_delay2, int, 0644);
 MODULE_PARM_DESC(iopad_delay2, "device side SDIO output delay");
 
+static int iopad_drive = -1;
+module_param(iopad_drive, int, 0644);
+MODULE_PARM_DESC(iopad_drive,
+		 "device side SDIO pad drive strength, -1 to leave it alone");
+
 struct aic_sdio {
 	struct sdio_func *func;
 	struct aic_hw *hw;
@@ -557,6 +562,16 @@ static int aic_sdio_start(struct aic_hw *hw)
 		return ret;
 	}
 
+	/*
+	 * A driver that is loaded a second time finds the firmware already
+	 * running, and possibly asleep: it only answers messages once it has
+	 * been woken.  The boot ROM does not mind the request.
+	 */
+	sdio_claim_host(sdio->func);
+	aic_sdio_wr(sdio, AIC_SDIO_INTR_TO_DEVICE, AIC_SDIO_TO_DEVICE_WAKEUP);
+	sdio_release_host(sdio->func);
+	usleep_range(5000, 6000);
+
 	sdio->up = true;
 
 	return 0;
@@ -825,9 +840,11 @@ static int aic_sdio_func_init(struct aic_sdio *sdio)
 		goto out;
 	}
 
-	sdio_f0_writeb(func, 0x7f, AIC_SDIO_F0_DRIVE, &ret);
-	if (ret)
-		goto out;
+	if (iopad_drive >= 0) {
+		sdio_f0_writeb(func, iopad_drive, AIC_SDIO_F0_DRIVE, &ret);
+		if (ret)
+			goto out;
+	}
 
 	/*
 	 * Tell the device how to sample the bus.  Without this it answers

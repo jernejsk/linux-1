@@ -324,10 +324,15 @@ static int aic_iface_start(struct aic_hw *hw, struct aic_vif *vif)
 {
 	int ret;
 
-	if (list_empty(&hw->vifs)) {
+	/*
+	 * The firmware only accepts this once; it does not answer a second
+	 * start, and interfaces come and go without the firmware restarting.
+	 */
+	if (!hw->fw_running) {
 		ret = aic_send_start(hw);
 		if (ret)
 			return ret;
+		hw->fw_running = true;
 	}
 
 	ret = aic_send_add_if(hw, vif->ndev->dev_addr, vif->wdev.iftype, false,
@@ -1564,7 +1569,12 @@ int aic_cfg80211_init(struct aic_hw *hw)
 	 */
 	wiphy->flags |= WIPHY_FLAG_HAS_REMAIN_ON_CHANNEL |
 			WIPHY_FLAG_4ADDR_STATION |
-			WIPHY_FLAG_4ADDR_AP;
+			WIPHY_FLAG_4ADDR_AP |
+			/* the receive path hands the beacons of other
+			 * networks to cfg80211, which userspace needs for
+			 * the overlapping BSS scan it is asked to run
+			 */
+			WIPHY_FLAG_REPORTS_OBSS;
 	wiphy->features |= NL80211_FEATURE_SAE |
 			   NL80211_FEATURE_NEED_OBSS_SCAN;
 

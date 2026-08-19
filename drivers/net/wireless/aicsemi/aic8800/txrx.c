@@ -523,40 +523,41 @@ static void aic_rx_mgmt(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 static void aic_rx_monitor(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 			   const u8 *frame, unsigned int len)
 {
-	struct ieee80211_radiotap_header *rtap;
+	/* TSFT, channel and signal strength, in the order radiotap wants */
+	struct aic_rtap {
+		struct ieee80211_radiotap_header hdr;
+		__le64 tsft;
+		__le16 chan_freq;
+		__le16 chan_flags;
+		s8 signal;
+	} __packed *rtap;
+	struct aic_vif *vif = aic_vif_from_fw_idx(hw, hw->monitor_vif);
+	u16 freq = rxhdr->phy_info.phy_prim20_freq;
 	struct sk_buff *skb;
-	unsigned int rtap_len = sizeof(*rtap) + 8;
-	__le32 present = cpu_to_le32(BIT(IEEE80211_RADIOTAP_TSFT) |
-				     BIT(IEEE80211_RADIOTAP_DBM_ANTSIGNAL) |
-				     BIT(IEEE80211_RADIOTAP_CHANNEL));
-	u8 *pos;
 
-	if (hw->monitor_vif == AIC_INVALID_VIF)
+	if (!vif || !vif->ndev)
 		return;
 
-	skb = dev_alloc_skb(rtap_len + len);
+	skb = dev_alloc_skb(sizeof(*rtap) + len);
 	if (!skb)
 		return;
 
-	rtap = skb_put_zero(skb, rtap_len);
-	rtap->it_version = 0;
-	rtap->it_len = cpu_to_le16(rtap_len);
-	rtap->it_present = present;
-
-	pos = (u8 *)(rtap + 1);
-	put_unaligned_le64(((u64)le32_to_cpu(rxhdr->vect.tsf_hi) << 32) |
-			   le32_to_cpu(rxhdr->vect.tsf_lo), pos);
-	pos += 8;
+	rtap = skb_put_zero(skb, sizeof(*rtap));
+	rtap->hdr.it_len = cpu_to_le16(sizeof(*rtap));
+	rtap->hdr.it_present = cpu_to_le32(BIT(IEEE80211_RADIOTAP_TSFT) |
+					   BIT(IEEE80211_RADIOTAP_CHANNEL) |
+					   BIT(IEEE80211_RADIOTAP_DBM_ANTSIGNAL));
+	rtap->tsft = cpu_to_le64(((u64)le32_to_cpu(rxhdr->vect.tsf_hi) << 32) |
+				 le32_to_cpu(rxhdr->vect.tsf_lo));
+	rtap->chan_freq = cpu_to_le16(freq);
+	rtap->chan_flags = cpu_to_le16(freq >= 4900 ?
+				       IEEE80211_CHAN_5GHZ | IEEE80211_CHAN_OFDM :
+				       IEEE80211_CHAN_2GHZ | IEEE80211_CHAN_DYN);
+	rtap->signal = rxhdr->vect.rx_vect1.rssi1;
 
 	skb_put_data(skb, frame, len);
 
-	skb->dev = hw->vif[hw->monitor_vif] ?
-		   hw->vif[hw->monitor_vif]->ndev : NULL;
-	if (!skb->dev) {
-		dev_kfree_skb_any(skb);
-		return;
-	}
-
+	skb->dev = vif->ndev;
 	skb->protocol = htons(ETH_P_802_2);
 	skb_reset_mac_header(skb);
 	skb->pkt_type = PACKET_OTHERHOST;
