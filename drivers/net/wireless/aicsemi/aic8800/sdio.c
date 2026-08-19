@@ -527,7 +527,7 @@ static void aic_sdio_irq(struct sdio_func *func)
 	bool queued = false;
 	int ret, i;
 
-	if (!hw || !sdio->up)
+	if (!hw || !sdio->up || sdio->suspended)
 		return;
 
 	/*
@@ -717,6 +717,13 @@ static int aic_sdio_suspend(struct device *dev)
 	if (ret)
 		return ret;
 
+	/*
+	 * From here on the interrupt handler leaves the device alone, so that
+	 * nothing tries to receive while the poll routine is disabled, and the
+	 * transmit thread stays off the bus.
+	 */
+	sdio->suspended = true;
+
 	aic_hw_suspend(hw);
 
 	/*
@@ -725,12 +732,14 @@ static int aic_sdio_suspend(struct device *dev)
 	 */
 	wait_event_timeout(sdio->tx_wq, !atomic_read(&sdio->tx_pending),
 			   msecs_to_jiffies(100));
-	sdio->suspended = true;
+
 
 	if (sdio->wake_irq > 0 && hw->wakeup_enabled) {
 		enable_irq(sdio->wake_irq);
 		enable_irq_wake(sdio->wake_irq);
 	}
+
+	hw->asleep = true;
 
 	return aic_sdio_sleep(sdio);
 }
@@ -742,6 +751,7 @@ static int aic_sdio_resume(struct device *dev)
 	struct aic_hw *hw = sdio->hw;
 	int ret;
 
+
 	if (sdio->wake_irq > 0 && hw->wakeup_enabled) {
 		disable_irq_wake(sdio->wake_irq);
 		disable_irq(sdio->wake_irq);
@@ -751,8 +761,10 @@ static int aic_sdio_resume(struct device *dev)
 	if (ret)
 		return ret;
 
-	sdio->suspended = false;
+	hw->asleep = false;
+
 	aic_hw_resume(hw);
+	sdio->suspended = false;
 
 	/* anything that arrived while suspended is waiting to be read */
 	aic_sdio_kick_tx(hw);
@@ -814,6 +826,26 @@ static int aic_sdio_wake_irq_init(struct aic_sdio *sdio)
 	return 0;
 }
 
+/*
+ * Read whatever the device has pending, for the command path to use while the
+ * interrupt is not being serviced.
+ */
+static int aic_sdio_poll_rx(struct aic_hw *hw)
+{
+	struct aic_sdio *sdio = hw->bus_priv;
+	int ret, i;
+
+	sdio_claim_host(sdio->func);
+	for (i = 0; i < AIC_SDIO_RX_BUDGET; i++) {
+		ret = aic_sdio_rx_one(sdio);
+		if (ret <= 0)
+			break;
+	}
+	sdio_release_host(sdio->func);
+
+	return i;
+}
+
 static const struct aic_bus_ops aic_sdio_bus_ops = {
 	.start = aic_sdio_start,
 	.stop = aic_sdio_stop,
@@ -821,6 +853,7 @@ static const struct aic_bus_ops aic_sdio_bus_ops = {
 	.send_msg = aic_sdio_send_msg,
 	.send_data = aic_sdio_send_data,
 	.kick_tx = aic_sdio_kick_tx,
+	.poll_rx = aic_sdio_poll_rx,
 };
 
 /* Probe. -------------------------------------------------------------------*/

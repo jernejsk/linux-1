@@ -58,6 +58,8 @@ struct aic_hw;
  * @send_msg: hand a control message to the device, may sleep
  * @send_data: queue a data frame for transmission, must not sleep
  * @kick_tx: tell the transport that new data is pending
+ * @poll_rx: read whatever the device has pending, for use when the interrupt
+ *	     cannot be serviced
  */
 struct aic_bus_ops {
 	int (*start)(struct aic_hw *hw);
@@ -66,6 +68,7 @@ struct aic_bus_ops {
 	int (*send_msg)(struct aic_hw *hw, const void *buf, unsigned int len);
 	int (*send_data)(struct aic_hw *hw, struct sk_buff *skb);
 	void (*kick_tx)(struct aic_hw *hw);
+	int (*poll_rx)(struct aic_hw *hw);
 };
 
 /**
@@ -270,6 +273,22 @@ struct aic_hw {
 	u32 avail_vif_mask;
 	struct aic_sta sta[AIC_MAX_STA];
 
+	struct notifier_block pm_notifier;
+	/*
+	 * Set while the system suspends or resumes.  The interrupt that
+	 * normally drives the receive path is serviced by a freezable thread of
+	 * the SDIO core, so answers from the firmware have to be picked up by
+	 * whoever is waiting for them instead.
+	 */
+	bool pm_polling;
+
+	/*
+	 * Set while the device is asleep.  Nothing may be sent to it then: it
+	 * does not answer, and a command that waits for an answer holds up the
+	 * whole suspend.
+	 */
+	bool asleep;
+
 	struct aic_cmd_mgr cmd_mgr;
 	struct aic_fw_info fw;
 
@@ -443,6 +462,7 @@ void aic_hw_free(struct aic_hw *hw);
 int aic_hw_start(struct aic_hw *hw);
 void aic_hw_stop(struct aic_hw *hw);
 void aic_hw_suspend(struct aic_hw *hw);
+void aic_rx_poll(struct aic_hw *hw);
 void aic_hw_resume(struct aic_hw *hw);
 
 #endif /* AIC8800_H */

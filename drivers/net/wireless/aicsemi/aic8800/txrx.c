@@ -649,7 +649,7 @@ void aic_rx_frame(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 		return;
 	}
 
-	if (!rxhdr->flags_upload)
+	if (!rxhdr->flags_upload || hw->pm_polling)
 		return;
 
 	if (rxhdr->flags_sta_idx < AIC_MAX_STA &&

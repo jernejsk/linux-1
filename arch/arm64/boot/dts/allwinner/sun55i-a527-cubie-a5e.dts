@@ -153,6 +153,9 @@
 	mmc-pwrseq = <&wifi_pwrseq>;
 	bus-width = <4>;
 	non-removable;
+	/* the firmware keeps running while the host sleeps, and can wake it */
+	keep-power-in-suspend;
+	wakeup-source;
 	/*
 	 * The controller has no tuning support, so the SDR50 and SDR104 modes
 	 * cannot be used even though both ends would allow them.  Of the high
