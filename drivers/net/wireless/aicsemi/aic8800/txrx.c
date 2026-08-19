@@ -83,6 +83,9 @@ static struct aic_sta *aic_tx_peer(struct aic_vif *vif, struct sk_buff *skb,
  * @skb: frame to send
  * @ndev: interface to send it on
  */
+static int aic_txcfm_claim(struct aic_hw *hw, struct sk_buff *skb,
+			   struct wireless_dev *wdev, u64 cookie);
+
 netdev_tx_t aic_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
 	struct aic_vif *vif = netdev_priv(ndev);
@@ -90,11 +93,19 @@ netdev_tx_t aic_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	struct aic_txdesc *desc;
 	struct ethhdr eth;
 	struct aic_sta *sta;
+	bool eapol;
 	u16 len;
 	u8 tid;
 
 	if (skb->len <= sizeof(eth))
 		goto drop;
+
+	/*
+	 * The handshake that opens the controlled port travels as data, and the
+	 * firmware confirms those frames, which turns a lost one into something
+	 * visible instead of an association that quietly stalls.
+	 */
+	eapol = skb->protocol == htons(ETH_P_PAE);
 
 	sta = aic_tx_peer(vif, skb, &tid);
 	if (!sta)
@@ -125,6 +136,13 @@ netdev_tx_t aic_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 		desc->flags = cpu_to_le16(AIC_TXDESC_F_USE_4ADDR);
 
 	skb->priority = desc->ac;
+
+	if (eapol) {
+		int idx = aic_txcfm_claim(hw, skb, NULL, 0);
+
+		if (idx >= 0)
+			desc->hostid = cpu_to_le32(AIC_TXDESC_HOSTID_CFM | idx);
+	}
 
 	vif->stats.tx_packets++;
 	vif->stats.tx_bytes += len;
