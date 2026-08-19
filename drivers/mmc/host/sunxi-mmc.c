@@ -71,6 +71,7 @@
 #define SDXC_REG_A12A		0x058 /* SMC Auto Command 12 Register */
 #define SDXC_REG_SD_NTSR	0x05C /* SMC New Timing Set Register */
 #define SDXC_REG_DRV_DL		0x140 /* Drive Delay Control Register */
+#define SDXC_REG_THLD	0x100 /* SMC card threshold control */
 #define SDXC_REG_SAMP_DL_REG	0x144 /* SMC sample delay control */
 #define SDXC_REG_DS_DL_REG	0x148 /* SMC data strobe delay control */
 
@@ -222,6 +223,14 @@
 #define SDXC_CLK_100M		5
 #define SDXC_CLK_MODES		6
 
+/* SDXC_REG_THLD bits */
+#define SDXC_CARD_RD_THLD	GENMASK(27, 16)
+#define SDXC_CARD_RD_THLD_ENB	BIT(0)
+
+/* SDXC_REG_SAMP_DL bits */
+#define SDXC_SAMP_DL_SW		GENMASK(5, 0)
+#define SDXC_SAMP_DL_SW_EN	BIT(7)
+
 /* SDXC_REG_SD_NTSR bits */
 #define SDXC_2X_TIMING_MODE	BIT(31)
 #define SDXC_STIMING_DAT_PH	GENMASK(9, 8)
@@ -322,6 +331,10 @@ struct sunxi_mmc_host {
 
 	/* vqmmc */
 	bool		vqmmc_enabled;
+
+	/* sampling delay picked by tuning, for the modes that are tuned */
+	u32		sample_delay;
+	bool		tuning;
 
 	/* timings */
 	bool		use_new_timings;
@@ -493,7 +506,11 @@ static void sunxi_mmc_send_manual_stop(struct sunxi_mmc_host *host,
 		 time_before(jiffies, expire));
 
 	if (!(ri & SDXC_COMMAND_DONE) || (ri & SDXC_INTERRUPT_ERROR_BIT)) {
-		dev_err(mmc_dev(host->mmc), "send stop command failed\n");
+		/* a sampling point that does not read is the point of tuning */
+		if (host->tuning)
+			dev_dbg(mmc_dev(host->mmc), "send stop command failed\n");
+		else
+			dev_err(mmc_dev(host->mmc), "send stop command failed\n");
 		if (req->stop)
 			req->stop->resp[0] = -ETIMEDOUT;
 	} else {
@@ -661,7 +678,11 @@ static irqreturn_t sunxi_mmc_handle_manual_stop(int irq, void *dev_id)
 		return IRQ_HANDLED;
 	}
 
-	dev_err(mmc_dev(host->mmc), "data error, sending stop command\n");
+	/* while tuning, a sampling point that does not read is the point */
+	if (host->tuning)
+		dev_dbg(mmc_dev(host->mmc), "data error, sending stop command\n");
+	else
+		dev_err(mmc_dev(host->mmc), "data error, sending stop command\n");
 
 	/*
 	 * We will never have more than one outstanding request,
@@ -841,6 +862,62 @@ static int sunxi_mmc_set_timing_phase(struct sunxi_mmc_host *host,
 	return 0;
 }
 
+/*
+ * Above 50 MHz the controller cannot pick a sampling point from the four
+ * phases of the doubled clock alone, so those modes sample with the delay
+ * chain instead, which the 1x timing mode feeds.  The delay is what tuning
+ * searches for.
+ */
+#define SUNXI_MMC_SAMPLE_DELAYS		64
+/* How much of the delay range has to work before a window is worth using. */
+#define SUNXI_MMC_SAMPLE_WINDOW_MIN	12
+
+static bool sunxi_mmc_timing_needs_tuning(struct mmc_ios *ios)
+{
+	switch (ios->timing) {
+	case MMC_TIMING_UHS_SDR50:
+	case MMC_TIMING_UHS_SDR104:
+	case MMC_TIMING_MMC_HS200:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/*
+ * Reading faster than 50 MHz only works if the controller keeps the card
+ * waiting until a whole block fits in the FIFO, which is what the read
+ * threshold does.  It can only cover a block that leaves the DMA trigger
+ * level's worth of FIFO free.
+ */
+#define SUNXI_MMC_FIFO_BYTES		1024
+#define SUNXI_MMC_FIFO_RX_TRIGGER	(7 * 4)
+
+static void sunxi_mmc_set_read_threshold(struct sunxi_mmc_host *host,
+					 struct mmc_data *data)
+{
+	u32 rval = mmc_readl(host, REG_THLD);
+
+	rval &= ~(SDXC_CARD_RD_THLD | SDXC_CARD_RD_THLD_ENB);
+
+	if ((data->flags & MMC_DATA_READ) &&
+	    sunxi_mmc_timing_needs_tuning(&host->mmc->ios) &&
+	    data->blksz + SUNXI_MMC_FIFO_RX_TRIGGER <= SUNXI_MMC_FIFO_BYTES)
+		rval |= FIELD_PREP(SDXC_CARD_RD_THLD, data->blksz) |
+			SDXC_CARD_RD_THLD_ENB;
+
+	mmc_writel(host, REG_THLD, rval);
+}
+
+static void sunxi_mmc_set_sample_delay(struct sunxi_mmc_host *host, u32 delay)
+{
+	u32 rval = mmc_readl(host, REG_SAMP_DL_REG);
+
+	rval &= ~SDXC_SAMP_DL_SW;
+	rval |= FIELD_PREP(SDXC_SAMP_DL_SW, delay) | SDXC_SAMP_DL_SW_EN;
+	mmc_writel(host, REG_SAMP_DL_REG, rval);
+}
+
 static int sunxi_mmc_clk_set_rate(struct sunxi_mmc_host *host,
 				  struct mmc_ios *ios)
 {
@@ -919,7 +996,14 @@ static int sunxi_mmc_clk_set_rate(struct sunxi_mmc_host *host,
 	if (host->use_new_timings) {
 		/* Don't touch the delay bits */
 		rval = mmc_readl(host, REG_SD_NTSR);
-		rval |= SDXC_2X_TIMING_MODE;
+		/*
+		 * The modes that are tuned sample from the delay chain, which
+		 * only the 1x timing mode routes to the input latches.
+		 */
+		if (sunxi_mmc_timing_needs_tuning(ios))
+			rval &= ~SDXC_2X_TIMING_MODE;
+		else
+			rval |= SDXC_2X_TIMING_MODE;
 		mmc_writel(host, REG_SD_NTSR, rval);
 	}
 
@@ -932,9 +1016,17 @@ static int sunxi_mmc_clk_set_rate(struct sunxi_mmc_host *host,
 	if (ret)
 		return ret;
 
-	ret = sunxi_mmc_calibrate(host, SDXC_REG_SAMP_DL_REG);
-	if (ret)
-		return ret;
+	/*
+	 * A tuned mode keeps the delay tuning settled on, over the resets and
+	 * mode switches that tuning itself and runtime PM do.
+	 */
+	if (sunxi_mmc_timing_needs_tuning(ios)) {
+		sunxi_mmc_set_sample_delay(host, host->sample_delay);
+	} else {
+		ret = sunxi_mmc_calibrate(host, SDXC_REG_SAMP_DL_REG);
+		if (ret)
+			return ret;
+	}
 
 	/*
 	 * FIXME:
@@ -1178,6 +1270,7 @@ static void sunxi_mmc_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	if (data) {
 		mmc_writel(host, REG_BLKSZ, data->blksz);
 		mmc_writel(host, REG_BCNTR, data->blksz * data->blocks);
+		sunxi_mmc_set_read_threshold(host, data);
 		sunxi_mmc_start_dma(host, data);
 	}
 
@@ -1197,6 +1290,59 @@ static int sunxi_mmc_card_busy(struct mmc_host *mmc)
 	return !!(mmc_readl(host, REG_STAS) & SDXC_CARD_DATA_BUSY);
 }
 
+/*
+ * Walk the sampling delay and keep the middle of the widest run of delays
+ * that read the tuning pattern back, so that the sampling point sits as far
+ * as possible from either edge of the window.
+ */
+static int sunxi_mmc_execute_tuning(struct mmc_host *mmc, u32 opcode)
+{
+	struct sunxi_mmc_host *host = mmc_priv(mmc);
+	unsigned int delay, start = 0, len = 0, best_start = 0, best_len = 0;
+
+	host->tuning = true;
+
+	for (delay = 0; delay < SUNXI_MMC_SAMPLE_DELAYS; delay++) {
+		/*
+		 * The delay reaches the input latches with the next update of
+		 * the output clock, so gate it around the write.
+		 */
+		sunxi_mmc_oclk_onoff(host, 0);
+		sunxi_mmc_set_sample_delay(host, delay);
+		sunxi_mmc_oclk_onoff(host, 1);
+
+		if (!mmc_send_tuning(mmc, opcode, NULL)) {
+			if (!len)
+				start = delay;
+			len++;
+			if (len > best_len) {
+				best_len = len;
+				best_start = start;
+			}
+		} else {
+			len = 0;
+		}
+	}
+
+	host->tuning = false;
+
+	if (best_len < SUNXI_MMC_SAMPLE_WINDOW_MIN) {
+		dev_err(mmc_dev(mmc),
+			"widest sampling window at %u Hz is %u delays, too narrow to use\n",
+			mmc->actual_clock, best_len);
+		return -EIO;
+	}
+
+	host->sample_delay = best_start + best_len / 2;
+	dev_dbg(mmc_dev(mmc), "sampling with delay %u, window %u wide\n",
+		host->sample_delay, best_len);
+	sunxi_mmc_oclk_onoff(host, 0);
+	sunxi_mmc_set_sample_delay(host, host->sample_delay);
+	sunxi_mmc_oclk_onoff(host, 1);
+
+	return 0;
+}
+
 static const struct mmc_host_ops sunxi_mmc_ops = {
 	.request	 = sunxi_mmc_request,
 	.set_ios	 = sunxi_mmc_set_ios,
@@ -1206,6 +1352,7 @@ static const struct mmc_host_ops sunxi_mmc_ops = {
 	.start_signal_voltage_switch = sunxi_mmc_volt_switch,
 	.card_hw_reset	 = sunxi_mmc_hw_reset,
 	.card_busy	 = sunxi_mmc_card_busy,
+	.execute_tuning	 = sunxi_mmc_execute_tuning,
 };
 
 static const struct sunxi_mmc_clk_delay sunxi_mmc_clk_delays[] = {
@@ -1296,7 +1443,7 @@ static const struct sunxi_mmc_timing sun55i_a523_timings[SDXC_CLK_MODES] = {
 				    .cmd_sample_ph = 1, .dat_sample_ph = 1, },
 	[SDXC_CLK_50M_DDR_8BIT]	= { .cmd_drv_ph = 1, .dat_drv_ph = 1,
 				    .cmd_sample_ph = 1, .dat_sample_ph = 1, },
-	[SDXC_CLK_100M]		= { .cmd_drv_ph = 1, },
+	[SDXC_CLK_100M]		= { .cmd_drv_ph = 1, .dat_drv_ph = 1, },
 };
 
 static const struct sunxi_mmc_cfg sun55i_a523_cfg = {
