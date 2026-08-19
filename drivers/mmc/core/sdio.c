@@ -145,7 +145,13 @@ static int sdio_read_cccr(struct mmc_card *card, u32 ocr)
 {
 	int ret;
 	int cccr_vsn;
-	int uhs = ocr & R4_18V_PRESENT;
+	/*
+	 * A device whose signalling is 1.8 V to begin with has nothing to
+	 * switch, so it reports S18A as zero (SDIO spec v3, section 3.1.2),
+	 * and yet it can run the UHS modes.  Read what it offers whenever the
+	 * host is able to use any of them.
+	 */
+	int uhs = (ocr & R4_18V_PRESENT) || mmc_host_can_uhs(card->host);
 	unsigned char data;
 	unsigned char speed;
 
@@ -863,9 +869,12 @@ try_again:
 	if (err)
 		goto remove;
 
-	/* Initialization sequence for UHS-I cards */
-	/* Only if card supports 1.8v and UHS signaling */
-	if ((ocr & R4_18V_PRESENT) && card->sw_caps.sd3_bus_mode) {
+	/*
+	 * Initialization sequence for UHS-I cards.  A device already running at
+	 * 1.8 V reports no voltage switch, so what it says about the UHS bus
+	 * modes is what decides this, not the switch.
+	 */
+	if (card->sw_caps.sd3_bus_mode) {
 		err = mmc_sdio_init_uhs_card(card);
 		if (err)
 			goto remove;
