@@ -841,7 +841,7 @@ static void aic_sta_forget(struct aic_hw *hw, struct aic_vif *vif,
 	if (vif->wdev.iftype == NL80211_IFTYPE_AP ||
 	    vif->wdev.iftype == NL80211_IFTYPE_P2P_GO)
 		list_del(&sta->list);
-	aic_sta_release(sta);
+	aic_sta_release(hw, sta);
 }
 
 static int aic_cfg_del_station(struct wiphy *wiphy, struct wireless_dev *wdev,
@@ -871,7 +871,7 @@ static int aic_cfg_del_station(struct wiphy *wiphy, struct wireless_dev *wdev,
 		}
 	} else if (vif->sta.ap) {
 		ret = aic_send_me_sta_del(hw, vif->sta.ap->sta_idx);
-		aic_sta_release(vif->sta.ap);
+		aic_sta_release(hw, vif->sta.ap);
 		vif->sta.ap = NULL;
 	}
 
@@ -1108,7 +1108,7 @@ static int aic_cfg_stop_ap(struct wiphy *wiphy, struct net_device *ndev,
 
 	aic_send_apm_stop(hw, vif->vif_index);
 	if (vif->ap.bcmc_idx < AIC_MAX_STA)
-		aic_sta_release(&hw->sta[vif->ap.bcmc_idx]);
+		aic_sta_release(hw, &hw->sta[vif->ap.bcmc_idx]);
 	vif->ap.started = false;
 
 	netif_carrier_off(ndev);

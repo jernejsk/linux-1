@@ -125,6 +125,22 @@ struct aic_cmd_mgr {
  * @ps_active: the peer is asleep and its traffic has to be held back
  * @ps_queue: frames held while the peer is asleep
  */
+/*
+ * Frames that arrived under a block ack agreement come in the order the air
+ * gave them, and the firmware says so per frame, so the driver has to put them
+ * back in order.  The window is as deep as the firmware's own reorder buffer.
+ */
+#define AIC_REORD_WIN		64
+#define AIC_REORD_TIMEOUT_MS	100
+
+struct aic_reord_tid {
+	struct sk_buff *buf[AIC_REORD_WIN];
+	u16 head_sn;
+	u16 stored;
+	bool started;
+	unsigned long deadline;
+};
+
 struct aic_sta {
 	struct list_head list;
 	bool valid;
@@ -142,6 +158,8 @@ struct aic_sta {
 	bool ps_active;
 	bool ps_announced;
 	struct sk_buff_head ps_queue;
+
+	struct aic_reord_tid reord[IEEE80211_NUM_TIDS];
 };
 
 /**
@@ -295,6 +313,8 @@ struct aic_hw {
 	struct mutex mutex;
 
 	spinlock_t tx_lock;
+	/* guards the reorder windows, taken from the poll routine and the work */
+	spinlock_t rx_lock;
 	struct sk_buff_head txq[AIC_TXQ_CNT];
 	struct aic_txcfm_slot cfm_ring[AIC_TXCFM_RING_SIZE];
 	u32 cfm_idx;
@@ -312,6 +332,7 @@ struct aic_hw {
 	bool ps_enabled;
 
 	struct work_struct ps_work;
+	struct delayed_work reord_work;
 
 	struct napi_struct napi;
 	struct net_device *napi_dev;
@@ -445,7 +466,8 @@ void aic_txcfm_flush(struct aic_hw *hw, struct aic_vif *vif);
 struct aic_sta *aic_sta_find(struct aic_hw *hw, struct aic_vif *vif,
 			     const u8 *addr);
 void aic_sta_init(struct aic_sta *sta, u8 sta_idx);
-void aic_sta_release(struct aic_sta *sta);
+void aic_sta_release(struct aic_hw *hw, struct aic_sta *sta);
+void aic_reord_work(struct work_struct *work);
 void aic_txq_ps_work(struct work_struct *work);
 void aic_txq_ps_change(struct aic_hw *hw, struct aic_sta *sta, bool asleep);
 void aic_txq_ps_release(struct aic_hw *hw, struct aic_sta *sta, u8 pkt_cnt);

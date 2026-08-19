@@ -208,6 +208,7 @@ struct aic_hw *aic_hw_alloc(struct device *dev, const struct aic_bus_ops *ops,
 	INIT_LIST_HEAD(&hw->vifs);
 	mutex_init(&hw->mutex);
 	spin_lock_init(&hw->tx_lock);
+	spin_lock_init(&hw->rx_lock);
 	skb_queue_head_init(&hw->rx_queue);
 	for (i = 0; i < AIC_TXQ_CNT; i++)
 		skb_queue_head_init(&hw->txq[i]);
@@ -220,6 +221,7 @@ struct aic_hw *aic_hw_alloc(struct device *dev, const struct aic_bus_ops *ops,
 		skb_queue_head_init(&hw->sta[i].ps_queue);
 
 	INIT_WORK(&hw->ps_work, aic_txq_ps_work);
+	INIT_DELAYED_WORK(&hw->reord_work, aic_reord_work);
 
 	aic_cmd_mgr_init(&hw->cmd_mgr);
 
@@ -250,9 +252,10 @@ void aic_hw_free(struct aic_hw *hw)
 	aic_cmd_mgr_deinit(&hw->cmd_mgr);
 
 	cancel_work_sync(&hw->ps_work);
+	cancel_delayed_work_sync(&hw->reord_work);
 
 	for (i = 0; i < AIC_MAX_STA; i++)
-		aic_sta_release(&hw->sta[i]);
+		aic_sta_release(hw, &hw->sta[i]);
 
 	aic_txcfm_flush(hw, NULL);
 
@@ -328,6 +331,7 @@ void aic_hw_suspend(struct aic_hw *hw)
 
 	/* it talks to the firmware, which is about to stop listening */
 	cancel_work_sync(&hw->ps_work);
+	cancel_delayed_work_sync(&hw->reord_work);
 
 	mutex_lock(&hw->mutex);
 	list_for_each_entry(vif, &hw->vifs, list)

@@ -131,7 +131,7 @@ static void aic_event_disconnect(struct aic_hw *hw, const void *param, u16 len)
 		return;
 
 	if (vif->sta.ap) {
-		aic_sta_release(vif->sta.ap);
+		aic_sta_release(hw, vif->sta.ap);
 		vif->sta.ap = NULL;
 	}
 	memset(&vif->chandef, 0, sizeof(vif->chandef));
