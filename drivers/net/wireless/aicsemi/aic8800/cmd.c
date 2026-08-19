@@ -11,6 +11,9 @@
 
 #define AIC_CMD_TIMEOUT_MS	15000
 
+/* How long to wait for an answer once the firmware stopped giving any. */
+#define AIC_CMD_PROBE_TIMEOUT_MS	200
+
 /* Largest confirmation payload the firmware can produce. */
 #define AIC_MSG_PARAM_MAX	1024
 
@@ -119,12 +122,13 @@ int aic_send_msg_timeout(struct aic_hw *hw, const void *param, u16 cfm_id,
 
 	/*
 	 * A single timeout is not proof that the firmware died, and refusing
-	 * everything afterwards turns one lost answer into a dead device.
+	 * everything afterwards turns one lost answer into a dead device.  Once
+	 * several answers in a row went missing, keep sending but stop waiting
+	 * long for them: that way a device that comes back is picked up again
+	 * while a dead one no longer costs seconds per request.
 	 */
-	if (mgr->timeouts >= AIC_CMD_MAX_TIMEOUTS) {
-		aic_msg_free(param);
-		return -EPIPE;
-	}
+	if (mgr->timeouts >= AIC_CMD_MAX_TIMEOUTS)
+		timeout_ms = min(timeout_ms, AIC_CMD_PROBE_TIMEOUT_MS);
 
 	if (hw->asleep) {
 		aic_msg_free(param);
