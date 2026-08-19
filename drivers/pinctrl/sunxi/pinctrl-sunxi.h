@@ -118,6 +118,7 @@ enum sunxi_desc_bias_voltage {
 	 * A100 and D1 SoC, for example.
 	 */
 	BIAS_VOLTAGE_PIO_POW_MODE_CTL,
+	BIAS_VOLTAGE_PIO_POW_MODE_CTL_INV,
 };
 
 struct sunxi_desc_function {
