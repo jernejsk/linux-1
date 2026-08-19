@@ -42,6 +42,9 @@ static void aic_rx_data_cfm(struct aic_hw *hw, const void *param,
 		return;
 	}
 
+	if (!slot.wdev && !(le32_to_cpu(cfm->status) & AIC_TXCFM_S_ACKNOWLEDGED))
+		dev_dbg(hw->dev, "control port frame went unacknowledged\n");
+
 	if (slot.wdev) {
 		acked = !!(le32_to_cpu(cfm->status) & AIC_TXCFM_S_ACKNOWLEDGED);
 

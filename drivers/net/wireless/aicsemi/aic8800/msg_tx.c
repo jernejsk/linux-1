@@ -754,7 +754,8 @@ int aic_send_sm_connect(struct aic_hw *hw, struct aic_vif *vif,
 	     sme->crypto.ciphers_pairwise[0] == WLAN_CIPHER_SUITE_TKIP))
 		req->flags |= DISABLE_HT;
 
-	req->ctrl_port_ethertype = sme->crypto.control_port_ethertype;
+	req->ctrl_port_ethertype = sme->crypto.control_port_ethertype ?:
+				  cpu_to_be16(ETH_P_PAE);
 	req->auth_type = aic_auth_type_to_fw(sme->auth_type);
 	req->uapsd_queues = 0;
 	req->listen_interval = 0;
@@ -1025,7 +1026,17 @@ int aic_send_apm_start(struct aic_hw *hw, struct aic_vif *vif,
 		req->flags |= CONTROL_PORT_HOST;
 	if (settings->crypto.control_port_no_encrypt)
 		req->flags |= CONTROL_PORT_NO_ENC;
-	req->ctrl_port_ethertype = settings->crypto.control_port_ethertype;
+	/*
+	 * The firmware only lets frames of this type past a controlled port
+	 * that is still closed, which is how the handshake that opens it gets
+	 * through in the first place.  Userspace only names the type when it
+	 * wants an unusual one, so fill in the usual one here.
+	 */
+	req->ctrl_port_ethertype = settings->crypto.control_port_ethertype ?:
+				   cpu_to_be16(ETH_P_PAE);
+	if (settings->crypto.n_ciphers_pairwise &&
+	    !aic_cipher_is_wep(settings->crypto.ciphers_pairwise[0]))
+		req->flags |= WPA_WPA2_IN_USE;
 
 	req->chan.band = chandef->chan->band;
 	req->chan.freq = chandef->chan->center_freq;
