@@ -299,7 +299,8 @@ static void aic_sdio_aggr_add(struct aic_sdio *sdio, struct sk_buff *skb)
 	hdr[2] = AIC_PKT_DATA_TX;
 	hdr[3] = aic_crc8(hdr, 3);
 
-	memcpy(hdr + AIC_BUS_HDR_LEN, skb->data, skb->len);
+	/* the frame may be scattered, the buffer handed to the device may not */
+	skb_copy_bits(skb, 0, hdr + AIC_BUS_HDR_LEN, skb->len);
 	sdio->tx_len += AIC_BUS_HDR_LEN + skb->len;
 
 	/* every frame starts on a four byte boundary */
@@ -381,7 +382,18 @@ static void aic_sdio_tx_work(struct aic_sdio *sdio)
 		}
 
 		aic_sdio_aggr_add(sdio, skb);
-		credits--;
+
+		/*
+		 * Ask the device for more room as soon as the last credit is
+		 * spent: leaving the loop here instead would end the transfer
+		 * and only pick up again on the next frame from the stack,
+		 * which costs most of the transmit throughput.
+		 */
+		if (!--credits) {
+			credits = aic_sdio_credits(sdio, false);
+			if (credits < 0)
+				credits = 0;
+		}
 
 		if (!(le16_to_cpu(((struct aic_txdesc *)skb->data)->flags) &
 		      AIC_TXDESC_F_MGMT) &&
