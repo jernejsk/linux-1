@@ -201,13 +201,30 @@ void aic_sta_init(struct aic_sta *sta, u8 sta_idx)
 
 /**
  * aic_sta_release - drop a peer entry and everything held for it
+ * @hw: device
  * @sta: peer entry
  */
-void aic_sta_release(struct aic_sta *sta)
+void aic_sta_release(struct aic_hw *hw, struct aic_sta *sta)
 {
+	unsigned int t, i;
+
 	sta->valid = false;
 	sta->ps_active = false;
 	skb_queue_purge(&sta->ps_queue);
+
+	/* whatever the reorder windows still hold goes nowhere now */
+	spin_lock_bh(&hw->rx_lock);
+	for (t = 0; t < IEEE80211_NUM_TIDS; t++) {
+		struct aic_reord_tid *tid = &sta->reord[t];
+
+		for (i = 0; i < AIC_REORD_WIN; i++) {
+			dev_kfree_skb_any(tid->buf[i]);
+			tid->buf[i] = NULL;
+		}
+		tid->stored = 0;
+		tid->started = false;
+	}
+	spin_unlock_bh(&hw->rx_lock);
 }
 
 /**
@@ -588,7 +605,7 @@ static unsigned int aic_rx_cipher_hdr_len(u8 decr_status)
 /**
  * aic_rx_to_8023 - turn a received 802.11 frame into an Ethernet one
  * @skb: frame as it came from the firmware
- * @rxhdr: its receive descriptor
+ * @decr_status: what the firmware decrypted the frame with
  * @iftype: type of the interface the frame arrived on
  * @addr: address of that interface
  *
@@ -596,7 +613,7 @@ static unsigned int aic_rx_cipher_hdr_len(u8 decr_status)
  * cipher header included, so that header is taken out before the rest is
  * converted the usual way.
  */
-static int aic_rx_to_8023(struct sk_buff *skb, const struct aic_rxhdr *rxhdr,
+static int aic_rx_to_8023(struct sk_buff *skb, u8 decr_status,
 			  enum nl80211_iftype iftype, const u8 *addr)
 {
 	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
@@ -607,7 +624,7 @@ static int aic_rx_to_8023(struct sk_buff *skb, const struct aic_rxhdr *rxhdr,
 
 	hdrlen = ieee80211_hdrlen(hdr->frame_control);
 	cipher_len = ieee80211_has_protected(hdr->frame_control) ?
-		     aic_rx_cipher_hdr_len(rxhdr->vect.decr_status) : 0;
+		     aic_rx_cipher_hdr_len(decr_status) : 0;
 
 	if (cipher_len) {
 		if (skb->len < hdrlen + cipher_len)
@@ -633,11 +650,210 @@ static int aic_rx_to_8023(struct sk_buff *skb, const struct aic_rxhdr *rxhdr,
  * firmware put into the descriptor, so the header is rebuilt here.  Management
  * frames and monitor traffic arrive as full 802.11 frames instead.
  */
+/* What has to survive a stay in the reorder window, kept in the buffer. */
+struct aic_rx_cb {
+	u8 decr_status;
+};
+
+/*
+ * Hand one converted frame to the network stack.  The 802.11 header is still in
+ * front of the payload here, the conversion happens on the way out.
+ */
+static void aic_rx_deliver(struct aic_hw *hw, struct aic_vif *vif,
+			   struct sk_buff *skb)
+{
+	struct aic_rx_cb *cb = (struct aic_rx_cb *)skb->cb;
+
+	if (aic_rx_to_8023(skb, cb->decr_status, vif->wdev.iftype,
+			   vif->ndev->dev_addr)) {
+		vif->stats.rx_dropped++;
+		dev_kfree_skb_any(skb);
+		return;
+	}
+
+	skb->dev = vif->ndev;
+	skb->protocol = eth_type_trans(skb, vif->ndev);
+	skb->ip_summed = CHECKSUM_UNNECESSARY;
+
+	vif->stats.rx_packets++;
+	vif->stats.rx_bytes += skb->len;
+
+	napi_gro_receive(&hw->napi, skb);
+}
+
+/* Everything the window holds up to the first hole, in order. */
+static void aic_reord_release(struct aic_hw *hw, struct aic_vif *vif,
+			      struct aic_reord_tid *tid)
+{
+	while (tid->stored) {
+		unsigned int i = tid->head_sn % AIC_REORD_WIN;
+
+		if (!tid->buf[i])
+			break;
+
+		aic_rx_deliver(hw, vif, tid->buf[i]);
+		tid->buf[i] = NULL;
+		tid->stored--;
+		tid->head_sn = (tid->head_sn + 1) & IEEE80211_SN_MASK;
+	}
+}
+
+/**
+ * aic_reord_work - release frames a hole has been holding up for too long
+ * @work: work item in &aic_hw
+ *
+ * A frame that never arrives must not hold the window forever, so a window
+ * that has not moved within %AIC_REORD_TIMEOUT_MS is released past the hole.
+ */
+void aic_reord_work(struct work_struct *work)
+{
+	struct aic_hw *hw = container_of(to_delayed_work(work), struct aic_hw,
+					 reord_work);
+	bool pending = false;
+	unsigned int i, t;
+
+	local_bh_disable();
+	spin_lock(&hw->rx_lock);
+
+	for (i = 0; i < AIC_MAX_STA; i++) {
+		struct aic_sta *sta = &hw->sta[i];
+		struct aic_vif *vif;
+
+		if (!sta->valid)
+			continue;
+
+		vif = aic_vif_from_fw_idx(hw, sta->vif_idx);
+
+		for (t = 0; t < IEEE80211_NUM_TIDS; t++) {
+			struct aic_reord_tid *tid = &sta->reord[t];
+
+			if (!tid->stored)
+				continue;
+
+			if (!vif || !vif->ndev) {
+				unsigned int n;
+
+				for (n = 0; n < AIC_REORD_WIN; n++) {
+					dev_kfree_skb_any(tid->buf[n]);
+					tid->buf[n] = NULL;
+				}
+				tid->stored = 0;
+				continue;
+			}
+
+			if (time_after_eq(jiffies, tid->deadline)) {
+				unsigned int n;
+
+				/* step past the hole, then take what follows */
+				for (n = 0; n < AIC_REORD_WIN; n++) {
+					if (tid->buf[tid->head_sn % AIC_REORD_WIN])
+						break;
+					tid->head_sn = (tid->head_sn + 1) &
+						       IEEE80211_SN_MASK;
+				}
+				aic_reord_release(hw, vif, tid);
+			}
+
+			if (tid->stored)
+				pending = true;
+		}
+	}
+
+	spin_unlock(&hw->rx_lock);
+	local_bh_enable();
+
+	if (pending)
+		schedule_delayed_work(&hw->reord_work,
+				      msecs_to_jiffies(AIC_REORD_TIMEOUT_MS));
+}
+
+/**
+ * aic_reord_frame - put one frame back in sequence
+ * @hw: device
+ * @vif: interface the frame arrived on
+ * @sta: peer that sent it
+ * @skb: frame, with its 802.11 header
+ * @tid_nr: traffic identifier taken from the QoS control field
+ *
+ * Returns %true when the frame was taken over, %false when the caller should
+ * deliver it as it is.
+ */
+static bool aic_reord_frame(struct aic_hw *hw, struct aic_vif *vif,
+			    struct aic_sta *sta, struct sk_buff *skb,
+			    u8 tid_nr)
+{
+	const struct ieee80211_hdr *hdr = (const void *)skb->data;
+	struct aic_reord_tid *tid = &sta->reord[tid_nr];
+	u16 sn = IEEE80211_SEQ_TO_SN(le16_to_cpu(hdr->seq_ctrl));
+	unsigned int i;
+	u16 ahead;
+
+	spin_lock(&hw->rx_lock);
+
+	if (!tid->started) {
+		tid->head_sn = sn;
+		tid->started = true;
+	}
+
+	ahead = (sn - tid->head_sn) & IEEE80211_SN_MASK;
+
+	/* already released, or so far behind that it is a duplicate */
+	if (ahead >= IEEE80211_SN_MODULO / 2) {
+		spin_unlock(&hw->rx_lock);
+		dev_kfree_skb_any(skb);
+
+		return true;
+	}
+
+	/*
+	 * A frame past the window means the sender moved on, so the window
+	 * moves with it and whatever is left behind goes up as it is.
+	 */
+	if (ahead >= AIC_REORD_WIN) {
+		u16 move = ahead - AIC_REORD_WIN + 1;
+
+		while (move--) {
+			i = tid->head_sn % AIC_REORD_WIN;
+			if (tid->buf[i]) {
+				aic_rx_deliver(hw, vif, tid->buf[i]);
+				tid->buf[i] = NULL;
+				tid->stored--;
+			}
+			tid->head_sn = (tid->head_sn + 1) & IEEE80211_SN_MASK;
+		}
+	}
+
+	i = sn % AIC_REORD_WIN;
+	if (tid->buf[i]) {
+		spin_unlock(&hw->rx_lock);
+		dev_kfree_skb_any(skb);
+
+		return true;
+	}
+
+	tid->buf[i] = skb;
+	tid->stored++;
+	tid->deadline = jiffies + msecs_to_jiffies(AIC_REORD_TIMEOUT_MS);
+
+	aic_reord_release(hw, vif, tid);
+
+	spin_unlock(&hw->rx_lock);
+
+	if (tid->stored)
+		schedule_delayed_work(&hw->reord_work,
+				      msecs_to_jiffies(AIC_REORD_TIMEOUT_MS));
+
+	return true;
+}
+
 void aic_rx_frame(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 		  const u8 *frame, unsigned int len)
 {
+	const struct ieee80211_hdr *hdr;
+	struct aic_sta *sta = NULL;
 	struct aic_vif *vif;
 	struct sk_buff *skb;
+	u8 tid_nr;
 
 	if (rxhdr->flags_monitor_vif) {
 		aic_rx_monitor(hw, rxhdr, frame, len);
@@ -653,9 +869,10 @@ void aic_rx_frame(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 		return;
 
 	if (rxhdr->flags_sta_idx < AIC_MAX_STA &&
-	    hw->sta[rxhdr->flags_sta_idx].valid)
-		hw->sta[rxhdr->flags_sta_idx].last_rssi =
-			rxhdr->vect.rx_vect1.rssi1;
+	    hw->sta[rxhdr->flags_sta_idx].valid) {
+		sta = &hw->sta[rxhdr->flags_sta_idx];
+		sta->last_rssi = rxhdr->vect.rx_vect1.rssi1;
+	}
 
 	vif = aic_vif_from_fw_idx(hw, rxhdr->flags_vif_idx);
 	if (!vif || !vif->ndev)
@@ -663,9 +880,9 @@ void aic_rx_frame(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 
 	/*
 	 * Data frames arrive as 802.11 frames that the firmware has decrypted
-	 * in place, so they are converted here.  The conversion only ever makes
-	 * the frame shorter, and NET_IP_ALIGN plus the room the 802.11 header
-	 * leaves behind keeps the IP header aligned.
+	 * in place.  The conversion only ever makes the frame shorter, and
+	 * NET_IP_ALIGN plus the room the 802.11 header leaves behind keeps the
+	 * IP header aligned.
 	 */
 	skb = napi_alloc_skb(&hw->napi, len + NET_IP_ALIGN);
 	if (!skb) {
@@ -676,19 +893,18 @@ void aic_rx_frame(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 	skb_reserve(skb, NET_IP_ALIGN);
 	skb_put_data(skb, frame, len);
 
-	if (aic_rx_to_8023(skb, rxhdr, vif->wdev.iftype,
-			   vif->ndev->dev_addr)) {
-		vif->stats.rx_dropped++;
-		dev_kfree_skb_any(skb);
-		return;
+	/* what the conversion needs, for after the reorder window */
+	((struct aic_rx_cb *)skb->cb)->decr_status = rxhdr->vect.decr_status;
+
+	hdr = (const struct ieee80211_hdr *)skb->data;
+	if (sta && rxhdr->flags_need_reord && skb->len >= 26 &&
+	    ieee80211_is_data_qos(hdr->frame_control)) {
+		tid_nr = *ieee80211_get_qos_ctl((struct ieee80211_hdr *)hdr) &
+			 IEEE80211_QOS_CTL_TID_MASK;
+		if (tid_nr < IEEE80211_NUM_TIDS &&
+		    aic_reord_frame(hw, vif, sta, skb, tid_nr))
+			return;
 	}
 
-	skb->dev = vif->ndev;
-	skb->protocol = eth_type_trans(skb, vif->ndev);
-	skb->ip_summed = CHECKSUM_UNNECESSARY;
-
-	vif->stats.rx_packets++;
-	vif->stats.rx_bytes += skb->len;
-
-	napi_gro_receive(&hw->napi, skb);
+	aic_rx_deliver(hw, vif, skb);
 }
