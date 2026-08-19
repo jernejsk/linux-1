@@ -653,24 +653,16 @@ static int aic_rx_to_8023(struct sk_buff *skb, u8 decr_status,
 /* What has to survive a stay in the reorder window, kept in the buffer. */
 struct aic_rx_cb {
 	u8 decr_status;
+	bool amsdu;
 };
 
 /*
  * Hand one converted frame to the network stack.  The 802.11 header is still in
  * front of the payload here, the conversion happens on the way out.
  */
-static void aic_rx_deliver(struct aic_hw *hw, struct aic_vif *vif,
-			   struct sk_buff *skb)
+static void aic_rx_up(struct aic_hw *hw, struct aic_vif *vif,
+		      struct sk_buff *skb)
 {
-	struct aic_rx_cb *cb = (struct aic_rx_cb *)skb->cb;
-
-	if (aic_rx_to_8023(skb, cb->decr_status, vif->wdev.iftype,
-			   vif->ndev->dev_addr)) {
-		vif->stats.rx_dropped++;
-		dev_kfree_skb_any(skb);
-		return;
-	}
-
 	skb->dev = vif->ndev;
 	skb->protocol = eth_type_trans(skb, vif->ndev);
 	skb->ip_summed = CHECKSUM_UNNECESSARY;
@@ -679,6 +671,39 @@ static void aic_rx_deliver(struct aic_hw *hw, struct aic_vif *vif,
 	vif->stats.rx_bytes += skb->len;
 
 	napi_gro_receive(&hw->napi, skb);
+}
+
+static void aic_rx_deliver(struct aic_hw *hw, struct aic_vif *vif,
+			   struct sk_buff *skb)
+{
+	struct aic_rx_cb *cb = (struct aic_rx_cb *)skb->cb;
+	struct sk_buff_head list;
+	bool amsdu = cb->amsdu;
+
+	if (aic_rx_to_8023(skb, cb->decr_status, vif->wdev.iftype,
+			   vif->ndev->dev_addr)) {
+		vif->stats.rx_dropped++;
+		dev_kfree_skb_any(skb);
+		return;
+	}
+
+	if (!amsdu) {
+		aic_rx_up(hw, vif, skb);
+		return;
+	}
+
+	/*
+	 * An aggregate carries several frames behind one header, and the
+	 * helper takes the buffer over whether it can split it or not.
+	 */
+	__skb_queue_head_init(&list);
+	ieee80211_amsdu_to_8023s(skb, &list, vif->ndev->dev_addr,
+				 vif->wdev.iftype, 0, NULL, NULL, false);
+	if (skb_queue_empty(&list))
+		vif->stats.rx_dropped++;
+
+	while ((skb = __skb_dequeue(&list)))
+		aic_rx_up(hw, vif, skb);
 }
 
 /* Everything the window holds up to the first hole, in order. */
@@ -895,6 +920,7 @@ void aic_rx_frame(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 
 	/* what the conversion needs, for after the reorder window */
 	((struct aic_rx_cb *)skb->cb)->decr_status = rxhdr->vect.decr_status;
+	((struct aic_rx_cb *)skb->cb)->amsdu = rxhdr->flags_is_amsdu;
 
 	hdr = (const struct ieee80211_hdr *)skb->data;
 	if (sta && rxhdr->flags_need_reord && skb->len >= 26 &&
