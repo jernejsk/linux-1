@@ -152,6 +152,7 @@
 };
 
 &mmc1 {
+	pinctrl-0 = <&mmc1_pins>, <&mmc1_clk_pin>;
 	vmmc-supply = <&reg_wifi_3v3>;
 	vqmmc-supply = <&reg_bldo1>;
 	mmc-pwrseq = <&wifi_pwrseq>;
@@ -161,12 +162,12 @@
 	keep-power-in-suspend;
 	wakeup-source;
 	/*
-	 * The controller has no tuning support, so the SDR50 and SDR104 modes
-	 * cannot be used even though both ends would allow them.  Of the high
-	 * speed rates the bus is stable up to 37.5 MHz; at 50 MHz the device
-	 * answers part of the writes with a CRC error.
+	 * The device is 1.8 V to begin with, so it reports no voltage switch,
+	 * but it takes SDR104 all the same.
 	 */
-	max-frequency = <37500000>;
+	max-frequency = <150000000>;
+	sd-uhs-sdr50;
+	sd-uhs-sdr104;
 	status = "okay";
 
 	wifi@1 {
@@ -463,10 +464,22 @@
 };
 
 /*
- * The wireless module cannot take the drive strength the other slots use: at
- * anything above 25 MHz it answers writes made with 30 mA with a CRC error,
- * while 20 mA works up to 37.5 MHz.
+ * The wireless module answers writes driven with 30 mA with a CRC error, but
+ * its clock needs that drive to survive the series resistor it sits behind, so
+ * the clock keeps the drive strength of the other slots and the rest of the
+ * bus is driven gently.
  */
 &mmc1_pins {
+	pins = "PG1", "PG2", "PG3", "PG4", "PG5";
 	drive-strength = <20>;
+};
+
+&pio {
+	mmc1_clk_pin: mmc1-clk-pin {
+		pins = "PG0";
+		allwinner,pinmux = <2>;
+		function = "mmc1";
+		drive-strength = <30>;
+		bias-pull-up;
+	};
 };
