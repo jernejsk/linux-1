@@ -8,6 +8,7 @@
 #include <linux/etherdevice.h>
 #include <linux/module.h>
 #include <linux/slab.h>
+#include <linux/suspend.h>
 #include <linux/unaligned.h>
 
 #include "aic8800.h"
@@ -120,6 +121,49 @@ static int aic_rx_process(struct aic_hw *hw, struct sk_buff *skb)
 	return frames;
 }
 
+/**
+ * aic_rx_poll - fetch and handle whatever the firmware has to say right now
+ * @hw: device
+ *
+ * Used while the system is suspending or resuming, when the interrupt that
+ * usually drives the receive path is not being serviced.  Data frames are
+ * dropped: the interfaces are detached at this point, and the poll routine
+ * they would be handed to is not running.
+ */
+void aic_rx_poll(struct aic_hw *hw)
+{
+	struct sk_buff *skb;
+
+	if (!hw->bus_ops->poll_rx)
+		return;
+
+	hw->bus_ops->poll_rx(hw);
+
+	while ((skb = skb_dequeue(&hw->rx_queue)))
+		aic_rx_process(hw, skb);
+}
+
+static int aic_pm_notify(struct notifier_block *nb, unsigned long action,
+			 void *unused)
+{
+	struct aic_hw *hw = container_of(nb, struct aic_hw, pm_notifier);
+
+	switch (action) {
+	case PM_SUSPEND_PREPARE:
+	case PM_HIBERNATION_PREPARE:
+	case PM_RESTORE_PREPARE:
+		hw->pm_polling = true;
+		break;
+	case PM_POST_SUSPEND:
+	case PM_POST_HIBERNATION:
+	case PM_POST_RESTORE:
+		hw->pm_polling = false;
+		break;
+	}
+
+	return NOTIFY_DONE;
+}
+
 static int aic_napi_poll(struct napi_struct *napi, int budget)
 {
 	struct aic_hw *hw = container_of(napi, struct aic_hw, napi);
@@ -179,6 +223,9 @@ struct aic_hw *aic_hw_alloc(struct device *dev, const struct aic_bus_ops *ops,
 
 	aic_cmd_mgr_init(&hw->cmd_mgr);
 
+	hw->pm_notifier.notifier_call = aic_pm_notify;
+	register_pm_notifier(&hw->pm_notifier);
+
 	hw->napi_dev = alloc_netdev_dummy(0);
 	if (!hw->napi_dev) {
 		mutex_destroy(&hw->mutex);
@@ -194,6 +241,8 @@ struct aic_hw *aic_hw_alloc(struct device *dev, const struct aic_bus_ops *ops,
 void aic_hw_free(struct aic_hw *hw)
 {
 	int i;
+
+	unregister_pm_notifier(&hw->pm_notifier);
 
 	netif_napi_del(&hw->napi);
 	free_netdev(hw->napi_dev);
@@ -276,6 +325,9 @@ err_napi:
 void aic_hw_suspend(struct aic_hw *hw)
 {
 	struct aic_vif *vif;
+
+	/* it talks to the firmware, which is about to stop listening */
+	cancel_work_sync(&hw->ps_work);
 
 	mutex_lock(&hw->mutex);
 	list_for_each_entry(vif, &hw->vifs, list)

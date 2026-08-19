@@ -126,6 +126,11 @@ int aic_send_msg_timeout(struct aic_hw *hw, const void *param, u16 cfm_id,
 		return -EPIPE;
 	}
 
+	if (hw->asleep) {
+		aic_msg_free(param);
+		return -EBUSY;
+	}
+
 	cmd.id = le16_to_cpu(msg->id);
 	cmd.cfm_id = cfm_id;
 	cmd.cfm = cfm;
@@ -155,15 +160,34 @@ int aic_send_msg_timeout(struct aic_hw *hw, const void *param, u16 cfm_id,
 	if (!need_cfm)
 		goto out;
 
-	if (!wait_for_completion_timeout(&cmd.done,
-					 msecs_to_jiffies(timeout_ms))) {
+	if (hw->pm_polling) {
+		unsigned long deadline = jiffies + msecs_to_jiffies(timeout_ms);
+
+		/*
+		 * Nothing services the receive interrupt while the system
+		 * suspends or resumes, so drive the receive path from here
+		 * until the answer shows up.
+		 */
+		while (!try_wait_for_completion(&cmd.done)) {
+			if (time_after(jiffies, deadline)) {
+				ret = -ETIMEDOUT;
+				break;
+			}
+			aic_rx_poll(hw);
+			usleep_range(100, 200);
+		}
+	} else if (!wait_for_completion_timeout(&cmd.done,
+						msecs_to_jiffies(timeout_ms))) {
+		ret = -ETIMEDOUT;
+	}
+
+	if (ret == -ETIMEDOUT) {
 		if (fatal) {
 			dev_err(hw->dev,
 				"message %04x timed out waiting for %04x\n",
 				cmd.id, cfm_id);
 			mgr->timeouts++;
 		}
-		ret = -ETIMEDOUT;
 		goto out;
 	}
 
