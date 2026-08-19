@@ -155,9 +155,11 @@
 	non-removable;
 	/*
 	 * The controller has no tuning support, so the SDR50 and SDR104 modes
-	 * cannot be used even though both ends would allow them.
+	 * cannot be used even though both ends would allow them.  Of the high
+	 * speed rates the bus is stable up to 37.5 MHz; at 50 MHz the device
+	 * answers part of the writes with a CRC error.
 	 */
-	max-frequency = <12500000>;
+	max-frequency = <37500000>;
 	status = "okay";
 
 	wifi@1 {
@@ -395,6 +397,8 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&uart1_pins>, <&uart1_rts_cts_pins>;
 	uart-has-rtscts;
+	/* the controller drops what it cannot take, so the handshake is not optional */
+	auto-flow-control;
 	status = "okay";
 
 	bluetooth {
@@ -436,4 +440,13 @@
 	usb0_vbus-supply = <&reg_vcc5v>;
 	usb1_vbus-supply = <&reg_usb_vbus>;
 	status = "okay";
+};
+
+/*
+ * The wireless module cannot take the drive strength the other slots use: at
+ * anything above 25 MHz it answers writes made with 30 mA with a CRC error,
+ * while 20 mA works up to 37.5 MHz.
+ */
+&mmc1_pins {
+	drive-strength = <20>;
 };
