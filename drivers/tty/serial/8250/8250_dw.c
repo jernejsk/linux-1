@@ -759,6 +759,13 @@ static int dw8250_probe(struct platform_device *pdev)
 	if (!data->skip_autocfg)
 		dw8250_setup_port(p);
 
+	/*
+	 * Some designs do not describe the automatic flow control they have in
+	 * the component parameter register, so let the device tree say so.
+	 */
+	if (device_property_read_bool(dev, "auto-flow-control"))
+		up->capabilities |= UART_CAP_AFE;
+
 	/* If we have a valid fifosize, try hooking up DMA */
 	if (p->fifosize) {
 		data->data.dma.rxconf.src_maxburst = p->fifosize / 4;
