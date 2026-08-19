@@ -184,7 +184,12 @@ static int aic_napi_poll(struct napi_struct *napi, int budget)
 	if (done < budget && skb_queue_empty(&hw->rx_queue))
 		napi_complete_done(napi, done);
 
-	return done;
+	/*
+	 * One buffer read from the device can hold several frames, so the last
+	 * one processed can take the count past the budget.  Never report more
+	 * than the core granted.
+	 */
+	return min(done, budget);
 }
 
 struct aic_hw *aic_hw_alloc(struct device *dev, const struct aic_bus_ops *ops,
