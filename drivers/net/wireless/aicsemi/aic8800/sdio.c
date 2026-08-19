@@ -122,7 +122,6 @@ struct aic_sdio {
 	u8 *msg_buf;
 
 	/* optional out of band wake line, only used to wake the system */
-	int wake_irq;
 
 	bool up;
 	bool suspended;
@@ -706,13 +705,6 @@ static int aic_sdio_suspend(struct device *dev)
 		return -EOPNOTSUPP;
 	}
 
-	/*
-	 * Without a host wake line the in band interrupt is the only way the
-	 * device can announce a wake up event.
-	 */
-	if (hw->wakeup_enabled && sdio->wake_irq <= 0)
-		flags |= MMC_PM_WAKE_SDIO_IRQ;
-
 	ret = sdio_set_host_pm_flags(func, flags);
 	if (ret)
 		return ret;
@@ -734,11 +726,6 @@ static int aic_sdio_suspend(struct device *dev)
 			   msecs_to_jiffies(100));
 
 
-	if (sdio->wake_irq > 0 && hw->wakeup_enabled) {
-		enable_irq(sdio->wake_irq);
-		enable_irq_wake(sdio->wake_irq);
-	}
-
 	hw->asleep = true;
 
 	return aic_sdio_sleep(sdio);
@@ -751,11 +738,6 @@ static int aic_sdio_resume(struct device *dev)
 	struct aic_hw *hw = sdio->hw;
 	int ret;
 
-
-	if (sdio->wake_irq > 0 && hw->wakeup_enabled) {
-		disable_irq_wake(sdio->wake_irq);
-		disable_irq(sdio->wake_irq);
-	}
 
 	ret = aic_sdio_wakeup(sdio);
 	if (ret)
@@ -775,56 +757,6 @@ static int aic_sdio_resume(struct device *dev)
 
 static DEFINE_SIMPLE_DEV_PM_OPS(aic_sdio_pm_ops, aic_sdio_suspend,
 				aic_sdio_resume);
-
-/**
- * aic_sdio_wake_isr - host wake line went active
- * @irq: interrupt number
- * @data: transport
- *
- * The line is only used to wake the system, the pending work is picked up by
- * the normal SDIO interrupt afterwards.
- */
-static irqreturn_t aic_sdio_wake_isr(int irq, void *data)
-{
-	struct aic_sdio *sdio = data;
-
-	dev_dbg(&sdio->func->dev, "host wake\n");
-
-	return IRQ_HANDLED;
-}
-
-/**
- * aic_sdio_wake_irq_init - claim the optional host wake line
- * @sdio: transport
- *
- * Boards that cannot wake from the in band SDIO interrupt route a separate
- * line from the device to a wake capable interrupt instead.  The line is only
- * enabled while the system is suspended.
- */
-static int aic_sdio_wake_irq_init(struct aic_sdio *sdio)
-{
-	struct device *dev = &sdio->func->dev;
-	int irq, ret;
-
-	irq = fwnode_irq_get_byname(dev_fwnode(dev), "host-wake");
-	if (irq == -EPROBE_DEFER)
-		return irq;
-	if (irq <= 0)
-		return 0;
-
-	ret = devm_request_irq(dev, irq, aic_sdio_wake_isr,
-			       IRQF_TRIGGER_RISING | IRQF_NO_AUTOEN,
-			       "aic8800-wake", sdio);
-	if (ret) {
-		dev_err(dev, "failed to claim the host wake line: %d\n", ret);
-		return ret;
-	}
-
-	sdio->wake_irq = irq;
-	device_set_wakeup_capable(dev, true);
-
-	return 0;
-}
 
 /*
  * Read whatever the device has pending, for the command path to use while the
@@ -983,10 +915,6 @@ static int aic_sdio_probe(struct sdio_func *func,
 		ret = -ENODEV;
 		goto err_free_hw;
 	}
-
-	ret = aic_sdio_wake_irq_init(sdio);
-	if (ret)
-		goto err_free_hw;
 
 	sdio->tx_thread = kthread_run(aic_sdio_tx_thread, sdio, "aic8800-tx");
 	if (IS_ERR(sdio->tx_thread)) {

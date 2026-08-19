@@ -301,7 +301,6 @@ struct aic_hw {
 	u64 mgmt_cookie;
 
 	/* the system was told to keep this device able to wake it */
-	bool wakeup_enabled;
 
 	/* the firmware has been told about the channel list at least once */
 	bool chan_config_done;
@@ -380,8 +379,6 @@ int aic_send_add_if(struct aic_hw *hw, const u8 *mac, enum nl80211_iftype type,
 		    bool p2p, u8 *vif_idx);
 int aic_send_remove_if(struct aic_hw *hw, u8 vif_idx);
 int aic_send_set_filter(struct aic_hw *hw, u32 filter);
-int aic_send_wakeup_info(struct aic_hw *hw, u16 offset, const u8 *mask,
-			 const u8 *pattern, u16 len);
 int aic_send_chan_ctxt_add(struct aic_hw *hw,
 			   const struct cfg80211_chan_def *chandef, u8 *idx);
 int aic_send_chan_ctxt_del(struct aic_hw *hw, u8 idx);
