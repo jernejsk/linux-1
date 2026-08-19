@@ -31,6 +31,15 @@
 /* Time the controller needs after its reset is released. */
 #define AIC_BT_RESET_DELAY_MS	100
 
+/*
+ * The controller loses bytes when more than about 128 of them arrive back to
+ * back, and it never deasserts its request to send, so nothing on the host
+ * side notices.  Longer frames therefore go out in chunks this big, with the
+ * line left idle in between for the controller to catch up.
+ */
+#define AIC_BT_TX_CHUNK		128
+#define AIC_BT_TX_GAP_US	200
+
 struct aic_bt {
 	struct hci_uart hu;
 	struct gpio_desc *reset;
@@ -38,6 +47,8 @@ struct aic_bt {
 	int host_wake_irq;
 	struct sk_buff *rx_skb;
 	struct sk_buff_head txq;
+	/* chunks of frames that were split up, waiting to be paced out */
+	unsigned int tx_chunks;
 };
 
 static int aic_bt_open(struct hci_uart *hu)
@@ -45,6 +56,14 @@ static int aic_bt_open(struct hci_uart *hu)
 	struct aic_bt *aic = hu->priv;
 
 	skb_queue_head_init(&aic->txq);
+
+	/*
+	 * The firmware configures its serial port for hardware flow control,
+	 * and it drops what it cannot take: the 241 byte command that writes
+	 * the extended inquiry response is long enough to overrun its receive
+	 * buffer and is never answered without the handshake.
+	 */
+	serdev_device_set_flow_control(hu->serdev, true);
 
 	if (aic->device_wake)
 		gpiod_set_value_cansleep(aic->device_wake, 1);
@@ -60,6 +79,7 @@ static int aic_bt_close(struct hci_uart *hu)
 		gpiod_set_value_cansleep(aic->device_wake, 0);
 
 	skb_queue_purge(&aic->txq);
+	aic->tx_chunks = 0;
 	kfree_skb(aic->rx_skb);
 	aic->rx_skb = NULL;
 
@@ -71,6 +91,7 @@ static int aic_bt_flush(struct hci_uart *hu)
 	struct aic_bt *aic = hu->priv;
 
 	skb_queue_purge(&aic->txq);
+	aic->tx_chunks = 0;
 
 	return 0;
 }
@@ -104,6 +125,22 @@ static int aic_bt_recv(struct hci_uart *hu, const void *data, int count)
 static int aic_bt_enqueue(struct hci_uart *hu, struct sk_buff *skb)
 {
 	struct aic_bt *aic = hu->priv;
+	u8 type = hci_skb_pkt_type(skb);
+
+	memcpy(skb_push(skb, 1), &type, 1);
+
+	while (skb->len > AIC_BT_TX_CHUNK) {
+		struct sk_buff *chunk = skb_clone(skb, GFP_ATOMIC);
+
+		if (!chunk)
+			break;
+
+		skb_trim(chunk, AIC_BT_TX_CHUNK);
+		hci_skb_pkt_type(chunk) = type;
+		skb_queue_tail(&aic->txq, chunk);
+		skb_pull(skb, AIC_BT_TX_CHUNK);
+		aic->tx_chunks++;
+	}
 
 	skb_queue_tail(&aic->txq, skb);
 
@@ -115,8 +152,21 @@ static struct sk_buff *aic_bt_dequeue(struct hci_uart *hu)
 	struct aic_bt *aic = hu->priv;
 	struct sk_buff *skb = skb_dequeue(&aic->txq);
 
-	if (skb)
-		memcpy(skb_push(skb, 1), &hci_skb_pkt_type(skb), 1);
+	if (!skb) {
+		aic->tx_chunks = 0;
+		return NULL;
+	}
+
+	/*
+	 * Everything that follows the first chunk of a split frame waits for
+	 * the line to run dry, so that the controller sees a gap.  This runs
+	 * from the transmit work, which is allowed to sleep.
+	 */
+	if (aic->tx_chunks) {
+		aic->tx_chunks--;
+		serdev_device_wait_until_sent(hu->serdev, msecs_to_jiffies(10));
+		usleep_range(AIC_BT_TX_GAP_US, 2 * AIC_BT_TX_GAP_US);
+	}
 
 	return skb;
 }
