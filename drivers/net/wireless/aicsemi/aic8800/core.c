@@ -81,11 +81,11 @@ static int aic_rx_process(struct aic_hw *hw, struct sk_buff *skb)
 			 * and overlaps the bus header.
 			 */
 			stride = round_up(len + AIC_RX_HDR_PAD, AIC_BUS_ALIGN);
-			if (off + AIC_RX_HDR_LEN + len > skb->len)
+			if (off + AIC_RX_HDR_PAD + len > skb->len)
 				break;
 
 			aic_rx_frame(hw, (const struct aic_rxhdr *)hdr,
-				     hdr + AIC_RX_HDR_LEN, len);
+				     hdr + AIC_RX_HDR_PAD, len);
 			frames++;
 		} else {
 			stride = round_up(len, AIC_BUS_ALIGN) + AIC_BUS_HDR_LEN;

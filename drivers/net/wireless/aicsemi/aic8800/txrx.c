@@ -566,6 +566,62 @@ static void aic_rx_monitor(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 	netif_receive_skb(skb);
 }
 
+/* Length of the cipher header the firmware leaves in front of the payload. */
+static unsigned int aic_rx_cipher_hdr_len(u8 decr_status)
+{
+	switch (decr_status) {
+	case AIC_RX_DECR_WEP:
+		return 4;
+	case AIC_RX_DECR_TKIP:
+	case AIC_RX_DECR_CCMP128:
+	case AIC_RX_DECR_CCMP256:
+	case AIC_RX_DECR_GCMP128:
+	case AIC_RX_DECR_GCMP256:
+		return 8;
+	case AIC_RX_DECR_WAPI:
+		return 18;
+	default:
+		return 0;
+	}
+}
+
+/**
+ * aic_rx_to_8023 - turn a received 802.11 frame into an Ethernet one
+ * @skb: frame as it came from the firmware
+ * @rxhdr: its receive descriptor
+ * @iftype: type of the interface the frame arrived on
+ * @addr: address of that interface
+ *
+ * The firmware decrypts in place but hands over the whole 802.11 frame,
+ * cipher header included, so that header is taken out before the rest is
+ * converted the usual way.
+ */
+static int aic_rx_to_8023(struct sk_buff *skb, const struct aic_rxhdr *rxhdr,
+			  enum nl80211_iftype iftype, const u8 *addr)
+{
+	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
+	unsigned int hdrlen, cipher_len;
+
+	if (skb->len < ieee80211_hdrlen(hdr->frame_control))
+		return -EINVAL;
+
+	hdrlen = ieee80211_hdrlen(hdr->frame_control);
+	cipher_len = ieee80211_has_protected(hdr->frame_control) ?
+		     aic_rx_cipher_hdr_len(rxhdr->vect.decr_status) : 0;
+
+	if (cipher_len) {
+		if (skb->len < hdrlen + cipher_len)
+			return -EINVAL;
+
+		memmove(skb->data + cipher_len, skb->data, hdrlen);
+		skb_pull(skb, cipher_len);
+		hdr = (struct ieee80211_hdr *)skb->data;
+		hdr->frame_control &= ~cpu_to_le16(IEEE80211_FCTL_PROTECTED);
+	}
+
+	return ieee80211_data_to_8023(skb, addr, iftype);
+}
+
 /**
  * aic_rx_frame - hand one received frame to the network stack
  * @hw: device
@@ -606,12 +662,12 @@ void aic_rx_frame(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 		return;
 
 	/*
-	 * The firmware strips the Ethernet header off, so the frame starts with
-	 * its payload and the addresses have to be taken from the descriptor.
-	 * Leave room for the header plus NET_IP_ALIGN so that the IP header
-	 * ends up aligned.
+	 * Data frames arrive as 802.11 frames that the firmware has decrypted
+	 * in place, so they are converted here.  The conversion only ever makes
+	 * the frame shorter, and NET_IP_ALIGN plus the room the 802.11 header
+	 * leaves behind keeps the IP header aligned.
 	 */
-	skb = napi_alloc_skb(&hw->napi, len + ETH_HLEN + NET_IP_ALIGN);
+	skb = napi_alloc_skb(&hw->napi, len + NET_IP_ALIGN);
 	if (!skb) {
 		vif->stats.rx_dropped++;
 		return;
@@ -620,12 +676,19 @@ void aic_rx_frame(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 	skb_reserve(skb, NET_IP_ALIGN);
 	skb_put_data(skb, frame, len);
 
+	if (aic_rx_to_8023(skb, rxhdr, vif->wdev.iftype,
+			   vif->ndev->dev_addr)) {
+		vif->stats.rx_dropped++;
+		dev_kfree_skb_any(skb);
+		return;
+	}
+
 	skb->dev = vif->ndev;
 	skb->protocol = eth_type_trans(skb, vif->ndev);
 	skb->ip_summed = CHECKSUM_UNNECESSARY;
 
 	vif->stats.rx_packets++;
-	vif->stats.rx_bytes += len;
+	vif->stats.rx_bytes += skb->len;
 
 	napi_gro_receive(&hw->napi, skb);
 }
