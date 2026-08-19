@@ -9,7 +9,7 @@
 
 #include "aic8800.h"
 
-#define AIC_CMD_TIMEOUT_MS	5000
+#define AIC_CMD_TIMEOUT_MS	15000
 
 /* Largest confirmation payload the firmware can produce. */
 #define AIC_MSG_PARAM_MAX	1024
@@ -41,6 +41,7 @@ void aic_cmd_mgr_init(struct aic_cmd_mgr *mgr)
 	spin_lock_init(&mgr->lock);
 	INIT_LIST_HEAD(&mgr->cmds);
 	mutex_init(&mgr->send_lock);
+	mgr->timeouts = 0;
 	mgr->crashed = false;
 }
 
@@ -116,7 +117,11 @@ int aic_send_msg_timeout(struct aic_hw *hw, const void *param, u16 cfm_id,
 	struct aic_cmd cmd = {};
 	int ret;
 
-	if (mgr->crashed) {
+	/*
+	 * A single timeout is not proof that the firmware died, and refusing
+	 * everything afterwards turns one lost answer into a dead device.
+	 */
+	if (mgr->timeouts >= AIC_CMD_MAX_TIMEOUTS) {
 		aic_msg_free(param);
 		return -EPIPE;
 	}
@@ -156,13 +161,15 @@ int aic_send_msg_timeout(struct aic_hw *hw, const void *param, u16 cfm_id,
 			dev_err(hw->dev,
 				"message %04x timed out waiting for %04x\n",
 				cmd.id, cfm_id);
-			mgr->crashed = true;
+			mgr->timeouts++;
 		}
 		ret = -ETIMEDOUT;
 		goto out;
 	}
 
 	ret = cmd.result;
+	if (!ret)
+		mgr->timeouts = 0;
 
 out:
 	if (need_cfm) {

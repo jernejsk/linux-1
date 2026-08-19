@@ -665,7 +665,12 @@ int aic_send_scanu_req(struct aic_hw *hw, struct aic_vif *vif,
 	req->add_ies = 0;
 	req->add_ie_len = 0;
 
-	return aic_send_msg(hw, req, true, SCANU_START_CFM, NULL, 0);
+	/*
+	 * The firmware answers with SCANU_START_CFM once the scan is over, not
+	 * when it starts, so that has to reach the event handler rather than be
+	 * swallowed here as the confirmation of this request.
+	 */
+	return aic_send_msg(hw, req, false, 0, NULL, 0);
 }
 
 /**
@@ -987,7 +992,8 @@ int aic_send_me_config_monitor(struct aic_hw *hw,
 		aic_chandef_to_fw(chandef, &req->chan);
 		req->chan_set = true;
 	}
-	req->uf = true;
+	/* logging of unsupported HT frames, which the firmware drops otherwise */
+	req->uf = false;
 	req->auto_reply = false;
 
 	ret = aic_send_msg(hw, req, true, ME_CONFIG_MONITOR_CFM, &cfm,
@@ -999,6 +1005,32 @@ int aic_send_me_config_monitor(struct aic_hw *hw,
 		*chan_idx = cfm.chan_index;
 
 	return 0;
+}
+
+/*
+ * The firmware wants the basic rate set of the BSS, which userspace only
+ * expresses as the rates marked basic in the beacon's rate elements.
+ */
+static void aic_beacon_basic_rates(const u8 *ies, size_t len,
+				   struct mac_rateset *rates)
+{
+	static const u8 eids[] = { WLAN_EID_SUPP_RATES, WLAN_EID_EXT_SUPP_RATES };
+	unsigned int i, j;
+
+	for (i = 0; i < ARRAY_SIZE(eids); i++) {
+		const u8 *ie = cfg80211_find_ie(eids[i], ies, len);
+
+		if (!ie)
+			continue;
+
+		for (j = 0; j < ie[1]; j++) {
+			if (!(ie[2 + j] & 0x80))	/* not a basic rate */
+				continue;
+			if (rates->length == ARRAY_SIZE(rates->array))
+				return;
+			rates->array[rates->length++] = ie[2 + j];
+		}
+	}
 }
 
 int aic_send_apm_start(struct aic_hw *hw, struct aic_vif *vif,
@@ -1036,18 +1068,34 @@ int aic_send_apm_start(struct aic_hw *hw, struct aic_vif *vif,
 	req->center_freq2 = chandef->center_freq2;
 	req->ch_width = aic_chan_width_to_fw(chandef->width);
 
-	/* the firmware works out the rate set from the beacon itself */
+	/* the head starts with the frame header and the fixed beacon body */
 	req->basic_rates.length = 0;
+	if (settings->beacon.head_len > offsetof(struct ieee80211_mgmt,
+						 u.beacon.variable))
+		aic_beacon_basic_rates(settings->beacon.head +
+				       offsetof(struct ieee80211_mgmt,
+						u.beacon.variable),
+				       settings->beacon.head_len -
+				       offsetof(struct ieee80211_mgmt,
+						u.beacon.variable),
+				       &req->basic_rates);
+	aic_beacon_basic_rates(settings->beacon.tail, settings->beacon.tail_len,
+			       &req->basic_rates);
+	if (!req->basic_rates.length)
+		dev_warn(hw->dev, "the beacon carries no basic rates\n");
 
 	ret = aic_send_bcn(hw, vif->vif_index, bcn);
 	if (ret) {
+		dev_err(hw->dev, "failed to hand over the beacon: %d\n", ret);
 		aic_msg_free(req);
 		return ret;
 	}
 
 	ret = aic_send_msg(hw, req, true, APM_START_CFM, &cfm, sizeof(cfm));
-	if (ret)
+	if (ret) {
+		dev_err(hw->dev, "APM_START_REQ failed: %d\n", ret);
 		return ret;
+	}
 
 	if (cfm.status) {
 		dev_err(hw->dev, "firmware refused to start the AP: %u\n",
@@ -1087,8 +1135,10 @@ int aic_send_bcn(struct aic_hw *hw, u8 vif_idx, struct sk_buff *bcn)
 {
 	struct apm_set_bcn_ie_req *req;
 
-	if (bcn->len > sizeof(req->bcn_ie))
+	if (bcn->len > sizeof(req->bcn_ie)) {
+		dev_err(hw->dev, "beacon of %u bytes does not fit\n", bcn->len);
 		return -E2BIG;
+	}
 
 	req = aic_msg_alloc(APM_SET_BEACON_IE_REQ, TASK_APM, DRV_TASK_ID,
 			    sizeof(*req));

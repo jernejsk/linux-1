@@ -93,14 +93,19 @@ struct aic_cmd {
  * @lock: protects @cmds and @crashed
  * @cmds: list of outstanding requests
  * @send_lock: only one request may be in flight at a time
- * @crashed: set once the firmware stopped answering
+ * @timeouts: consecutive requests that went unanswered
+ * @crashed: set once the device is going away
  */
 struct aic_cmd_mgr {
 	spinlock_t lock;
 	struct list_head cmds;
 	struct mutex send_lock;
+	unsigned int timeouts;
 	bool crashed;
 };
+
+/* Give up on the firmware after this many unanswered requests in a row. */
+#define AIC_CMD_MAX_TIMEOUTS	5
 
 /**
  * struct aic_sta - a peer known to the firmware
@@ -281,6 +286,9 @@ struct aic_hw {
 
 	/* the firmware has been told about the channel list at least once */
 	bool chan_config_done;
+
+	/* the firmware's MM task has been started, which happens once */
+	bool fw_running;
 
 	/* power save as last asked for by userspace */
 	bool ps_enabled;
