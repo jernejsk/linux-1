@@ -365,6 +365,13 @@ void aic_hw_resume(struct aic_hw *hw)
 
 void aic_hw_stop(struct aic_hw *hw)
 {
+	/*
+	 * Both of these reach into the interfaces, which are about to go away,
+	 * so they have to be finished with them first.
+	 */
+	cancel_work_sync(&hw->ps_work);
+	cancel_delayed_work_sync(&hw->reord_work);
+
 	aic_cfg80211_deinit(hw);
 	hw->bus_ops->stop(hw);
 	napi_disable(&hw->napi);
