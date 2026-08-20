@@ -1641,6 +1641,17 @@ static int sunxi_mmc_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+	/*
+	 * The internal DMA controller holds a buffer address in a 32-bit
+	 * descriptor field, shifted, so it reaches that many bits beyond 32.
+	 * Say so, or every transfer to memory above 4 GB - most of it on a
+	 * board with more than that - is bounced through a low pool.
+	 */
+	ret = dma_set_mask_and_coherent(&pdev->dev,
+					DMA_BIT_MASK(32 + host->cfg->idma_des_shift));
+	if (ret)
+		return ret;
+
 	host->sg_cpu = dma_alloc_coherent(&pdev->dev, PAGE_SIZE,
 					  &host->sg_dma, GFP_KERNEL);
 	if (!host->sg_cpu)
