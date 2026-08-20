@@ -511,6 +511,14 @@ static void aic_interface_remove(struct aic_hw *hw, struct aic_vif *vif,
 {
 	hw->vif[vif->drv_vif_index] = NULL;
 	hw->avail_vif_mask |= BIT(vif->drv_vif_index);
+
+	/*
+	 * A receive that started before the interface was taken out of the
+	 * table is still holding it, and the netdev is about to be freed, so
+	 * wait for the poll to be done with what it has.
+	 */
+	napi_synchronize(&hw->napi);
+
 	if (from_cfg80211)
 		cfg80211_unregister_netdevice(vif->ndev);
 	else
