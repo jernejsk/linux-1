@@ -49,7 +49,8 @@ static struct aic_sta *aic_tx_peer(struct aic_vif *vif, struct sk_buff *skb,
 	case NL80211_IFTYPE_AP:
 	case NL80211_IFTYPE_P2P_GO:
 		if (is_multicast_ether_addr(eth->h_dest)) {
-			sta = &hw->sta[vif->ap.bcmc_idx];
+			if (vif->ap.bcmc_idx < AIC_MAX_STA)
+				sta = &hw->sta[vif->ap.bcmc_idx];
 		} else {
 			struct aic_sta *iter;
 
@@ -677,9 +678,12 @@ struct aic_rx_cb {
 /*
  * Hand one converted frame to the network stack.  The 802.11 header is still in
  * front of the payload here, the conversion happens on the way out.
+ *
+ * Only the poll routine may feed its own GRO lists, so a delivery from
+ * anywhere else - the reorder timeout work - goes up plainly instead.
  */
 static void aic_rx_up(struct aic_hw *hw, struct aic_vif *vif,
-		      struct sk_buff *skb)
+		      struct sk_buff *skb, bool napi)
 {
 	skb->dev = vif->ndev;
 	skb->protocol = eth_type_trans(skb, vif->ndev);
@@ -688,11 +692,14 @@ static void aic_rx_up(struct aic_hw *hw, struct aic_vif *vif,
 	vif->stats.rx_packets++;
 	vif->stats.rx_bytes += skb->len;
 
-	napi_gro_receive(&hw->napi, skb);
+	if (napi)
+		napi_gro_receive(&hw->napi, skb);
+	else
+		netif_receive_skb(skb);
 }
 
 static void aic_rx_deliver(struct aic_hw *hw, struct aic_vif *vif,
-			   struct sk_buff *skb)
+			   struct sk_buff *skb, bool napi)
 {
 	struct aic_rx_cb *cb = (struct aic_rx_cb *)skb->cb;
 	struct sk_buff_head list;
@@ -706,7 +713,7 @@ static void aic_rx_deliver(struct aic_hw *hw, struct aic_vif *vif,
 	}
 
 	if (!amsdu) {
-		aic_rx_up(hw, vif, skb);
+		aic_rx_up(hw, vif, skb, napi);
 		return;
 	}
 
@@ -721,12 +728,12 @@ static void aic_rx_deliver(struct aic_hw *hw, struct aic_vif *vif,
 		vif->stats.rx_dropped++;
 
 	while ((skb = __skb_dequeue(&list)))
-		aic_rx_up(hw, vif, skb);
+		aic_rx_up(hw, vif, skb, napi);
 }
 
 /* Everything the window holds up to the first hole, in order. */
 static void aic_reord_release(struct aic_hw *hw, struct aic_vif *vif,
-			      struct aic_reord_tid *tid)
+			      struct aic_reord_tid *tid, bool napi)
 {
 	while (tid->stored) {
 		unsigned int i = tid->head_sn % AIC_REORD_WIN;
@@ -734,7 +741,7 @@ static void aic_reord_release(struct aic_hw *hw, struct aic_vif *vif,
 		if (!tid->buf[i])
 			break;
 
-		aic_rx_deliver(hw, vif, tid->buf[i]);
+		aic_rx_deliver(hw, vif, tid->buf[i], napi);
 		tid->buf[i] = NULL;
 		tid->stored--;
 		tid->head_sn = (tid->head_sn + 1) & IEEE80211_SN_MASK;
@@ -794,7 +801,7 @@ void aic_reord_work(struct work_struct *work)
 					tid->head_sn = (tid->head_sn + 1) &
 						       IEEE80211_SN_MASK;
 				}
-				aic_reord_release(hw, vif, tid);
+				aic_reord_release(hw, vif, tid, false);
 			}
 
 			if (tid->stored)
@@ -858,7 +865,7 @@ static bool aic_reord_frame(struct aic_hw *hw, struct aic_vif *vif,
 		while (move--) {
 			i = tid->head_sn % AIC_REORD_WIN;
 			if (tid->buf[i]) {
-				aic_rx_deliver(hw, vif, tid->buf[i]);
+				aic_rx_deliver(hw, vif, tid->buf[i], true);
 				tid->buf[i] = NULL;
 				tid->stored--;
 			}
@@ -878,7 +885,7 @@ static bool aic_reord_frame(struct aic_hw *hw, struct aic_vif *vif,
 	tid->stored++;
 	tid->deadline = jiffies + msecs_to_jiffies(AIC_REORD_TIMEOUT_MS);
 
-	aic_reord_release(hw, vif, tid);
+	aic_reord_release(hw, vif, tid, true);
 
 	spin_unlock(&hw->rx_lock);
 
@@ -1003,5 +1010,5 @@ void aic_rx_frame(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 			return;
 	}
 
-	aic_rx_deliver(hw, vif, skb);
+	aic_rx_deliver(hw, vif, skb, true);
 }
