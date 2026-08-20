@@ -889,6 +889,58 @@ static bool aic_reord_frame(struct aic_hw *hw, struct aic_vif *vif,
 	return true;
 }
 
+/*
+ * The receive vector says how the frame arrived, in the terms of whichever
+ * generation sent it.
+ */
+void aic_rx_rate(struct rate_info *rate, const struct aic_rx_vector_1 *vect)
+{
+	static const u8 widths[] = {
+		RATE_INFO_BW_20, RATE_INFO_BW_40, RATE_INFO_BW_80,
+		RATE_INFO_BW_160,
+	};
+	static const u16 leg_rates[] = {
+		/* the four bit legacy code, in half megabits */
+		[0] = 960, [1] = 480, [2] = 240, [3] = 120,
+		[4] = 1080, [5] = 720, [6] = 360, [7] = 180,
+		[8] = 22, [9] = 44, [10] = 110, [11] = 220,
+	};
+
+	memset(rate, 0, sizeof(*rate));
+	rate->bw = vect->ch_bw < ARRAY_SIZE(widths) ? widths[vect->ch_bw] :
+						      RATE_INFO_BW_20;
+
+	switch (vect->format_mod) {
+	case AIC_FORMATMOD_HT_MF:
+	case AIC_FORMATMOD_HT_GF:
+		rate->flags = RATE_INFO_FLAGS_MCS;
+		rate->mcs = vect->ht.mcs;
+		if (vect->ht.short_gi)
+			rate->flags |= RATE_INFO_FLAGS_SHORT_GI;
+		break;
+	case AIC_FORMATMOD_VHT:
+		rate->flags = RATE_INFO_FLAGS_VHT_MCS;
+		rate->mcs = vect->vht.mcs;
+		rate->nss = vect->vht.nss + 1;
+		if (vect->vht.short_gi)
+			rate->flags |= RATE_INFO_FLAGS_SHORT_GI;
+		break;
+	case AIC_FORMATMOD_HE_SU_ER:
+	case AIC_FORMATMOD_HE_SU:
+	case AIC_FORMATMOD_HE_MU:
+	case AIC_FORMATMOD_HE_TB:
+		rate->flags = RATE_INFO_FLAGS_HE_MCS;
+		rate->mcs = vect->he.mcs;
+		rate->nss = vect->he.nss + 1;
+		rate->he_gi = vect->he.gi_type;
+		break;
+	default:
+		rate->legacy = vect->leg_rate < ARRAY_SIZE(leg_rates) ?
+			       leg_rates[vect->leg_rate] : 0;
+		break;
+	}
+}
+
 void aic_rx_frame(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 		  const u8 *frame, unsigned int len)
 {
@@ -915,6 +967,7 @@ void aic_rx_frame(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 	    hw->sta[rxhdr->flags_sta_idx].valid) {
 		sta = &hw->sta[rxhdr->flags_sta_idx];
 		sta->last_rssi = rxhdr->vect.rx_vect1.rssi1;
+		aic_rx_rate(&sta->last_rate, &rxhdr->vect.rx_vect1);
 	}
 
 	vif = aic_vif_from_fw_idx(hw, rxhdr->flags_vif_idx);

@@ -116,9 +116,9 @@ static const struct ieee80211_sta_he_cap aic_he_cap = {
 			IEEE80211_HE_PHY_CAP9_NOMINAL_PKT_PADDING_16US,
 	},
 	.he_mcs_nss_supp = {
-		/* one stream, MCS 0-11 */
-		.rx_mcs_80 = cpu_to_le16(0xfffc),
-		.tx_mcs_80 = cpu_to_le16(0xfffc),
+		/* one stream, MCS 0-11: two bits per stream, 2 for 0-11 */
+		.rx_mcs_80 = cpu_to_le16(0xfffe),
+		.tx_mcs_80 = cpu_to_le16(0xfffe),
 		.rx_mcs_160 = cpu_to_le16(0xffff),
 		.tx_mcs_160 = cpu_to_le16(0xffff),
 		.rx_mcs_80p80 = cpu_to_le16(0xffff),
@@ -971,6 +971,11 @@ static int aic_cfg_get_station(struct wiphy *wiphy, struct wireless_dev *wdev,
 	if (sta && sta->last_rssi) {
 		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_SIGNAL);
 		sinfo->signal = sta->last_rssi;
+	}
+
+	if (sta && (sta->last_rate.flags || sta->last_rate.legacy)) {
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_RX_BITRATE);
+		sinfo->rxrate = sta->last_rate;
 	}
 
 	return 0;

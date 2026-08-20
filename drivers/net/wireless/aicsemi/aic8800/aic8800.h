@@ -155,6 +155,9 @@ struct aic_sta {
 	u16 listen_interval;
 
 	s8 last_rssi;
+
+	/* rate of the last frame received from this peer */
+	struct rate_info last_rate;
 	bool ps_active;
 	bool ps_announced;
 	struct sk_buff_head ps_queue;
@@ -459,6 +462,7 @@ struct aic_sta *aic_sta_from_fw_idx(struct aic_hw *hw, u8 sta_idx);
 
 /* txrx.c */
 netdev_tx_t aic_start_xmit(struct sk_buff *skb, struct net_device *ndev);
+void aic_rx_rate(struct rate_info *rate, const struct aic_rx_vector_1 *vect);
 void aic_rx_frame(struct aic_hw *hw, const struct aic_rxhdr *rxhdr,
 		  const u8 *frame, unsigned int len);
 void aic_txq_flush_vif(struct aic_hw *hw, struct aic_vif *vif);
