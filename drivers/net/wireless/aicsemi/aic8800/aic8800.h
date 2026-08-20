@@ -23,7 +23,16 @@
 
 /* Limits the firmware was built with, see the AIC_FW_* comment in fw_msg.h. */
 #define AIC_MAX_VIF		4
-#define AIC_MAX_STA		32
+
+/* Peers the firmware tracks, at indices 0 to one less than this. */
+#define AIC_REMOTE_STA_MAX	32
+
+/*
+ * The firmware places one broadcast/multicast pseudo station per interface
+ * just past the peers, so the station table has to be larger than the number
+ * of peers by that much for those indices to land inside it.
+ */
+#define AIC_MAX_STA		(AIC_REMOTE_STA_MAX + AIC_MAX_VIF)
 #define AIC_MAX_AP_VIF		2
 #define AIC_INVALID_STA		0xff
 #define AIC_INVALID_VIF		0xff
