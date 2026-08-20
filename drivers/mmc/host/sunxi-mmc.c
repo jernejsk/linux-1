@@ -393,49 +393,73 @@ static int sunxi_mmc_init_host(struct sunxi_mmc_host *host)
 	return 0;
 }
 
-static void sunxi_mmc_init_idma_des(struct sunxi_mmc_host *host,
-				    struct mmc_data *data)
+static int sunxi_mmc_init_idma_des(struct sunxi_mmc_host *host,
+				    struct mmc_data *data, int nents)
 {
 	struct sunxi_idma_des *pdes = (struct sunxi_idma_des *)host->sg_cpu;
 	dma_addr_t next_desc = host->sg_dma;
-	int i, max_len = (1 << host->cfg->idma_des_size_bits);
+	unsigned int max_len = 1 << host->cfg->idma_des_size_bits;
+	unsigned int max_des = PAGE_SIZE / sizeof(struct sunxi_idma_des);
+	unsigned int i, d = 0;
+	struct scatterlist *sg;
 
-	for (i = 0; i < data->sg_len; i++) {
-		pdes[i].config = cpu_to_le32(SDXC_IDMAC_DES0_CH |
-					     SDXC_IDMAC_DES0_OWN |
-					     SDXC_IDMAC_DES0_DIC);
+	/*
+	 * The DMA layer may have coalesced the scatterlist, so walk the
+	 * mapped segments and split any segment larger than what one
+	 * descriptor can carry.  Merging never yields more descriptors
+	 * than the original segment count, which the ring is sized for.
+	 */
+	for_each_sg(data->sg, sg, nents, i) {
+		dma_addr_t addr = sg_dma_address(sg);
+		unsigned int len = sg_dma_len(sg);
 
-		if (data->sg[i].length == max_len)
-			pdes[i].buf_size = 0; /* 0 == max_len */
-		else
-			pdes[i].buf_size = cpu_to_le32(data->sg[i].length);
+		while (len) {
+			unsigned int chunk = min(len, max_len);
 
-		next_desc += sizeof(struct sunxi_idma_des);
-		pdes[i].buf_addr_ptr1 =
-			cpu_to_le32(sg_dma_address(&data->sg[i]) >>
-				    host->cfg->idma_des_shift);
-		pdes[i].buf_addr_ptr2 =
-			cpu_to_le32(next_desc >>
-				    host->cfg->idma_des_shift);
+			if (WARN_ON_ONCE(d == max_des))
+				return -EINVAL;
+
+			pdes[d].config = cpu_to_le32(SDXC_IDMAC_DES0_CH |
+						     SDXC_IDMAC_DES0_OWN |
+						     SDXC_IDMAC_DES0_DIC);
+
+			if (chunk == max_len)
+				pdes[d].buf_size = 0; /* 0 == max_len */
+			else
+				pdes[d].buf_size = cpu_to_le32(chunk);
+
+			next_desc += sizeof(struct sunxi_idma_des);
+			pdes[d].buf_addr_ptr1 =
+				cpu_to_le32(addr >> host->cfg->idma_des_shift);
+			pdes[d].buf_addr_ptr2 =
+				cpu_to_le32(next_desc >>
+					    host->cfg->idma_des_shift);
+
+			addr += chunk;
+			len -= chunk;
+			d++;
+		}
 	}
 
 	pdes[0].config |= cpu_to_le32(SDXC_IDMAC_DES0_FD);
-	pdes[i - 1].config |= cpu_to_le32(SDXC_IDMAC_DES0_LD |
+	pdes[d - 1].config |= cpu_to_le32(SDXC_IDMAC_DES0_LD |
 					  SDXC_IDMAC_DES0_ER);
-	pdes[i - 1].config &= cpu_to_le32(~SDXC_IDMAC_DES0_DIC);
-	pdes[i - 1].buf_addr_ptr2 = 0;
+	pdes[d - 1].config &= cpu_to_le32(~SDXC_IDMAC_DES0_DIC);
+	pdes[d - 1].buf_addr_ptr2 = 0;
 
 	/*
 	 * Avoid the io-store starting the idmac hitting io-mem before the
 	 * descriptors hit the main-mem.
 	 */
 	wmb();
+
+	return 0;
 }
 
 static int sunxi_mmc_map_dma(struct sunxi_mmc_host *host,
 			     struct mmc_data *data)
 {
-	u32 i, dma_len;
+	int i, dma_len;
 	struct scatterlist *sg;
 
 	dma_len = dma_map_sg(mmc_dev(host->mmc), data->sg, data->sg_len,
@@ -445,24 +469,30 @@ static int sunxi_mmc_map_dma(struct sunxi_mmc_host *host,
 		return -ENOMEM;
 	}
 
-	for_each_sg(data->sg, sg, data->sg_len, i) {
-		if (sg->offset & 3 || sg->length & 3) {
+	for_each_sg(data->sg, sg, dma_len, i) {
+		if (sg_dma_address(sg) & 3 || sg_dma_len(sg) & 3) {
 			dev_err(mmc_dev(host->mmc),
-				"unaligned scatterlist: os %x length %d\n",
-				sg->offset, sg->length);
+				"unaligned DMA segment: address %pad length %d\n",
+				&(dma_addr_t){ sg_dma_address(sg) },
+				sg_dma_len(sg));
+			dma_unmap_sg(mmc_dev(host->mmc), data->sg,
+				     data->sg_len, mmc_get_dma_dir(data));
 			return -EINVAL;
 		}
 	}
 
-	return 0;
+	return dma_len;
 }
 
-static void sunxi_mmc_start_dma(struct sunxi_mmc_host *host,
-				struct mmc_data *data)
+static int sunxi_mmc_start_dma(struct sunxi_mmc_host *host,
+			       struct mmc_data *data, int nents)
 {
 	u32 rval;
+	int ret;
 
-	sunxi_mmc_init_idma_des(host, data);
+	ret = sunxi_mmc_init_idma_des(host, data, nents);
+	if (ret)
+		return ret;
 
 	rval = mmc_readl(host, REG_GCTRL);
 	rval |= SDXC_DMA_ENABLE_BIT;
@@ -477,6 +507,8 @@ static void sunxi_mmc_start_dma(struct sunxi_mmc_host *host,
 
 	mmc_writel(host, REG_DMAC,
 		   SDXC_IDMAC_FIX_BURST | SDXC_IDMAC_IDMA_ON);
+
+	return 0;
 }
 
 static void sunxi_mmc_send_manual_stop(struct sunxi_mmc_host *host,
@@ -1195,6 +1227,7 @@ static void sunxi_mmc_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	u32 imask = SDXC_INTERRUPT_ERROR_BIT;
 	u32 cmd_val = SDXC_START | (cmd->opcode & 0x3f);
 	bool wait_dma = host->wait_dma;
+	int nents = 0;
 	int ret;
 
 	/* Check for set_ios errors (should never happen) */
@@ -1205,11 +1238,11 @@ static void sunxi_mmc_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	}
 
 	if (data) {
-		ret = sunxi_mmc_map_dma(host, data);
-		if (ret < 0) {
+		nents = sunxi_mmc_map_dma(host, data);
+		if (nents < 0) {
 			dev_err(mmc_dev(mmc), "map DMA failed\n");
-			cmd->error = ret;
-			data->error = ret;
+			cmd->error = nents;
+			data->error = nents;
 			mmc_request_done(mmc, mrq);
 			return;
 		}
@@ -1271,7 +1304,16 @@ static void sunxi_mmc_request(struct mmc_host *mmc, struct mmc_request *mrq)
 		mmc_writel(host, REG_BLKSZ, data->blksz);
 		mmc_writel(host, REG_BCNTR, data->blksz * data->blocks);
 		sunxi_mmc_set_read_threshold(host, data);
-		sunxi_mmc_start_dma(host, data);
+		ret = sunxi_mmc_start_dma(host, data, nents);
+		if (ret) {
+			spin_unlock_irqrestore(&host->lock, iflags);
+			dma_unmap_sg(mmc_dev(mmc), data->sg, data->sg_len,
+				     mmc_get_dma_dir(data));
+			cmd->error = ret;
+			data->error = ret;
+			mmc_request_done(mmc, mrq);
+			return;
+		}
 	}
 
 	host->mrq = mrq;
