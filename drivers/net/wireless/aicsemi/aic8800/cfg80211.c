@@ -428,9 +428,24 @@ static const struct net_device_ops aic_netdev_ops = {
 
 /* Interface management. ----------------------------------------------------*/
 
+/**
+ * aic_interface_add - create one interface
+ * @hw: device
+ * @name: name, or a pattern for the numbered ones
+ * @name_assign_type: what the name above is
+ * @type: what the interface starts out as
+ * @from_cfg80211: whether cfg80211 is asking for this, holding its locks
+ *
+ * cfg80211 keeps the interface on lists of its own, and which call registers
+ * the netdev decides who takes the locks that guard them: its own helper
+ * expects them held, which is the case in its callbacks, while the plain
+ * register does the bookkeeping through the netdev notifier, which takes
+ * them itself.
+ */
 static struct aic_vif *aic_interface_add(struct aic_hw *hw, const char *name,
 					 unsigned char name_assign_type,
-					 enum nl80211_iftype type)
+					 enum nl80211_iftype type,
+					 bool from_cfg80211)
 {
 	struct net_device *ndev;
 	struct aic_vif *vif;
@@ -476,7 +491,10 @@ static struct aic_vif *aic_interface_add(struct aic_hw *hw, const char *name,
 		eth_hw_addr_set(ndev, addr);
 	}
 
-	ret = cfg80211_register_netdevice(ndev);
+	if (from_cfg80211)
+		ret = cfg80211_register_netdevice(ndev);
+	else
+		ret = register_netdev(ndev);
 	if (ret) {
 		free_netdev(ndev);
 		return ERR_PTR(ret);
@@ -488,11 +506,15 @@ static struct aic_vif *aic_interface_add(struct aic_hw *hw, const char *name,
 	return vif;
 }
 
-static void aic_interface_remove(struct aic_hw *hw, struct aic_vif *vif)
+static void aic_interface_remove(struct aic_hw *hw, struct aic_vif *vif,
+				 bool from_cfg80211)
 {
 	hw->vif[vif->drv_vif_index] = NULL;
 	hw->avail_vif_mask |= BIT(vif->drv_vif_index);
-	cfg80211_unregister_netdevice(vif->ndev);
+	if (from_cfg80211)
+		cfg80211_unregister_netdevice(vif->ndev);
+	else
+		unregister_netdev(vif->ndev);
 	free_netdev(vif->ndev);
 }
 
@@ -505,7 +527,7 @@ static struct wireless_dev *aic_cfg_add_iface(struct wiphy *wiphy,
 	struct aic_hw *hw = wiphy_priv(wiphy);
 	struct aic_vif *vif;
 
-	vif = aic_interface_add(hw, name, name_assign_type, type);
+	vif = aic_interface_add(hw, name, name_assign_type, type, true);
 	if (IS_ERR(vif))
 		return ERR_CAST(vif);
 
@@ -517,7 +539,7 @@ static int aic_cfg_del_iface(struct wiphy *wiphy, struct wireless_dev *wdev)
 	struct aic_hw *hw = wiphy_priv(wiphy);
 	struct aic_vif *vif = container_of(wdev, struct aic_vif, wdev);
 
-	aic_interface_remove(hw, vif);
+	aic_interface_remove(hw, vif, true);
 
 	return 0;
 }
@@ -1514,10 +1536,8 @@ int aic_cfg80211_init(struct aic_hw *hw)
 
 	hw->chan_config_done = true;
 
-	rtnl_lock();
 	vif = aic_interface_add(hw, "wlan%d", NET_NAME_ENUM,
-				NL80211_IFTYPE_STATION);
-	rtnl_unlock();
+				NL80211_IFTYPE_STATION, false);
 	if (IS_ERR(vif)) {
 		ret = PTR_ERR(vif);
 		goto err_unregister;
@@ -1535,11 +1555,9 @@ void aic_cfg80211_deinit(struct aic_hw *hw)
 {
 	int i;
 
-	rtnl_lock();
 	for (i = 0; i < AIC_MAX_VIF; i++)
 		if (hw->vif[i])
-			aic_interface_remove(hw, hw->vif[i]);
-	rtnl_unlock();
+			aic_interface_remove(hw, hw->vif[i], false);
 
 	wiphy_unregister(hw->wiphy);
 }
