@@ -450,6 +450,7 @@ static void aic_sdio_kick_tx(struct aic_hw *hw)
 static int aic_sdio_send_data(struct aic_hw *hw, struct sk_buff *skb)
 {
 	unsigned int prio = skb->priority & 7;
+	bool more = netdev_xmit_more();
 
 	if (prio >= AIC_TXQ_CNT)
 		prio = AIC_TXQ_BCMC;
@@ -458,7 +459,15 @@ static int aic_sdio_send_data(struct aic_hw *hw, struct sk_buff *skb)
 	__skb_queue_tail(&hw->txq[prio], skb);
 	spin_unlock_bh(&hw->tx_lock);
 
-	aic_sdio_kick_tx(hw);
+	/*
+	 * With more frames on their way from the stack, leave them to the same
+	 * transfer as this one: the transmit thread is quicker than the stack
+	 * is at handing frames over, so waking it per frame only makes the
+	 * transfers, and the aggregates the firmware builds out of them,
+	 * smaller than they could be.
+	 */
+	if (!more)
+		aic_sdio_kick_tx(hw);
 
 	return 0;
 }
