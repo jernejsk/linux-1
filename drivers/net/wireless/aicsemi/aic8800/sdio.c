@@ -951,13 +951,20 @@ static void aic_sdio_remove(struct sdio_func *func)
 	if (!sdio)
 		return;
 
+	/*
+	 * The transmit thread works from hw, which lives in the wiphy that
+	 * aic_hw_free() gives back, so it has to be gone before that happens.
+	 */
+	if (sdio->tx_thread) {
+		kthread_stop(sdio->tx_thread);
+		sdio->tx_thread = NULL;
+	}
+
 	if (sdio->hw) {
 		aic_hw_stop(sdio->hw);
 		aic_hw_free(sdio->hw);
+		sdio->hw = NULL;
 	}
-
-	if (sdio->tx_thread)
-		kthread_stop(sdio->tx_thread);
 
 	sdio_claim_host(func);
 	sdio_disable_func(func);
