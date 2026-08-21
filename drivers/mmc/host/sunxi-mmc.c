@@ -1336,6 +1336,23 @@ static int sunxi_mmc_card_busy(struct mmc_host *mmc)
 }
 
 /*
+ * A single read at a delay close to the edge of the eye can pass by luck, so
+ * a delay only counts as good once a majority of repeated reads agree.
+ */
+#define SUNXI_MMC_TUNING_REPEATS	3
+
+static bool sunxi_mmc_tuning_read_ok(struct mmc_host *mmc, u32 opcode)
+{
+	unsigned int i, passes = 0;
+
+	for (i = 0; i < SUNXI_MMC_TUNING_REPEATS; i++)
+		if (!mmc_send_tuning(mmc, opcode, NULL))
+			passes++;
+
+	return passes > SUNXI_MMC_TUNING_REPEATS / 2;
+}
+
+/*
  * Walk the sampling delay and keep the middle of the widest run of delays
  * that read the tuning pattern back, so that the sampling point sits as far
  * as possible from either edge of the window.
@@ -1356,7 +1373,7 @@ static int sunxi_mmc_execute_tuning(struct mmc_host *mmc, u32 opcode)
 		sunxi_mmc_set_sample_delay(host, delay);
 		sunxi_mmc_oclk_onoff(host, 1);
 
-		if (!mmc_send_tuning(mmc, opcode, NULL)) {
+		if (sunxi_mmc_tuning_read_ok(mmc, opcode)) {
 			if (!len)
 				start = delay;
 			len++;
