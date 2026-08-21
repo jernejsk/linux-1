@@ -1753,7 +1753,7 @@ static int sunxi_mmc_probe(struct platform_device *pdev)
 
 	ret = mmc_of_parse(mmc);
 	if (ret)
-		goto error_free_dma;
+		goto error_disable_mmc;
 
 	/*
 	 * If we don't support delay chains in the SoC, we can't use any
@@ -1772,7 +1772,7 @@ static int sunxi_mmc_probe(struct platform_device *pdev)
 
 	ret = sunxi_mmc_init_host(host);
 	if (ret)
-		goto error_free_dma;
+		goto error_disable_mmc;
 
 	pm_runtime_set_active(&pdev->dev);
 	pm_runtime_set_autosuspend_delay(&pdev->dev, 50);
@@ -1781,7 +1781,7 @@ static int sunxi_mmc_probe(struct platform_device *pdev)
 
 	ret = mmc_add_host(mmc);
 	if (ret)
-		goto error_free_dma;
+		goto error_disable_mmc;
 
 	dev_info(&pdev->dev, "initialized, max. request size: %u KB%s\n",
 		 mmc->max_req_size >> 10,
@@ -1789,7 +1789,8 @@ static int sunxi_mmc_probe(struct platform_device *pdev)
 
 	return 0;
 
-error_free_dma:
+error_disable_mmc:
+	sunxi_mmc_disable(host);
 	dma_free_coherent(&pdev->dev, PAGE_SIZE, host->sg_cpu, host->sg_dma);
 	return ret;
 }
