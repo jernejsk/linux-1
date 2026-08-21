@@ -191,6 +191,11 @@
 #define SDXC_IDMAC_NORMAL_INTERRUPT_SUM		BIT(8)
 #define SDXC_IDMAC_ABNORMAL_INTERRUPT_SUM	BIT(9)
 #define SDXC_IDMAC_HOST_ABORT_INTERRUPT		BIT(10)
+#define SDXC_IDMAC_STATUS_CLEAR \
+	(SDXC_IDMAC_TRANSMIT_INTERRUPT | SDXC_IDMAC_RECEIVE_INTERRUPT | \
+	 SDXC_IDMAC_FATAL_BUS_ERROR | SDXC_IDMAC_DESTINATION_INVALID | \
+	 SDXC_IDMAC_CARD_ERROR_SUM | SDXC_IDMAC_NORMAL_INTERRUPT_SUM | \
+	 SDXC_IDMAC_ABNORMAL_INTERRUPT_SUM)
 #define SDXC_IDMAC_IDLE				(0 << 13)
 #define SDXC_IDMAC_SUSPEND			(1 << 13)
 #define SDXC_IDMAC_DESC_READ			(2 << 13)
@@ -614,7 +619,7 @@ static irqreturn_t sunxi_mmc_finalize_request(struct sunxi_mmc_host *host)
 	}
 
 	if (data) {
-		mmc_writel(host, REG_IDST, 0x337);
+		mmc_writel(host, REG_IDST, SDXC_IDMAC_STATUS_CLEAR);
 		mmc_writel(host, REG_DMAC, 0);
 		rval = mmc_readl(host, REG_GCTRL);
 		rval |= SDXC_DMA_RESET;
