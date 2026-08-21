@@ -18,6 +18,7 @@
 #include <linux/err.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/iopoll.h>
 #include <linux/kernel.h>
 #include <linux/mmc/card.h>
 #include <linux/mmc/core.h>
@@ -342,15 +343,14 @@ struct sunxi_mmc_host {
 
 static int sunxi_mmc_reset_host(struct sunxi_mmc_host *host)
 {
-	unsigned long expire = jiffies + msecs_to_jiffies(250);
 	u32 rval;
+	int ret;
 
 	mmc_writel(host, REG_GCTRL, SDXC_HARDWARE_RESET);
-	do {
-		rval = mmc_readl(host, REG_GCTRL);
-	} while (time_before(jiffies, expire) && (rval & SDXC_HARDWARE_RESET));
-
-	if (rval & SDXC_HARDWARE_RESET) {
+	ret = readl_poll_timeout_atomic(host->reg_base + SDXC_REG_GCTRL, rval,
+					!(rval & SDXC_HARDWARE_RESET), 1,
+					250000);
+	if (ret) {
 		dev_err(mmc_dev(host->mmc), "fatal err reset timeout\n");
 		return -EIO;
 	}
@@ -515,7 +515,6 @@ static void sunxi_mmc_send_manual_stop(struct sunxi_mmc_host *host,
 				       struct mmc_request *req)
 {
 	u32 arg, cmd_val, ri;
-	unsigned long expire = jiffies + msecs_to_jiffies(1000);
 
 	cmd_val = SDXC_START | SDXC_RESP_EXPIRE |
 		  SDXC_STOP_ABORT_CMD | SDXC_CHECK_RESPONSE_CRC;
@@ -532,10 +531,9 @@ static void sunxi_mmc_send_manual_stop(struct sunxi_mmc_host *host,
 	mmc_writel(host, REG_CARG, arg);
 	mmc_writel(host, REG_CMDR, cmd_val);
 
-	do {
-		ri = mmc_readl(host, REG_RINTR);
-	} while (!(ri & (SDXC_COMMAND_DONE | SDXC_INTERRUPT_ERROR_BIT)) &&
-		 time_before(jiffies, expire));
+	readl_poll_timeout_atomic(host->reg_base + SDXC_REG_RINTR, ri,
+				 ri & (SDXC_COMMAND_DONE | SDXC_INTERRUPT_ERROR_BIT),
+				 1, 1000000);
 
 	if (!(ri & SDXC_COMMAND_DONE) || (ri & SDXC_INTERRUPT_ERROR_BIT)) {
 		/* a sampling point that does not read is the point of tuning */
@@ -737,7 +735,6 @@ static irqreturn_t sunxi_mmc_handle_manual_stop(int irq, void *dev_id)
 
 static int sunxi_mmc_oclk_onoff(struct sunxi_mmc_host *host, u32 oclk_en)
 {
-	unsigned long expire = jiffies + msecs_to_jiffies(750);
 	u32 rval;
 
 	dev_dbg(mmc_dev(host->mmc), "%sabling the clock\n",
@@ -756,9 +753,8 @@ static int sunxi_mmc_oclk_onoff(struct sunxi_mmc_host *host, u32 oclk_en)
 	rval = SDXC_START | SDXC_UPCLK_ONLY | SDXC_WAIT_PRE_OVER;
 	mmc_writel(host, REG_CMDR, rval);
 
-	do {
-		rval = mmc_readl(host, REG_CMDR);
-	} while (time_before(jiffies, expire) && (rval & SDXC_START));
+	readl_poll_timeout_atomic(host->reg_base + SDXC_REG_CMDR, rval,
+				 !(rval & SDXC_START), 1, 750000);
 
 	/* clear irq status bits set by the command */
 	mmc_writel(host, REG_RINTR,
