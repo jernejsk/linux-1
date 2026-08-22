@@ -485,7 +485,8 @@ static void sunxi_mmc_send_manual_stop(struct sunxi_mmc_host *host,
 		 time_before(jiffies, expire));
 
 	if (!(ri & SDXC_COMMAND_DONE) || (ri & SDXC_INTERRUPT_ERROR_BIT)) {
-		dev_err(mmc_dev(host->mmc), "send stop command failed\n");
+		dev_err_ratelimited(mmc_dev(host->mmc),
+				    "send stop command failed\n");
 		if (req->stop)
 			req->stop->error = -ETIMEDOUT;
 	} else {
@@ -671,7 +672,8 @@ static irqreturn_t sunxi_mmc_handle_manual_stop(int irq, void *dev_id)
 		return IRQ_HANDLED;
 	}
 
-	dev_err(mmc_dev(host->mmc), "data error, sending stop command\n");
+	dev_err_ratelimited(mmc_dev(host->mmc),
+			    "data error, sending stop command\n");
 
 	/*
 	 * We will never have more than one outstanding request,
