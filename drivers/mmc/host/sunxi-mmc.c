@@ -1230,13 +1230,11 @@ static int sunxi_mmc_enable(struct sunxi_mmc_host *host)
 {
 	int ret;
 
-	if (!IS_ERR(host->reset)) {
-		ret = reset_control_reset(host->reset);
-		if (ret) {
-			dev_err(host->dev, "Couldn't reset the MMC controller (%d)\n",
-				ret);
-			return ret;
-		}
+	ret = reset_control_reset(host->reset);
+	if (ret) {
+		dev_err(host->dev, "Couldn't reset the MMC controller (%d)\n",
+			ret);
+		return ret;
 	}
 
 	ret = clk_prepare_enable(host->clk_ahb);
@@ -1282,8 +1280,7 @@ error_disable_clk_mmc:
 error_disable_clk_ahb:
 	clk_disable_unprepare(host->clk_ahb);
 error_assert_reset:
-	if (!IS_ERR(host->reset))
-		reset_control_assert(host->reset);
+	reset_control_assert(host->reset);
 	return ret;
 }
 
@@ -1296,8 +1293,7 @@ static void sunxi_mmc_disable(struct sunxi_mmc_host *host)
 	clk_disable_unprepare(host->clk_mmc);
 	clk_disable_unprepare(host->clk_ahb);
 
-	if (!IS_ERR(host->reset))
-		reset_control_assert(host->reset);
+	reset_control_assert(host->reset);
 }
 
 static int sunxi_mmc_resource_request(struct sunxi_mmc_host *host,
@@ -1345,8 +1341,9 @@ static int sunxi_mmc_resource_request(struct sunxi_mmc_host *host,
 
 	host->reset = devm_reset_control_get_optional_exclusive(&pdev->dev,
 								"ahb");
-	if (PTR_ERR(host->reset) == -EPROBE_DEFER)
-		return PTR_ERR(host->reset);
+	if (IS_ERR(host->reset))
+		return dev_err_probe(&pdev->dev, PTR_ERR(host->reset),
+				     "Failed to get reset control\n");
 
 	ret = sunxi_mmc_enable(host);
 	if (ret)
