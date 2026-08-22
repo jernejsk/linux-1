@@ -721,7 +721,7 @@ static int sunxi_mmc_calibrate(struct sunxi_mmc_host *host, int reg_off)
 static int sunxi_mmc_clk_set_phase(struct sunxi_mmc_host *host,
 				   struct mmc_ios *ios, u32 rate)
 {
-	int index;
+	int index, ret;
 
 	/* clk controller delays not used under new timings mode */
 	if (host->use_new_timings)
@@ -750,10 +750,13 @@ static int sunxi_mmc_clk_set_phase(struct sunxi_mmc_host *host,
 		return -EINVAL;
 	}
 
-	clk_set_phase(host->clk_sample, host->cfg->clk_delays[index].sample);
-	clk_set_phase(host->clk_output, host->cfg->clk_delays[index].output);
+	ret = clk_set_phase(host->clk_sample,
+			    host->cfg->clk_delays[index].sample);
+	if (ret)
+		return ret;
 
-	return 0;
+	return clk_set_phase(host->clk_output,
+			     host->cfg->clk_delays[index].output);
 }
 
 static int sunxi_mmc_clk_set_rate(struct sunxi_mmc_host *host,
