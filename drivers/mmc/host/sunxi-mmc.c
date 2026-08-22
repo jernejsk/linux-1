@@ -1345,8 +1345,9 @@ static int sunxi_mmc_resource_request(struct sunxi_mmc_host *host,
 
 	host->reset = devm_reset_control_get_optional_exclusive(&pdev->dev,
 								"ahb");
-	if (PTR_ERR(host->reset) == -EPROBE_DEFER)
-		return PTR_ERR(host->reset);
+	if (IS_ERR(host->reset))
+		return dev_err_probe(&pdev->dev, PTR_ERR(host->reset),
+				     "Failed to get reset control\n");
 
 	ret = sunxi_mmc_enable(host);
 	if (ret)
