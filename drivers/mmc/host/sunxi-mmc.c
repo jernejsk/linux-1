@@ -1516,12 +1516,24 @@ static int sunxi_mmc_runtime_resume(struct device *dev)
 	if (ret)
 		return ret;
 
-	sunxi_mmc_init_host(host);
+	ret = sunxi_mmc_init_host(host);
+	if (ret)
+		goto err_disable;
+
 	sunxi_mmc_set_bus_width(host, mmc->ios.bus_width);
 	sunxi_mmc_set_clk(host, &mmc->ios);
+	if (host->ferror) {
+		ret = host->ferror;
+		goto err_disable;
+	}
+
 	enable_irq(host->irq);
 
 	return 0;
+
+err_disable:
+	sunxi_mmc_disable(host);
+	return ret;
 }
 
 static int sunxi_mmc_runtime_suspend(struct device *dev)
