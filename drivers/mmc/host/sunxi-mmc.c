@@ -1551,7 +1551,6 @@ static int sunxi_mmc_runtime_suspend(struct device *dev)
 	 * Disabling the irq  will prevent this.
 	 */
 	disable_irq(host->irq);
-	sunxi_mmc_reset_host(host);
 	sunxi_mmc_disable(host);
 
 	return 0;
