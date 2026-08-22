@@ -948,7 +948,11 @@ static void sunxi_mmc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 {
 	struct sunxi_mmc_host *host = mmc_priv(mmc);
 
+	host->ferror = 0;
 	sunxi_mmc_card_power(host, ios);
+	if (host->ferror)
+		return;
+
 	sunxi_mmc_set_bus_width(host, ios->bus_width);
 	sunxi_mmc_set_clk(host, ios);
 }
