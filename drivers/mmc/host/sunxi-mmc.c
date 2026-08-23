@@ -558,9 +558,13 @@ static irqreturn_t sunxi_mmc_finalize_request(struct sunxi_mmc_host *host)
 		if (!mrq->cmd->error && (!data || !data->error))
 			mrq->cmd->error = -EIO;
 
-		/* A completed auto stop is fine, but its response is lost. */
-		if (mrq->stop && !(host->int_sum & SDXC_AUTO_COMMAND_DONE))
-			mrq->stop->error = -ETIMEDOUT;
+		if (mrq->stop) {
+			if (host->int_sum & SDXC_AUTO_COMMAND_DONE)
+				mrq->stop->resp[0] = mmc_readl(host,
+							       REG_RESP1);
+			else
+				mrq->stop->error = -ETIMEDOUT;
+		}
 	} else {
 		if (mrq->cmd->flags & MMC_RSP_136) {
 			mrq->cmd->resp[0] = mmc_readl(host, REG_RESP3);
@@ -573,6 +577,10 @@ static irqreturn_t sunxi_mmc_finalize_request(struct sunxi_mmc_host *host)
 
 		if (data)
 			data->bytes_xfered = data->blocks * data->blksz;
+
+		/* The controller stores the auto stop response here. */
+		if (mrq->stop)
+			mrq->stop->resp[0] = mmc_readl(host, REG_RESP1);
 	}
 
 	if (data) {
