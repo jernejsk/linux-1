@@ -579,6 +579,10 @@ static irqreturn_t sunxi_mmc_finalize_request(struct sunxi_mmc_host *host)
 
 		if (data)
 			data->bytes_xfered = data->blocks * data->blksz;
+
+		/* The controller stores the auto stop response here. */
+		if (mrq->stop)
+			mrq->stop->resp[0] = mmc_readl(host, REG_RESP1);
 	}
 
 	if (data) {
