@@ -63,6 +63,19 @@ properties:
     minItems: 2
     maxItems: 11
 
+  vcc-pf:
+    type: object
+    $ref: /schemas/regulator/regulator.yaml#
+    unevaluatedProperties: false
+    description:
+      The SoC-internal supply switch of the PF pin bank. It switches
+      the bank between 1.8V and 3.3V, which is used for SD card UHS-I
+      signal voltage switching.
+
+    properties:
+      vin-supply:
+        description: Input supply of the PF bank switch.
+
 patternProperties:
   # It's pretty scary, but the basic idea is that:
   #   - One node name can start with either s- or r- for PRCM nodes,
@@ -144,6 +157,8 @@ allOf:
         interrupts:
           minItems: 2
           maxItems: 2
+
+        vcc-pf: false
 
 additionalProperties: false
 
