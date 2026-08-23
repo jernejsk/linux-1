@@ -15,12 +15,15 @@
 #include <linux/gpio/driver.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/iopoll.h>
 #include <linux/irqchip/chained_irq.h>
 #include <linux/irqdomain.h>
 #include <linux/of.h>
 #include <linux/of_clk.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
+#include <linux/regulator/driver.h>
+#include <linux/regulator/of_regulator.h>
 #include <linux/slab.h>
 
 #include <linux/pinctrl/consumer.h>
@@ -1640,6 +1643,87 @@ static int sunxi_pinctrl_setup_debounce(struct sunxi_pinctrl *pctl,
 	return 0;
 }
 
+/*
+ * Some SoCs generate the PF bank supply internally and can switch it
+ * between 1.8V and 3.3V at runtime, e.g. for SD card UHS-I signal
+ * voltage switching. Expose the switch as a regulator, so the MMC
+ * driver can use the standard vqmmc handling. The withstand voltage
+ * configuration follows through sunxi_pinctrl_bank_bias_notify().
+ */
+static const unsigned int sunxi_pf_supply_voltages[] = {
+	1800000,
+	3300000,
+};
+
+static int sunxi_pf_supply_get_voltage_sel(struct regulator_dev *rdev)
+{
+	struct sunxi_pinctrl *pctl = rdev_get_drvdata(rdev);
+
+	return readl(pctl->membase + pctl->pow_mod_sel_offset +
+		     PIO_POW_CTL_OFS) & 1;
+}
+
+static int sunxi_pf_supply_set_voltage_sel(struct regulator_dev *rdev,
+					   unsigned int selector)
+{
+	struct sunxi_pinctrl *pctl = rdev_get_drvdata(rdev);
+	unsigned short bank = 'F' - 'A';
+	u32 goal = selector ? 0 : BIT(bank);
+	u32 val;
+
+	writel(selector, pctl->membase + pctl->pow_mod_sel_offset +
+	       PIO_POW_CTL_OFS);
+
+	/* The power value register flags a 1.8V rail with a set bit. */
+	return readl_poll_timeout(pctl->membase + pctl->pow_mod_sel_offset +
+				  PIO_POW_VAL_OFS, val,
+				  (val & BIT(bank)) == goal, 100, 10000);
+}
+
+static const struct regulator_ops sunxi_pf_supply_ops = {
+	.get_voltage_sel	= sunxi_pf_supply_get_voltage_sel,
+	.set_voltage_sel	= sunxi_pf_supply_set_voltage_sel,
+	.list_voltage		= regulator_list_voltage_table,
+	.map_voltage		= regulator_map_voltage_ascend,
+};
+
+static const struct regulator_desc sunxi_pf_supply_desc = {
+	.name		= "vcc-pf",
+	.supply_name	= "vin",
+	.type		= REGULATOR_VOLTAGE,
+	.owner		= THIS_MODULE,
+	.ops		= &sunxi_pf_supply_ops,
+	.volt_table	= sunxi_pf_supply_voltages,
+	.n_voltages	= ARRAY_SIZE(sunxi_pf_supply_voltages),
+};
+
+static int sunxi_pinctrl_register_pf_supply(struct platform_device *pdev,
+					    struct sunxi_pinctrl *pctl)
+{
+	struct regulator_config config = { };
+	struct regulator_dev *rdev;
+	struct device_node *np;
+
+	if (!IS_ENABLED(CONFIG_REGULATOR) || !pctl->desc->pf_power_switch)
+		return 0;
+
+	np = of_get_child_by_name(pdev->dev.of_node, "vcc-pf");
+	if (!np)
+		return 0;
+
+	config.dev = &pdev->dev;
+	config.driver_data = pctl;
+	config.of_node = np;
+	config.init_data = of_get_regulator_init_data(&pdev->dev, np,
+						      &sunxi_pf_supply_desc);
+
+	rdev = devm_regulator_register(&pdev->dev, &sunxi_pf_supply_desc,
+				       &config);
+	of_node_put(np);
+
+	return PTR_ERR_OR_ZERO(rdev);
+}
+
 int sunxi_pinctrl_init_with_flags(struct platform_device *pdev,
 				  const struct sunxi_pinctrl_desc *desc,
 				  unsigned long flags)
@@ -1679,6 +1763,11 @@ int sunxi_pinctrl_init_with_flags(struct platform_device *pdev,
 		pctl->pow_mod_sel_offset = PIO_11B_POW_MOD_SEL_REG;
 	else
 		pctl->pow_mod_sel_offset = PIO_POW_MOD_SEL_REG;
+
+	ret = sunxi_pinctrl_register_pf_supply(pdev, pctl);
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret,
+				     "Couldn't register PF bank supply\n");
 
 	pctl->irq_array = devm_kcalloc(&pdev->dev,
 				       IRQ_PER_BANK * pctl->desc->irq_banks,

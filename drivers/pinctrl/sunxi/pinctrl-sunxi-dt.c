@@ -262,6 +262,10 @@ static void fill_pin_function(struct device *dev, struct device_node *node,
 	int pin, i, index;
 	u8 muxval;
 
+	/* Skip children that are not pin groups, like supply regulators. */
+	if (!of_property_present(node, "pins"))
+		return;
+
 	if (of_property_read_string(node, "function", &funcname)) {
 		dev_warn(dev, "missing \"function\" property\n");
 		return;

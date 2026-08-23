@@ -97,6 +97,8 @@
 #define PIO_POW_MOD_SEL_REG		0x340
 #define PIO_11B_POW_MOD_SEL_REG		0x380
 #define PIO_POW_MOD_CTL_OFS		0x004
+#define PIO_POW_VAL_OFS			0x008
+#define PIO_POW_CTL_OFS			0x010
 
 #define PIO_BANK_K_OFFSET		0x500
 
@@ -144,6 +146,8 @@ struct sunxi_pinctrl_desc {
 	const unsigned int		*irq_bank_map;
 	bool				irq_read_needs_mux;
 	bool				disable_strict_mode;
+	/* The SoC can switch the PF bank supply between 1.8V and 3.3V. */
+	bool				pf_power_switch;
 	enum sunxi_desc_bias_voltage	io_bias_cfg_variant;
 };
 
