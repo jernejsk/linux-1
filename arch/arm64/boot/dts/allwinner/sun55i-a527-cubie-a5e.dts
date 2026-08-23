@@ -123,8 +123,12 @@
 
 &mmc0 {
 	vmmc-supply = <&reg_cldo3>;
+	vqmmc-supply = <&reg_vcc_pf>;
 	cd-gpios = <&pio 5 6 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>; /* PF6 */
 	bus-width = <4>;
+	sd-uhs-sdr50;
+	sd-uhs-ddr50;
+	sd-uhs-sdr104;
 	status = "okay";
 };
 
@@ -141,12 +145,25 @@
 	vcc-pc-supply = <&reg_cldo1>;
 	vcc-pd-supply = <&reg_cldo3>;
 	vcc-pe-supply = <&reg_aldo2>;
-	vcc-pf-supply = <&reg_cldo3>;	/* actually switchable */
+	vcc-pf-supply = <&reg_vcc_pf>;
 	vcc-pg-supply = <&reg_bldo1>;
 	vcc-ph-supply = <&reg_cldo3>;	/* via VCC-IO */
 	vcc-pi-supply = <&reg_cldo3>;
 	vcc-pj-supply = <&reg_cldo4>;
 	vcc-pk-supply = <&reg_cldo1>;
+
+	/*
+	 * The PF bank supply is generated inside the SoC, which switches
+	 * it between the 1.8V rail (CLDO1, via VCC-1V8) and VCC-IO. Only
+	 * the 1.8V input needs describing here, as VCC-IO is always on.
+	 */
+	reg_vcc_pf: vcc-pf {
+		regulator-name = "vcc-pf";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+		vin-supply = <&reg_cldo1>;
+	};
 };
 
 &r_i2c0 {
