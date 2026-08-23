@@ -827,14 +827,12 @@ static int sunxi_mmc_clk_set_rate(struct sunxi_mmc_host *host,
 	 * Under the old timing mode, 8 bit DDR requires the module
 	 * clock to be double the card clock. Under the new timing
 	 * mode, all DDR modes require a doubled module clock.
-	 *
-	 * We currently only support the standard MMC DDR52 mode.
-	 * This block should be updated once support for other DDR
-	 * modes is added.
 	 */
-	if (ios->timing == MMC_TIMING_MMC_DDR52 &&
-	    (host->use_new_timings ||
-	     ios->bus_width == MMC_BUS_WIDTH_8)) {
+	if ((ios->timing == MMC_TIMING_MMC_DDR52 &&
+	     ios->bus_width == MMC_BUS_WIDTH_8) ||
+	    (host->use_new_timings &&
+	     (ios->timing == MMC_TIMING_MMC_DDR52 ||
+	      ios->timing == MMC_TIMING_UHS_DDR50))) {
 		div = 2;
 		clock <<= 1;
 	}
