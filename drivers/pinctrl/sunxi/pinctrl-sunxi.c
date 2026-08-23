@@ -732,10 +732,19 @@ static int sunxi_pinctrl_set_bank_bias(struct sunxi_pinctrl *pctl,
 	switch (pctl->desc->io_bias_cfg_variant) {
 	case BIAS_VOLTAGE_PIO_POW_MODE_CTL_INV:
 		inverted = true;
-		fallthrough;
+
+		/*
+		 * On the A523 the control register selects between the
+		 * adaptive (0) and manual (1) withstand voltage mode. The
+		 * manual recommends the manual mode, and the documented
+		 * PF supply switch procedure relies on it.
+		 */
+		val = BIT(bank);
+		goto write_ctl;
 	case BIAS_VOLTAGE_PIO_POW_MODE_CTL:
 		val = uV > 1800000 && uV <= 2500000 ? BIT(bank) : 0;
 
+write_ctl:
 		raw_spin_lock_irqsave(&pctl->lock, flags);
 		reg = readl(pctl->membase + pctl->pow_mod_sel_offset +
 			    PIO_POW_MOD_CTL_OFS);
