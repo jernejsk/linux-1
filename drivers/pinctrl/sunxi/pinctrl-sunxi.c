@@ -722,51 +722,14 @@ static const struct pinconf_ops sunxi_pconf_ops = {
 	.pin_config_group_set	= sunxi_pconf_group_set,
 };
 
-static int sunxi_pinctrl_set_io_bias_cfg(struct sunxi_pinctrl *pctl,
-					 unsigned pin,
-					 struct regulator *supply)
+static int sunxi_pinctrl_set_bank_bias(struct sunxi_pinctrl *pctl,
+				       unsigned short bank, int uV)
 {
-	unsigned short bank;
 	unsigned long flags;
 	bool inverted = false;
 	u32 val, reg;
-	int uV;
-
-	if (!pctl->desc->io_bias_cfg_variant)
-		return 0;
-
-	uV = regulator_get_voltage(supply);
-	if (uV < 0)
-		return uV;
-
-	/* Might be dummy regulator with no voltage set */
-	if (uV == 0)
-		return 0;
-
-	pin -= pctl->desc->pin_base;
-	bank = pin / PINS_PER_BANK;
 
 	switch (pctl->desc->io_bias_cfg_variant) {
-	case BIAS_VOLTAGE_GRP_CONFIG:
-		/*
-		 * Configured value must be equal or greater to actual
-		 * voltage.
-		 */
-		if (uV <= 1800000)
-			val = 0x0; /* 1.8V */
-		else if (uV <= 2500000)
-			val = 0x6; /* 2.5V */
-		else if (uV <= 2800000)
-			val = 0x9; /* 2.8V */
-		else if (uV <= 3000000)
-			val = 0xA; /* 3.0V */
-		else
-			val = 0xD; /* 3.3V */
-
-		reg = readl(pctl->membase + sunxi_grp_config_reg(pin));
-		reg &= ~IO_BIAS_MASK;
-		writel(reg | val, pctl->membase + sunxi_grp_config_reg(pin));
-		return 0;
 	case BIAS_VOLTAGE_PIO_POW_MODE_CTL_INV:
 		inverted = true;
 		fallthrough;
@@ -797,6 +760,82 @@ static int sunxi_pinctrl_set_io_bias_cfg(struct sunxi_pinctrl *pctl,
 	default:
 		return -EINVAL;
 	}
+}
+
+static int sunxi_pinctrl_set_io_bias_cfg(struct sunxi_pinctrl *pctl,
+					 unsigned pin,
+					 struct regulator *supply)
+{
+	unsigned short bank;
+	u32 val, reg;
+	int uV;
+
+	if (!pctl->desc->io_bias_cfg_variant)
+		return 0;
+
+	uV = regulator_get_voltage(supply);
+	if (uV < 0)
+		return uV;
+
+	/* Might be dummy regulator with no voltage set */
+	if (uV == 0)
+		return 0;
+
+	pin -= pctl->desc->pin_base;
+	bank = pin / PINS_PER_BANK;
+
+	if (pctl->desc->io_bias_cfg_variant == BIAS_VOLTAGE_GRP_CONFIG) {
+		/*
+		 * Configured value must be equal or greater to actual
+		 * voltage.
+		 */
+		if (uV <= 1800000)
+			val = 0x0; /* 1.8V */
+		else if (uV <= 2500000)
+			val = 0x6; /* 2.5V */
+		else if (uV <= 2800000)
+			val = 0x9; /* 2.8V */
+		else if (uV <= 3000000)
+			val = 0xA; /* 3.0V */
+		else
+			val = 0xD; /* 3.3V */
+
+		reg = readl(pctl->membase + sunxi_grp_config_reg(pin));
+		reg &= ~IO_BIAS_MASK;
+		writel(reg | val, pctl->membase + sunxi_grp_config_reg(pin));
+		return 0;
+	}
+
+	return sunxi_pinctrl_set_bank_bias(pctl, bank, uV);
+}
+
+static int sunxi_pinctrl_bank_bias_notify(struct notifier_block *nb,
+					  unsigned long event, void *data)
+{
+	struct sunxi_pinctrl_regulator *s_reg =
+		container_of(nb, struct sunxi_pinctrl_regulator, nb);
+	int uV;
+
+	if (event & REGULATOR_EVENT_PRE_VOLTAGE_CHANGE) {
+		/*
+		 * Keep the higher voltage threshold while the rail is in
+		 * flux, so the pins never see a rail above the configured
+		 * withstand voltage.
+		 */
+		struct pre_voltage_change_data *vdata = data;
+
+		uV = max_t(int, vdata->old_uV, vdata->max_uV);
+	} else if (event & (REGULATOR_EVENT_VOLTAGE_CHANGE |
+			    REGULATOR_EVENT_ABORT_VOLTAGE_CHANGE)) {
+		uV = (unsigned long)data;
+	} else {
+		return NOTIFY_OK;
+	}
+
+	if (uV > 0)
+		sunxi_pinctrl_set_bank_bias(s_reg->pctl, s_reg->bank, uV);
+
+	return NOTIFY_OK;
 }
 
 static int sunxi_pmx_get_funcs_cnt(struct pinctrl_dev *pctldev)
@@ -925,6 +964,24 @@ static int sunxi_pmx_request(struct pinctrl_dev *pctldev, unsigned offset)
 
 	sunxi_pinctrl_set_io_bias_cfg(pctl, offset, reg);
 
+	/*
+	 * Follow runtime voltage changes of switchable bank supplies
+	 * (e.g. vqmmc during SD UHS-I signal voltage switching). Only
+	 * bank-granular variants can be updated here.
+	 */
+	if (pctl->desc->io_bias_cfg_variant &&
+	    pctl->desc->io_bias_cfg_variant != BIAS_VOLTAGE_GRP_CONFIG) {
+		s_reg->pctl = pctl;
+		s_reg->bank = bank_offset;
+		s_reg->nb.notifier_call = sunxi_pinctrl_bank_bias_notify;
+		if (regulator_register_notifier(reg, &s_reg->nb)) {
+			dev_warn(pctl->dev,
+				 "Couldn't register bank P%c bias notifier\n",
+				 'A' + bank);
+			s_reg->nb.notifier_call = NULL;
+		}
+	}
+
 	s_reg->regulator = reg;
 	refcount_set(&s_reg->refcount, 1);
 
@@ -946,6 +1003,11 @@ static int sunxi_pmx_free(struct pinctrl_dev *pctldev, unsigned offset)
 
 	if (!refcount_dec_and_test(&s_reg->refcount))
 		return 0;
+
+	if (s_reg->nb.notifier_call) {
+		regulator_unregister_notifier(s_reg->regulator, &s_reg->nb);
+		s_reg->nb.notifier_call = NULL;
+	}
 
 	regulator_disable(s_reg->regulator);
 	regulator_put(s_reg->regulator);

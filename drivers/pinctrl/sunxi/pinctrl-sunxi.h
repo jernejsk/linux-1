@@ -161,6 +161,9 @@ struct sunxi_pinctrl_group {
 struct sunxi_pinctrl_regulator {
 	struct regulator	*regulator;
 	refcount_t		refcount;
+	struct sunxi_pinctrl	*pctl;
+	unsigned short		bank;
+	struct notifier_block	nb;
 };
 
 struct sunxi_pinctrl {
