@@ -1263,6 +1263,9 @@ static int aic_cfg_get_channel(struct wiphy *wiphy, struct wireless_dev *wdev,
 		return -ENODATA;
 
 	if (vif->wdev.iftype == NL80211_IFTYPE_MONITOR) {
+		if (!hw->chandef_monitor.chan)
+			return -ENODATA;
+
 		*chandef = hw->chandef_monitor;
 		return 0;
 	}
