@@ -78,11 +78,11 @@
 		};
 	};
 
-	osc24M: osc24M-clk {
+	osc26M: osc26M-clk {
 		#clock-cells = <0>;
 		compatible = "fixed-clock";
-		clock-frequency = <24000000>;
-		clock-output-names = "osc24M";
+		clock-frequency = <26000000>;
+		clock-output-names = "osc26M";
 	};
 
 	osc32k: osc32k-clk {
@@ -133,7 +133,7 @@
 				     <GIC_SPI 83 IRQ_TYPE_LEVEL_HIGH>,
 				     <GIC_SPI 85 IRQ_TYPE_LEVEL_HIGH>,
 				     <GIC_SPI 87 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&ccu CLK_APB1>, <&osc24M>, <&osc32k>;
+			clocks = <&ccu CLK_APB1>, <&ccu CLK_SYS_24M>, <&osc32k>;
 			clock-names = "apb", "hosc", "losc";
 			gpio-controller;
 			#gpio-cells = <3>;
@@ -152,7 +152,7 @@
 		ccu: clock-controller@2002000 {
 			compatible = "allwinner,sun60i-a733-ccu";
 			reg = <0x02002000 0x2000>;
-			clocks = <&osc24M>, <&osc32k>, <&iosc>;
+			clocks = <&osc26M>, <&osc32k>, <&iosc>;
 			clock-names = "hosc", "losc", "iosc";
 			#clock-cells = <1>;
 			#reset-cells = <1>;
