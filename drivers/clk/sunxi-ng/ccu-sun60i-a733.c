@@ -511,8 +511,9 @@ static SUNXI_CCU_GATE_HWS(ahb_gpu0_clk, "ahb-gpu0", ahb_hws,
 			  0x5c0, BIT(7), 0);
 static SUNXI_CCU_GATE_HWS(ahb_serdes_clk, "ahb-serdes", ahb_hws,
 			  0x5c0, BIT(8), 0);
+/* Bus fabric in front of the USB controllers, nothing references it. */
 static SUNXI_CCU_GATE_HWS(ahb_usb_sys_clk, "ahb-usb-sys", ahb_hws,
-			  0x5c0, BIT(9), 0);
+			  0x5c0, BIT(9), CLK_IS_CRITICAL);
 static SUNXI_CCU_GATE_HWS(ahb_msi_lite0_clk, "ahb-msi-lite0", ahb_hws,
 			  0x5c0, BIT(16), CLK_IS_CRITICAL);
 static SUNXI_CCU_GATE_HWS(ahb_store_clk, "ahb-store", ahb_hws,
