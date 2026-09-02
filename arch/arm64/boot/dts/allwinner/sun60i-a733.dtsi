@@ -143,6 +143,7 @@
 			mmc0_pins: mmc0-pins {
 				pins = "PF0", "PF1", "PF2",
 				       "PF3", "PF4", "PF5";
+				allwinner,pinmux = <2>;
 				function = "mmc0";
 				drive-strength = <30>;
 				bias-pull-up;
