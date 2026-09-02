@@ -4,9 +4,11 @@
 #include <dt-bindings/clock/sun6i-rtc.h>
 #include <dt-bindings/clock/sun60i-a733-ccu.h>
 #include <dt-bindings/clock/sun60i-a733-r-ccu.h>
+#include <dt-bindings/clock/sun60i-a733-serdes-ccu.h>
 #include <dt-bindings/power/allwinner,sun60i-a733-pck-600.h>
 #include <dt-bindings/reset/sun60i-a733-ccu.h>
 #include <dt-bindings/reset/sun60i-a733-r-ccu.h>
+#include <dt-bindings/reset/sun60i-a733-serdes-ccu.h>
 
 / {
 	interrupt-parent = <&gic>;
@@ -582,6 +584,90 @@
 			#size-cells = <0>;
 		};
 
+		usbphy: phy@4100400 {
+			compatible = "allwinner,sun60i-a733-usb-phy",
+				     "allwinner,sun20i-d1-usb-phy";
+			reg = <0x04100400 0x100>,
+			      <0x04101800 0x100>,
+			      <0x04200800 0x100>,
+			      <0x06b00000 0x100>;
+			reg-names = "phy_ctrl",
+				    "pmu0",
+				    "pmu1",
+				    "pmu2";
+			clocks = <&ccu CLK_USB01_REF>,
+				 <&ccu CLK_USB01_REF>,
+				 <&ccu CLK_USB2_U2_REF>;
+			clock-names = "usb0_phy",
+				      "usb1_phy",
+				      "usb2_phy";
+			resets = <&ccu RST_USB_PHY0>,
+				 <&ccu RST_USB_PHY1>,
+				 <&serdes_ccu RST_SERDES_USB3_USB2_PHY>;
+			reset-names = "usb0_reset",
+				      "usb1_reset",
+				      "usb2_reset";
+			power-domains = <&pck600 PD_USB2>;
+			status = "disabled";
+			#phy-cells = <1>;
+		};
+
+		ehci0: usb@4101000 {
+			compatible = "allwinner,sun60i-a733-ehci",
+				     "generic-ehci";
+			reg = <0x04101000 0x100>;
+			interrupts = <GIC_SPI 157 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ccu CLK_BUS_OHCI0>,
+				 <&ccu CLK_BUS_EHCI0>,
+				 <&ccu CLK_USB_OHCI0>;
+			resets = <&ccu RST_BUS_OHCI0>,
+				 <&ccu RST_BUS_EHCI0>;
+			phys = <&usbphy 0>;
+			phy-names = "usb";
+			status = "disabled";
+		};
+
+		ohci0: usb@4101400 {
+			compatible = "allwinner,sun60i-a733-ohci",
+				     "generic-ohci";
+			reg = <0x04101400 0x100>;
+			interrupts = <GIC_SPI 158 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ccu CLK_BUS_OHCI0>,
+				 <&ccu CLK_USB_OHCI0>;
+			resets = <&ccu RST_BUS_OHCI0>;
+			phys = <&usbphy 0>;
+			phy-names = "usb";
+			status = "disabled";
+		};
+
+		ehci1: usb@4200000 {
+			compatible = "allwinner,sun60i-a733-ehci",
+				     "generic-ehci";
+			reg = <0x04200000 0x100>;
+			interrupts = <GIC_SPI 159 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ccu CLK_BUS_OHCI1>,
+				 <&ccu CLK_BUS_EHCI1>,
+				 <&ccu CLK_USB_OHCI1>;
+			resets = <&ccu RST_BUS_OHCI1>,
+				 <&ccu RST_BUS_EHCI1>;
+			phys = <&usbphy 1>;
+			phy-names = "usb";
+			status = "disabled";
+		};
+
+		ohci1: usb@4200400 {
+			compatible = "allwinner,sun60i-a733-ohci",
+				     "generic-ohci";
+			reg = <0x04200400 0x100>;
+			interrupts = <GIC_SPI 160 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ccu CLK_BUS_OHCI1>,
+				 <&ccu CLK_USB_OHCI1>;
+			resets = <&ccu RST_BUS_OHCI1>;
+			phys = <&usbphy 1>;
+			phy-names = "usb";
+			status = "disabled";
+		};
+
 		gmac0: ethernet@4500000 {
 			compatible = "allwinner,sun60i-a733-gmac210",
 				     "snps,dwmac-5.20";
@@ -639,6 +725,51 @@
 			dma-requests = <64>;
 			resets = <&ccu RST_BUS_DMA0>;
 			#dma-cells = <1>;
+		};
+
+		usb3: usb@6a00000 {
+			compatible = "allwinner,sun60i-a733-dwc3";
+			#address-cells = <1>;
+			#size-cells = <1>;
+			ranges;
+			clocks = <&serdes_ccu CLK_SERDES_USB3_HCLK>,
+				 <&serdes_ccu CLK_SERDES_USB3_ACLK>,
+				 <&ccu CLK_USB2_U2_REF>,
+				 <&ccu CLK_USB2_SUSPEND>,
+				 <&ccu CLK_USB2_MF>,
+				 <&ccu CLK_USB2_U3_UTMI>,
+				 <&serdes_ccu CLK_SERDES_USB3_PIPE>;
+			clock-names = "hclk", "aclk", "ref", "suspend",
+				      "mf", "utmi", "pipe";
+			resets = <&ccu RST_BUS_USB2>;
+			power-domains = <&pck600 PD_USB2>;
+			status = "disabled";
+
+			dwc3: usb@6a00000 {
+				compatible = "snps,dwc3";
+				reg = <0x06a00000 0x100000>;
+				interrupts = <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>;
+				phys = <&usbphy 2>;
+				phy-names = "usb2-phy";
+				phy_type = "utmi";
+				dr_mode = "host";
+				maximum-speed = "high-speed";
+				snps,dis_u2_susphy_quirk;
+				snps,dis_enblslpm_quirk;
+			};
+		};
+
+		serdes_ccu: clock-controller@6c00000 {
+			compatible = "allwinner,sun60i-a733-serdes-ccu";
+			reg = <0x06c00000 0x1000>;
+			clocks = <&ccu CLK_AHB_SERDES>,
+				 <&ccu CLK_MBUS_SERDES>,
+				 <&ccu CLK_SERDES_PHY>,
+				 <&ccu CLK_USB2_U2_PIPE>;
+			clock-names = "ahb", "mbus", "cfg", "u2-pipe";
+			resets = <&ccu RST_BUS_SERDES>;
+			#clock-cells = <1>;
+			#reset-cells = <1>;
 		};
 
 		r_ccu: clock-controller@7010000 {
