@@ -789,6 +789,17 @@ static int sunxi_pinctrl_set_io_bias_cfg(struct sunxi_pinctrl *pctl,
 		       pctl->membase + pctl->pow_mod_sel_offset);
 		raw_spin_unlock_irqrestore(&pctl->lock, flags);
 		return 0;
+	case BIAS_VOLTAGE_PIO_POW_MODE_SEL_2BIT:
+		/* 0b10 selects 3.3V, 0b11 selects 1.8V, 0b01 auto-detection */
+		val = uV <= 1800000 ? 3 : 2;
+
+		raw_spin_lock_irqsave(&pctl->lock, flags);
+		reg = readl(pctl->membase + pctl->pow_mod_sel_offset);
+		reg &= ~(3 << (2 * bank));
+		writel(reg | val << (2 * bank),
+		       pctl->membase + pctl->pow_mod_sel_offset);
+		raw_spin_unlock_irqrestore(&pctl->lock, flags);
+		return 0;
 	default:
 		return -EINVAL;
 	}

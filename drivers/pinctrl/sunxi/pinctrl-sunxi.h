@@ -130,6 +130,11 @@ enum sunxi_desc_bias_voltage {
 	 * A100 and D1 SoC, for example.
 	 */
 	BIAS_VOLTAGE_PIO_POW_MODE_CTL,
+	/*
+	 * Bias voltage is set through PIO_POW_MOD_SEL_REG, with a
+	 * two bit field per bank, as seen on the A733 SoC.
+	 */
+	BIAS_VOLTAGE_PIO_POW_MODE_SEL_2BIT,
 };
 
 struct sunxi_desc_function {
