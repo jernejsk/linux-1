@@ -4,41 +4,459 @@
 
 #include "sun60i-a733.dtsi"
 
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/leds/common.h>
+
 / {
 	model = "Radxa Cubie A7A";
 	compatible = "radxa,cubie-a7a", "allwinner,sun60i-a733";
 
 	aliases {
+		ethernet0 = &gmac0;
 		serial0 = &uart0;
 		mmc0 = &mmc0;
+		mmc2 = &mmc2;
 	};
 
 	chosen {
 		stdout-path = "serial0:115200n8";
 	};
 
-	reg_vcc3v3: vcc3v3 {
+	ext_osc32k: ext-osc32k-clk {
+		#clock-cells = <0>;
+		compatible = "fixed-clock";
+		clock-frequency = <32768>;
+		clock-output-names = "ext_osc32k";
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		led-0 {
+			function = LED_FUNCTION_POWER;
+			color = <LED_COLOR_ID_GREEN>;
+			gpios = <&pio 9 26 GPIO_ACTIVE_HIGH>; /* PJ26 */
+			default-state = "on";
+		};
+
+		led-1 {
+			function = LED_FUNCTION_HEARTBEAT;
+			color = <LED_COLOR_ID_BLUE>;
+			gpios = <&pio 9 27 GPIO_ACTIVE_HIGH>; /* PJ27 */
+			linux,default-trigger = "heartbeat";
+		};
+	};
+
+	reg_vcc5v: vcc5v {
+		/* board wide 5V supply from the USB-C connector */
 		compatible = "regulator-fixed";
-		regulator-name = "vcc-3v3";
-		regulator-min-microvolt = <3300000>;
-		regulator-max-microvolt = <3300000>;
+		regulator-name = "vcc-5v";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		regulator-always-on;
+	};
+
+	reg_ldo2v5: ldo2v5 {
+		/* SY8089A buck feeding the PMIC BLDO and CLDO groups */
+		compatible = "regulator-fixed";
+		regulator-name = "ldo2v5-input";
+		regulator-min-microvolt = <2500000>;
+		regulator-max-microvolt = <2500000>;
+		vin-supply = <&reg_vcc5v>;
 		regulator-always-on;
 	};
 };
 
+&gmac0 {
+	/* No PHY driver, so the MAC adds the RGMII delays */
+	phy-mode = "rgmii";
+	tx-internal-delay-ps = <1200>;
+	rx-internal-delay-ps = <1000>;
+	phy-handle = <&ext_rgmii_phy>;
+	phy-supply = <&reg_swout1>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&rgmii0_pins>;
+	status = "okay";
+};
+
+&i2c0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c0_pg8_pg9_pins>;
+	status = "okay";
+
+	eeprom@50 {
+		compatible = "atmel,24c16";
+		reg = <0x50>;
+		pagesize = <16>;
+		wp-gpios = <&pio 2 7 GPIO_ACTIVE_HIGH>; /* PC7 */
+		vcc-supply = <&reg_aldo1>;
+	};
+};
+
+&mdio0 {
+	ext_rgmii_phy: ethernet-phy@1 {
+		compatible = "ethernet-phy-id7b74.4412",
+			     "ethernet-phy-ieee802.3-c22";
+		reg = <1>;
+		reset-gpios = <&pio 7 16 GPIO_ACTIVE_LOW>; /* PH16 */
+		reset-assert-us = <10000>;
+		reset-deassert-us = <150000>;
+	};
+};
+
 &mmc0 {
-	vmmc-supply = <&reg_vcc3v3>;
+	vmmc-supply = <&reg_swout2>;
+	cd-gpios = <&pio 5 6 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>; /* PF6 */
 	bus-width = <4>;
 	no-mmc;
 	no-sdio;
 	status = "okay";
 };
 
+&mmc2 {
+	vmmc-supply = <&reg_swout2>;
+	vqmmc-supply = <&reg_cldo5>;
+	bus-width = <8>;
+	non-removable;
+	cap-mmc-hw-reset;
+	mmc-ddr-1_8v;
+	mmc-hs200-1_8v;
+	status = "okay";
+};
+
 &pio {
+	vcc-pb-supply = <&reg_swout2>;	/* via VCC-IO */
+	vcc-pc-supply = <&reg_cldo5>;
+	vcc-pd-supply = <&reg_bldo2>;
+	vcc-pe-supply = <&reg_bldo1>;
+	vcc-pf-supply = <&reg_swout2>;	/* actually switchable */
+	vcc-pg-supply = <&reg_bldo5>;
+	vcc-ph-supply = <&reg_swout2>;
+	vcc-pi-supply = <&reg_swout2>;	/* via VCC-IO */
+	vcc-pj-supply = <&reg_bldo2>;
+
+	i2c0_pg8_pg9_pins: i2c0-pg8-pg9-pins {
+		pins = "PG8", "PG9";
+		allwinner,pinmux = <6>;
+		function = "i2c0";
+	};
+
+	rgmii0_pins: rgmii0-pins {
+		pins = "PH0", "PH1", "PH2", "PH4", "PH5", "PH6",
+		       "PH7", "PH8", "PH9", "PH10", "PH11", "PH12",
+		       "PH13", "PH14";
+		allwinner,pinmux = <5>;
+		function = "gmac0";
+		drive-strength = <40>;
+	};
+
+	spi0_pc_pins: spi0-pc-pins {
+		pins = "PC2", "PC3", "PC4", "PC12";
+		allwinner,pinmux = <5>;
+		function = "spi0";
+	};
+
 	uart0_pb9_pb10_pins: uart0-pb9-pb10-pins {
 		pins = "PB9", "PB10";
 		allwinner,pinmux = <2>;
 		function = "uart0";
+	};
+};
+
+&r_i2c0 {
+	status = "okay";
+
+	axp318w: pmic@36 {
+		compatible = "x-powers,axp318w";
+		reg = <0x36>;
+		interrupt-controller;
+		#interrupt-cells = <1>;
+		interrupt-parent = <&nmi_intc>;
+		interrupts = <0 IRQ_TYPE_LEVEL_LOW>;
+
+		vin19-supply = <&reg_vcc5v>;
+		vin23-supply = <&reg_vcc5v>;
+		vin45-supply = <&reg_vcc5v>;
+		vin678-supply = <&reg_vcc5v>;
+		aldo156in-supply = <&reg_vcc5v>;
+		aldo234in-supply = <&reg_vcc5v>;
+		bldoin-supply = <&reg_ldo2v5>;
+		cldoin-supply = <&reg_ldo2v5>;
+		dldoin-supply = <&reg_vcc5v>;
+		eldoin-supply = <&reg_dcdc9>;
+
+		regulators {
+			reg_dcdc1: dcdc1 {
+				/* also powers the green LED */
+				regulator-always-on;
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-name = "vcc-wifi";
+			};
+
+			reg_dcdc2: dcdc2 {
+				regulator-always-on;
+				regulator-min-microvolt = <800000>;
+				regulator-max-microvolt = <800000>;
+				regulator-name = "vdd-sys";
+			};
+
+			/* Supplies the "big" cluster (Cortex-A76 cores) */
+			reg_dcdc3: dcdc3 {
+				regulator-always-on;
+				regulator-min-microvolt = <800000>;
+				regulator-max-microvolt = <1000000>;
+				regulator-name = "vdd-cpub";
+			};
+
+			reg_dcdc4: dcdc4 {
+				regulator-min-microvolt = <800000>;
+				regulator-max-microvolt = <960000>;
+				regulator-name = "vdd-gpu";
+			};
+
+			/* Supplies the "little" cluster (Cortex-A55 cores) */
+			reg_dcdc5: dcdc5 {
+				regulator-always-on;
+				regulator-min-microvolt = <800000>;
+				regulator-max-microvolt = <1000000>;
+				regulator-name = "vdd-cpul";
+			};
+
+			reg_dcdc6: dcdc6 {
+				regulator-always-on;
+				regulator-min-microvolt = <500000>;
+				regulator-max-microvolt = <600000>;
+				regulator-name = "vcc-vddq";
+			};
+
+			reg_dcdc7: dcdc7 {
+				regulator-always-on;
+				regulator-min-microvolt = <1050000>;
+				regulator-max-microvolt = <1100000>;
+				regulator-name = "vcc-dram";
+			};
+
+			reg_dcdc8: dcdc8 {
+				regulator-min-microvolt = <1200000>;
+				regulator-max-microvolt = <1200000>;
+				regulator-name = "vcc-ufs-io";
+			};
+
+			reg_dcdc9: dcdc9 {
+				regulator-always-on;
+				regulator-min-microvolt = <1100000>;
+				regulator-max-microvolt = <1250000>;
+				regulator-name = "eldo-input";
+			};
+
+			reg_swout1: swout1 {
+				regulator-name = "vcc33-lcd-phy";
+			};
+
+			reg_swout2: swout2 {
+				regulator-always-on;
+				regulator-name = "vcc-3v3";
+			};
+
+			reg_aldo1: aldo1 {
+				/* supplies the I2C pins for this PMIC */
+				regulator-always-on;
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-name = "vcc-pl";
+			};
+
+			reg_aldo2: aldo2 {
+				/* not connected */
+			};
+
+			reg_aldo3: aldo3 {
+				/* not connected */
+			};
+
+			reg_aldo4: aldo4 {
+				/* not connected */
+			};
+
+			reg_aldo5: aldo5 {
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-name = "vcc33-codec";
+			};
+
+			reg_aldo6: aldo6 {
+				/* not connected */
+			};
+
+			reg_bldo1: bldo1 {
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-name = "vcc-pe-pk-mcsi";
+			};
+
+			reg_bldo2: bldo2 {
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-name = "vcc-pd-pj-lvds";
+			};
+
+			reg_bldo3: bldo3 {
+				/* not connected */
+			};
+
+			reg_bldo4: bldo4 {
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-name = "vcc18-codec";
+			};
+
+			reg_bldo5: bldo5 {
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-name = "vcc-pg";
+			};
+
+			reg_cldo1: cldo1 {
+				regulator-always-on;
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-name = "vcc-pm-lpddr";
+			};
+
+			reg_cldo2: cldo2 {
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-name = "vcc18-hdmi";
+			};
+
+			reg_cldo3: cldo3 {
+				regulator-always-on;
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-name = "vcc-pll-dcxo-avcc";
+			};
+
+			reg_cldo4: cldo4 {
+				/* not connected */
+			};
+
+			reg_cldo5: cldo5 {
+				regulator-always-on;
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-name = "vcc-pc-pf-comb";
+			};
+
+			reg_dldo1: dldo1 {
+				regulator-always-on;
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-name = "vcc-efuse";
+			};
+
+			reg_dldo2: dldo2 {
+				/* not connected */
+			};
+
+			reg_dldo3: dldo3 {
+				/* not connected */
+			};
+
+			reg_dldo4: dldo4 {
+				/* not connected */
+			};
+
+			reg_dldo5: dldo5 {
+				/* not connected */
+			};
+
+			reg_dldo6: dldo6 {
+				regulator-min-microvolt = <2500000>;
+				regulator-max-microvolt = <2500000>;
+				regulator-name = "vcc-ufs";
+			};
+
+			reg_eldo1: eldo1 {
+				regulator-always-on;
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <1100000>;
+				regulator-name = "vcc09-vdd2l";
+			};
+
+			reg_eldo2: eldo2 {
+				/* not connected */
+			};
+
+			reg_eldo3: eldo3 {
+				/* not connected */
+			};
+
+			reg_eldo4: eldo4 {
+				/* not connected */
+			};
+
+			reg_eldo5: eldo5 {
+				/* not connected */
+			};
+
+			reg_eldo6: eldo6 {
+				regulator-always-on;
+				regulator-min-microvolt = <800000>;
+				regulator-max-microvolt = <800000>;
+				regulator-name = "vdd-cpus-usb";
+			};
+		};
+	};
+};
+
+&r_i2c1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&r_i2c1_pl12_pl13_pins>;
+	status = "okay";
+
+	rtc@51 {
+		compatible = "haoyu,hym8563";
+		reg = <0x51>;
+		interrupt-parent = <&r_pio>;
+		interrupts = <0 3 IRQ_TYPE_LEVEL_LOW>; /* PL3 */
+		#clock-cells = <0>;
+	};
+};
+
+&r_pio {
+/*
+ * Specifying the supply would create a circular dependency.
+ *
+ *	vcc-pl-supply = <&reg_aldo1>;
+ */
+	vcc-pm-supply = <&reg_cldo1>;
+
+	r_i2c1_pl12_pl13_pins: r-i2c1-pl12-pl13-pins {
+		pins = "PL12", "PL13";
+		allwinner,pinmux = <3>;
+		function = "r_i2c1";
+	};
+};
+
+&rtc {
+	clocks = <&r_ccu CLK_BUS_R_RTC>, <&osc26M>,
+		 <&r_ccu CLK_R_AHB>, <&ext_osc32k>;
+	clock-names = "bus", "hosc", "ahb", "ext-osc32k";
+	assigned-clocks = <&rtc CLK_OSC32K>;
+	assigned-clock-rates = <32768>;
+};
+
+&spi0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&spi0_pc_pins>;
+	status = "okay";
+
+	flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <8000000>;
 	};
 };
 
