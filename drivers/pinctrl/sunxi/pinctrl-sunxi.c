@@ -1111,7 +1111,8 @@ static int sunxi_pinctrl_irq_request_resources(struct irq_data *d)
 	muxval = (readl(pctl->membase + reg) & mask) >> shift;
 
 	/* Change muxing to GPIO INPUT mode if at reset value */
-	if (pctl->flags & SUNXI_PINCTRL_NEW_REG_LAYOUT)
+	if (pctl->flags & (SUNXI_PINCTRL_NCAT2_REG_LAYOUT |
+			   SUNXI_PINCTRL_NCAT3_REG_LAYOUT))
 		disabled_mux = SUN4I_FUNC_DISABLED_NEW;
 	else
 		disabled_mux = SUN4I_FUNC_DISABLED_OLD;
