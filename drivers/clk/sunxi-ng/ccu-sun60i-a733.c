@@ -510,8 +510,12 @@ static SUNXI_CCU_GATE_HWS(ahb_msi_lite0_clk, "ahb-msi-lite0", ahb_hws,
 			  0x5c0, BIT(16), 0);
 static SUNXI_CCU_GATE_HWS(ahb_store_clk, "ahb-store", ahb_hws,
 			  0x5c0, BIT(24), CLK_IS_CRITICAL);
+/*
+ * This is the AP's only path into the CPUS domain, which holds the CPU power
+ * controller that the firmware drives for PSCI CPU_ON/CPU_OFF.
+ */
 static SUNXI_CCU_GATE_HWS(ahb_cpus_clk, "ahb-cpus", ahb_hws,
-			  0x5c0, BIT(28), 0);
+			  0x5c0, BIT(28), CLK_IS_CRITICAL);
 
 static SUNXI_CCU_GATE_HWS(mbus_iommu0_clk, "mbus-iommu0", mbus_hws,
 			  0x5e0, BIT(0), 0);
