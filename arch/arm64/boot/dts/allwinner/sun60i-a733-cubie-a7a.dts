@@ -4,6 +4,7 @@
 
 #include "sun60i-a733.dtsi"
 
+#include <dt-bindings/clock/sun60i-a733-serdes-ccu.h>
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/leds/common.h>
@@ -57,6 +58,30 @@
 		regulator-always-on;
 	};
 
+	reg_wifi_3v3: wifi-3v3 {
+		/* WPM2015 load switch in front of the FCU760K module */
+		compatible = "regulator-fixed";
+		regulator-name = "wifi-3v3";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		vin-supply = <&reg_dcdc1>;
+		gpio = <&r_pio 1 0 GPIO_ACTIVE_HIGH>; /* PM0 */
+		enable-active-high;
+		regulator-always-on;
+	};
+
+	reg_wifi_en: wifi-en {
+		/* CHIP_EN of the FCU760K module */
+		compatible = "regulator-fixed";
+		regulator-name = "wifi-en";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		vin-supply = <&reg_wifi_3v3>;
+		gpio = <&r_pio 1 1 GPIO_ACTIVE_HIGH>; /* PM1 */
+		enable-active-high;
+		regulator-always-on;
+	};
+
 	reg_ldo2v5: ldo2v5 {
 		/* SY8089A buck feeding the PMIC BLDO and CLDO groups */
 		compatible = "regulator-fixed";
@@ -66,6 +91,14 @@
 		vin-supply = <&reg_vcc5v>;
 		regulator-always-on;
 	};
+};
+
+&ehci0 {
+	status = "okay";
+};
+
+&ehci1 {
+	status = "okay";
 };
 
 &gmac0 {
@@ -122,6 +155,14 @@
 	cap-mmc-hw-reset;
 	mmc-ddr-1_8v;
 	mmc-hs200-1_8v;
+	status = "okay";
+};
+
+&ohci0 {
+	status = "okay";
+};
+
+&ohci1 {
 	status = "okay";
 };
 
@@ -458,6 +499,21 @@
 		reg = <0>;
 		spi-max-frequency = <8000000>;
 	};
+};
+
+&usb3 {
+	/* No combo PHY in use, take the PIPE clock from the USB2 side */
+	assigned-clocks = <&serdes_ccu CLK_SERDES_USB3_PIPE>,
+			  <&ccu CLK_USB2_SUSPEND>,
+			  <&ccu CLK_USB2_U3_UTMI>,
+			  <&ccu CLK_USB2_U2_PIPE>;
+	assigned-clock-parents = <&ccu CLK_USB2_U2_PIPE>, <&ccu CLK_SYS_24M>;
+	assigned-clock-rates = <0>, <0>, <300000000>, <480000000>;
+	status = "okay";
+};
+
+&usbphy {
+	status = "okay";
 };
 
 &uart0 {
