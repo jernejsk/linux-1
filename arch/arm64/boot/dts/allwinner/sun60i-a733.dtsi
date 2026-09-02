@@ -140,6 +140,15 @@
 				bias-pull-up;
 			};
 
+			mmc2_pins: mmc2-pins {
+				pins = "PC0", "PC1", "PC5", "PC6", "PC8",
+				       "PC9", "PC10", "PC11", "PC13", "PC14",
+				       "PC15", "PC16";
+				allwinner,pinmux = <3>;
+				function = "mmc2";
+				drive-strength = <30>;
+				bias-pull-up;
+			};
 		};
 
 		ccu: clock-controller@2002000 {
@@ -536,6 +545,88 @@
 			status = "disabled";
 			#address-cells = <1>;
 			#size-cells = <0>;
+		};
+
+		mmc1: mmc@4021000 {
+			compatible = "allwinner,sun60i-a733-mmc",
+				     "allwinner,sun20i-d1-mmc";
+			reg = <0x04021000 0x1000>;
+			interrupts = <GIC_SPI 162 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ccu CLK_BUS_MMC1>, <&ccu CLK_MMC1>;
+			clock-names = "ahb", "mmc";
+			resets = <&ccu RST_BUS_MMC1>;
+			reset-names = "ahb";
+			max-frequency = <200000000>;
+			cap-sd-highspeed;
+			cap-sdio-irq;
+			status = "disabled";
+			#address-cells = <1>;
+			#size-cells = <0>;
+		};
+
+		mmc2: mmc@4022000 {
+			compatible = "allwinner,sun60i-a733-mmc",
+				     "allwinner,sun20i-d1-mmc";
+			reg = <0x04022000 0x1000>;
+			interrupts = <GIC_SPI 163 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ccu CLK_BUS_MMC2>, <&ccu CLK_MMC2>;
+			clock-names = "ahb", "mmc";
+			resets = <&ccu RST_BUS_MMC2>;
+			reset-names = "ahb";
+			pinctrl-names = "default";
+			pinctrl-0 = <&mmc2_pins>;
+			max-frequency = <200000000>;
+			cap-mmc-highspeed;
+			status = "disabled";
+			#address-cells = <1>;
+			#size-cells = <0>;
+		};
+
+		gmac0: ethernet@4500000 {
+			compatible = "allwinner,sun60i-a733-gmac210",
+				     "snps,dwmac-5.20";
+			reg = <0x04500000 0x8000>,
+			      <0x04508000 0x1000>;
+			interrupts = <GIC_SPI 172 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 178 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 173 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 174 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "macirq", "eth_lpi",
+					  "tx-queue-0", "rx-queue-0";
+			clocks = <&ccu CLK_BUS_GMAC0>, <&ccu CLK_MBUS_GMAC0>,
+				 <&ccu CLK_GMAC_PTP>;
+			clock-names = "stmmaceth", "mbus", "ptp_ref";
+			resets = <&ccu RST_BUS_GMAC0>, <&ccu RST_BUS_GMAC0_AXI>;
+			reset-names = "stmmaceth", "ahb";
+			snps,fixed-burst;
+			snps,axi-config = <&gmac0_stmmac_axi_setup>;
+			snps,mtl-rx-config = <&gmac0_mtl_rx_setup>;
+			snps,mtl-tx-config = <&gmac0_mtl_tx_setup>;
+			status = "disabled";
+
+			mdio0: mdio {
+				compatible = "snps,dwmac-mdio";
+				#address-cells = <1>;
+				#size-cells = <0>;
+			};
+
+			gmac0_mtl_rx_setup: rx-queues-config {
+				snps,rx-queues-to-use = <1>;
+
+				queue0 {};
+			};
+
+			gmac0_stmmac_axi_setup: stmmac-axi-config {
+				snps,wr_osr_lmt = <0xf>;
+				snps,rd_osr_lmt = <0xf>;
+				snps,blen = <256 128 64 32 16 8 4>;
+			};
+
+			gmac0_mtl_tx_setup: tx-queues-config {
+				snps,tx-queues-to-use = <1>;
+
+				queue0 {};
+			};
 		};
 
 		dma: dma-controller@4601000 {
