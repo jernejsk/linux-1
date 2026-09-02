@@ -1,0 +1,108 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/usb/allwinner,sun60i-a733-dwc3.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Allwinner A733 DWC3 USB controller glue
+
+maintainers:
+  - Jernej Skrabec <jernej.skrabec@gmail.com>
+
+description:
+  The A733 wraps a DesignWare USB3.1 DRD controller with clocks and a
+  reset that the controller core does not know about, so the glue node
+  owns them and the controller itself is a child node.
+
+properties:
+  compatible:
+    const: allwinner,sun60i-a733-dwc3
+
+  "#address-cells":
+    const: 1
+
+  "#size-cells":
+    const: 1
+
+  ranges: true
+
+  clocks:
+    items:
+      - description: AHB slave clock
+      - description: AXI master clock
+      - description: USB2 PHY reference clock
+      - description: Suspend clock
+      - description: Microframe clock
+      - description: UTMI clock
+      - description: PIPE clock
+
+  clock-names:
+    items:
+      - const: hclk
+      - const: aclk
+      - const: ref
+      - const: suspend
+      - const: mf
+      - const: utmi
+      - const: pipe
+
+  resets:
+    maxItems: 1
+
+  power-domains:
+    maxItems: 1
+
+patternProperties:
+  "^usb@[0-9a-f]+$":
+    $ref: snps,dwc3.yaml#
+    description: The controller itself.
+
+required:
+  - compatible
+  - "#address-cells"
+  - "#size-cells"
+  - ranges
+  - clocks
+  - clock-names
+  - resets
+  - power-domains
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/clock/sun60i-a733-ccu.h>
+    #include <dt-bindings/clock/sun60i-a733-serdes-ccu.h>
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+    #include <dt-bindings/power/allwinner,sun60i-a733-pck-600.h>
+    #include <dt-bindings/reset/sun60i-a733-ccu.h>
+
+    usb@6a00000 {
+        compatible = "allwinner,sun60i-a733-dwc3";
+        #address-cells = <1>;
+        #size-cells = <1>;
+        ranges = <0x06a00000 0x06a00000 0x200000>;
+        clocks = <&serdes_ccu CLK_SERDES_USB3_HCLK>,
+                 <&serdes_ccu CLK_SERDES_USB3_ACLK>,
+                 <&ccu CLK_USB2_U2_REF>,
+                 <&ccu CLK_USB2_SUSPEND>,
+                 <&ccu CLK_USB2_MF>,
+                 <&ccu CLK_USB2_U3_UTMI>,
+                 <&serdes_ccu CLK_SERDES_USB3_PIPE>;
+        clock-names = "hclk", "aclk", "ref", "suspend", "mf", "utmi", "pipe";
+        resets = <&ccu RST_BUS_USB2>;
+        power-domains = <&pck600 PD_USB2>;
+
+        usb@6a00000 {
+            compatible = "snps,dwc3";
+            reg = <0x06a00000 0x100000>;
+            interrupts = <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>;
+            phys = <&usbphy 2>;
+            phy-names = "usb2-phy";
+            phy_type = "utmi";
+            dr_mode = "host";
+            maximum-speed = "high-speed";
+        };
+    };
+
+...
