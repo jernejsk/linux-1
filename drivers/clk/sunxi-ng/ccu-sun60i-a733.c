@@ -1244,9 +1244,16 @@ static const struct clk_parent_data usb01_ref_parents[] = {
 	{ .hw = &sys_24M_clk.hw },
 	{ .fw_name = "hosc" },
 };
-static SUNXI_CCU_MUX_DATA(usb01_ref_clk, "usb01-ref", usb01_ref_parents, 0x1340, 24, 3, 0);
 
-static SUNXI_CCU_MUX_DATA(usb2_u2_ref_clk, "usb2-u2-ref", usb01_ref_parents, 0x1348, 24, 3, 0);
+static SUNXI_CCU_MUX_DATA_WITH_GATE(usb01_ref_clk, "usb01-ref", usb01_ref_parents, 0x1340,
+				    24, 3,	/* mux */
+				    BIT(31),	/* gate */
+				    0);
+
+static SUNXI_CCU_MUX_DATA_WITH_GATE(usb2_u2_ref_clk, "usb2-u2-ref", usb01_ref_parents, 0x1348,
+				    24, 3,	/* mux */
+				    BIT(31),	/* gate */
+				    0);
 
 static const struct clk_parent_data usb2_suspend_parents[] = {
 	{ .fw_name = "losc" },
