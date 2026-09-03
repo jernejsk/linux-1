@@ -442,6 +442,18 @@ config PCIE_SOPHGO_DW
 	  Say Y here if you want PCIe host controller support on
 	  Sophgo SoCs.
 
+config PCIE_SUN60I_A733
+	tristate "Allwinner A733 PCIe controller (host mode)"
+	depends on ARCH_SUNXI || COMPILE_TEST
+	depends on HAS_IOMEM
+	select PCIE_DW_HOST
+	default ARCH_SUNXI
+	help
+	  Enables support for the DesignWare based PCIe controller of the
+	  Allwinner A733 in host mode. The controller drives a single lane
+	  through the SerDes combo PHY and is used for M.2 or mini PCIe
+	  slots on A733 boards. Say Y here if you want to use those.
+
 config PCIE_SPACEMIT_K1
 	tristate "SpacemiT K1 PCIe controller (host mode)"
 	depends on ARCH_SPACEMIT || COMPILE_TEST
