@@ -111,6 +111,21 @@
 		#size-cells = <1>;
 		ranges = <0x0 0x0 0x0 0x40000000>;
 
+		gpu: gpu@1800000 {
+			compatible = "allwinner,sun60i-a733-gpu", "img,img-bxm-4-64",
+				     "img,img-rogue";
+			reg = <0x01800000 0x90000>;
+			interrupts = <GIC_SPI 63 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ccu CLK_GPU0>,
+				 <&ccu CLK_MBUS_GPU0>,
+				 <&ccu CLK_BUS_GPU0>;
+			clock-names = "core", "mem", "sys";
+			power-domains = <&pck600 PD_GPU_TOP>, <&pck600 PD_GPU_CORE>;
+			power-domain-names = "a", "b";
+			resets = <&ccu RST_BUS_GPU0>;
+			status = "disabled";
+		};
+
 		pio: pinctrl@2000000 {
 			compatible = "allwinner,sun60i-a733-pinctrl";
 			reg = <0x02000000 0x600>;
