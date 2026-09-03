@@ -123,6 +123,10 @@
 	status = "okay";
 };
 
+&gpu {
+	status = "okay";
+};
+
 &i2c0 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c0_pg8_pg9_pins>;
@@ -280,6 +284,8 @@
 			};
 
 			reg_dcdc4: dcdc4 {
+				/* The GPU power domains have no supply hook yet */
+				regulator-always-on;
 				regulator-min-microvolt = <800000>;
 				regulator-max-microvolt = <960000>;
 				regulator-name = "vdd-gpu";
