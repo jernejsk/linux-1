@@ -3,6 +3,7 @@
 /dts-v1/;
 
 #include "sun60i-a733.dtsi"
+#include "sun60i-a733-cpu-opp.dtsi"
 
 #include <dt-bindings/clock/sun60i-a733-serdes-ccu.h>
 #include <dt-bindings/gpio/gpio.h>
@@ -109,6 +110,38 @@
 
 &ehci1 {
 	status = "okay";
+};
+
+&cpu0 {
+	cpu-supply = <&reg_dcdc5>;
+};
+
+&cpu1 {
+	cpu-supply = <&reg_dcdc5>;
+};
+
+&cpu2 {
+	cpu-supply = <&reg_dcdc5>;
+};
+
+&cpu3 {
+	cpu-supply = <&reg_dcdc5>;
+};
+
+&cpu4 {
+	cpu-supply = <&reg_dcdc5>;
+};
+
+&cpu5 {
+	cpu-supply = <&reg_dcdc5>;
+};
+
+&cpu6 {
+	cpu-supply = <&reg_dcdc3>;
+};
+
+&cpu7 {
+	cpu-supply = <&reg_dcdc3>;
 };
 
 &gmac0 {
@@ -279,8 +312,9 @@
 			reg_dcdc3: dcdc3 {
 				regulator-always-on;
 				regulator-min-microvolt = <800000>;
-				regulator-max-microvolt = <1000000>;
+				regulator-max-microvolt = <1050000>;
 				regulator-name = "vdd-cpub";
+				regulator-ramp-delay = <250>;
 			};
 
 			reg_dcdc4: dcdc4 {
@@ -295,8 +329,9 @@
 			reg_dcdc5: dcdc5 {
 				regulator-always-on;
 				regulator-min-microvolt = <800000>;
-				regulator-max-microvolt = <1000000>;
+				regulator-max-microvolt = <1050000>;
 				regulator-name = "vdd-cpul";
+				regulator-ramp-delay = <250>;
 			};
 
 			reg_dcdc6: dcdc6 {
