@@ -1,0 +1,182 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/pci/allwinner,sun60i-a733-pcie.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Allwinner A733 PCIe host controller
+
+maintainers:
+  - Jernej Skrabec <jernej.skrabec@gmail.com>
+
+description:
+  The A733 integrates a single lane DesignWare PCIe controller with a set
+  of application registers next to the DBI space.
+
+allOf:
+  - $ref: /schemas/pci/snps,dw-pcie.yaml#
+
+properties:
+  compatible:
+    const: allwinner,sun60i-a733-pcie
+
+  reg:
+    items:
+      - description: DBI registers
+      - description: Application registers
+      - description: Configuration space window
+
+  reg-names:
+    items:
+      - const: dbi
+      - const: app
+      - const: config
+
+  interrupts:
+    maxItems: 1
+
+  interrupt-names:
+    const: msi
+
+  legacy-interrupt-controller:
+    description: The INTx interrupts, demultiplexed from the SII interrupt
+    type: object
+    additionalProperties: false
+    properties:
+      "#address-cells":
+        const: 0
+
+      "#interrupt-cells":
+        const: 1
+
+      interrupt-controller: true
+
+      interrupt-parent: true
+
+      interrupts:
+        maxItems: 1
+
+    required:
+      - "#address-cells"
+      - "#interrupt-cells"
+      - interrupt-controller
+      - interrupts
+
+  clocks:
+    items:
+      - description: Bus clocks from the SerDes subsystem
+      - description: Auxiliary clock
+      - description: AXI slave clock
+      - description: Clock of the interrupt translation block on the master path
+
+  clock-names:
+    items:
+      - const: dbi
+      - const: aux
+      - const: slv
+      - const: its
+
+  resets:
+    items:
+      - description: Controller reset
+      - description: Power-up reset
+      - description: Reset of the interrupt translation block
+
+  reset-names:
+    items:
+      - const: core
+      - const: pwr
+      - const: its
+
+  dma-ranges:
+    maxItems: 1
+
+  phys:
+    maxItems: 1
+
+  phy-names:
+    const: pcie-phy
+
+  power-domains:
+    maxItems: 1
+
+  reset-gpios:
+    description: PERST# signal to the endpoint
+    maxItems: 1
+
+  vpcie3v3-supply:
+    description: 3.3 V supply of the slot, switched on before PERST# is released
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - interrupts
+  - interrupt-names
+  - clocks
+  - clock-names
+  - resets
+  - reset-names
+  - phys
+  - phy-names
+  - power-domains
+  - legacy-interrupt-controller
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/clock/sun60i-a733-ccu.h>
+    #include <dt-bindings/clock/sun60i-a733-serdes-ccu.h>
+    #include <dt-bindings/gpio/gpio.h>
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+    #include <dt-bindings/power/allwinner,sun60i-a733-pck-600.h>
+    #include <dt-bindings/reset/sun60i-a733-ccu.h>
+
+    pcie@6000000 {
+        compatible = "allwinner,sun60i-a733-pcie";
+        reg = <0x06000000 0x400000>,
+              <0x06400000 0x2000>,
+              <0x20000000 0x1000000>;
+        reg-names = "dbi", "app", "config";
+        interrupts = <GIC_SPI 153 IRQ_TYPE_LEVEL_HIGH>;
+        interrupt-names = "msi";
+        #interrupt-cells = <1>;
+        interrupt-map-mask = <0 0 0 7>;
+        interrupt-map = <0 0 0 1 &pcie_intc 0>,
+                        <0 0 0 2 &pcie_intc 1>,
+                        <0 0 0 3 &pcie_intc 2>,
+                        <0 0 0 4 &pcie_intc 3>;
+        clocks = <&serdes_ccu CLK_SERDES_PCIE>,
+                 <&ccu CLK_PCIE_AUX>,
+                 <&ccu CLK_PCIE_AXI_SLV>,
+                 <&ccu CLK_BUS_ITS_PCIE0_ACLK>;
+        clock-names = "dbi", "aux", "slv", "its";
+        resets = <&ccu RST_BUS_PCIE>,
+                 <&ccu RST_BUS_PCIE_PWRUP>,
+                 <&ccu RST_BUS_ITS_PCIE0>;
+        reset-names = "core", "pwr", "its";
+        phys = <&combophy1>;
+        phy-names = "pcie-phy";
+        power-domains = <&pck600 PD_PCIE>;
+        reset-gpios = <&pio 4 13 GPIO_ACTIVE_LOW>;
+        device_type = "pci";
+        bus-range = <0x0 0xff>;
+        num-lanes = <1>;
+        max-link-speed = <3>;
+        #address-cells = <3>;
+        #size-cells = <2>;
+        ranges = <0x81000000 0 0x00000000 0x21000000 0 0x00100000>,
+                 <0x82000000 0 0x22000000 0x22000000 0 0x06000000>;
+        dma-ranges = <0x02000000 0 0x40000000 0x40000000 0 0xc0000000>;
+
+        pcie_intc: legacy-interrupt-controller {
+            interrupt-controller;
+            #address-cells = <0>;
+            #interrupt-cells = <1>;
+            interrupt-parent = <&gic>;
+            interrupts = <GIC_SPI 152 IRQ_TYPE_LEVEL_HIGH>;
+        };
+    };
+
+...
