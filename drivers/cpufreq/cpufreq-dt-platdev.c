@@ -114,6 +114,7 @@ static const struct of_device_id blocklist[] __initconst = {
 	{ .compatible = "allwinner,sun50i-h616", },
 	{ .compatible = "allwinner,sun50i-h618", },
 	{ .compatible = "allwinner,sun50i-h700", },
+	{ .compatible = "allwinner,sun60i-a733", },
 
 	{ .compatible = "apple,arm-platform", },
 
