@@ -509,6 +509,7 @@ static SUNXI_CCU_GATE_HWS(ahb_npu_clk, "ahb-npu", ahb_hws,
 			  0x5c0, BIT(6), 0);
 static SUNXI_CCU_GATE_HWS(ahb_gpu0_clk, "ahb-gpu0", ahb_hws,
 			  0x5c0, BIT(7), 0);
+static const struct clk_hw *ahb_gpu0_hws[] = { &ahb_gpu0_clk.common.hw };
 static SUNXI_CCU_GATE_HWS(ahb_serdes_clk, "ahb-serdes", ahb_hws,
 			  0x5c0, BIT(8), 0);
 /* Bus fabric in front of the USB controllers, nothing references it. */
@@ -837,7 +838,8 @@ static struct ccu_div gpu0_clk = {
 							   &ccu_div_ops, 0),
 	}
 };
-static SUNXI_CCU_GATE_HWS(bus_gpu0_clk, "bus-gpu0", ahb_hws, 0xb24, BIT(0), 0);
+static SUNXI_CCU_GATE_HWS(bus_gpu0_clk, "bus-gpu0", ahb_gpu0_hws, 0xb24,
+			  BIT(0), 0);
 
 static const struct clk_parent_data dram_parents[] = {
 	{ .hw = &pll_ddr_clk.common.hw, },
