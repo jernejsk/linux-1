@@ -13,7 +13,8 @@ description:
   The SerDes subsystem of the A733 hosts the USB3 controller and the
   PCIe controller. Its top level registers gate the bus clocks of those
   controllers, select the source of the USB3 PIPE clock and hold the
-  reset of the USB2 PHY of the USB3 controller.
+  reset of the USB2 PHY of the USB3 controller. The combo PHY driver
+  needs a few more of the registers, hence the syscon.
 
 properties:
   "#clock-cells":
@@ -23,7 +24,9 @@ properties:
     const: 1
 
   compatible:
-    const: allwinner,sun60i-a733-serdes-ccu
+    items:
+      - const: allwinner,sun60i-a733-serdes-ccu
+      - const: syscon
 
   reg:
     maxItems: 1
@@ -66,8 +69,8 @@ examples:
     #include <dt-bindings/reset/sun60i-a733-ccu.h>
 
     clock-controller@6c00000 {
-        compatible = "allwinner,sun60i-a733-serdes-ccu";
-        reg = <0x06c00000 0x1000>;
+        compatible = "allwinner,sun60i-a733-serdes-ccu", "syscon";
+        reg = <0x06c00000 0x400>;
         clocks = <&ccu CLK_AHB_SERDES>, <&ccu CLK_MBUS_SERDES>,
                  <&ccu CLK_SERDES_PHY>, <&ccu CLK_USB2_U2_PIPE>;
         clock-names = "ahb", "mbus", "cfg", "u2-pipe";
