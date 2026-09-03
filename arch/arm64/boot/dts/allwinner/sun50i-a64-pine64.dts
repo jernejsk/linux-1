@@ -99,6 +99,14 @@
 	};
 };
 
+&hdmi_sound {
+	status = "okay";
+};
+
+&i2s2 {
+	status = "okay";
+};
+
 &i2c1 {
 	status = "okay";
 };
