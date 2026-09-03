@@ -188,6 +188,15 @@
 			#reset-cells = <1>;
 		};
 
+		wdt: watchdog@2050000 {
+			compatible = "allwinner,sun60i-a733-wdt",
+				     "allwinner,sun55i-a523-wdt";
+			reg = <0x2050000 0x20>;
+			interrupts = <GIC_SPI 106 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&osc26M>, <&rtc CLK_OSC32K>;
+			clock-names = "hosc", "losc";
+		};
+
 		uart0: serial@2500000 {
 			compatible = "snps,dw-apb-uart";
 			reg = <0x02500000 0x400>;
