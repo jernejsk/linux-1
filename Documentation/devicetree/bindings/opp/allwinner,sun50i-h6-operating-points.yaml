@@ -25,6 +25,7 @@ properties:
       - allwinner,sun50i-a100-operating-points
       - allwinner,sun50i-h6-operating-points
       - allwinner,sun50i-h616-operating-points
+      - allwinner,sun60i-a733-operating-points
 
   nvmem-cells:
     description: |
