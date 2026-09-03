@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/sound/allwinner,sun8i-a83t-hdmi-audio.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Allwinner HDMI Audio Card
+
+maintainers:
+  - Jernej Skrabec <jernej.skrabec@gmail.com>
+
+description:
+  The Allwinner HDMI audio card connects the SoC's internal HDMI I2S
+  controller to the I2S input of the Synopsys DesignWare HDMI transmitter.
+  The link format and clocking are fixed properties of this connection.
+
+properties:
+  compatible:
+    const: allwinner,sun8i-a83t-hdmi-audio
+
+  audio-cpu:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: Phandle to the I2S controller connected to HDMI
+
+  audio-codec:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: Phandle to the DesignWare HDMI transmitter
+
+  model:
+    $ref: /schemas/types.yaml#/definitions/string
+    description: User-visible name of the sound card
+
+required:
+  - compatible
+  - audio-cpu
+  - audio-codec
+
+additionalProperties: false
+
+examples:
+  - |
+    sound-hdmi {
+        compatible = "allwinner,sun8i-a83t-hdmi-audio";
+        audio-cpu = <&i2s2>;
+        audio-codec = <&hdmi>;
+    };
+
+...

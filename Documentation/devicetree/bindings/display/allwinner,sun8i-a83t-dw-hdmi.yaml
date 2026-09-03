@@ -20,6 +20,9 @@ maintainers:
   - Maxime Ripard <mripard@kernel.org>
 
 properties:
+  "#sound-dai-cells":
+    const: 0
+
   "#phy-cells":
     const: 0
 
