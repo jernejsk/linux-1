@@ -3,6 +3,7 @@
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/clock/sun6i-rtc.h>
 #include <dt-bindings/clock/sun60i-a733-ccu.h>
+#include <dt-bindings/clock/sun60i-a733-cpu-ccu.h>
 #include <dt-bindings/clock/sun60i-a733-r-ccu.h>
 #include <dt-bindings/clock/sun60i-a733-serdes-ccu.h>
 #include <dt-bindings/power/allwinner,sun60i-a733-pck-600.h>
@@ -24,6 +25,7 @@
 			device_type = "cpu";
 			reg = <0x000>;
 			enable-method = "psci";
+			clocks = <&cpu_ccu CLK_CPU_L>;
 			capacity-dmips-mhz = <530>;
 		};
 
@@ -32,6 +34,7 @@
 			device_type = "cpu";
 			reg = <0x100>;
 			enable-method = "psci";
+			clocks = <&cpu_ccu CLK_CPU_L>;
 			capacity-dmips-mhz = <530>;
 		};
 
@@ -40,6 +43,7 @@
 			device_type = "cpu";
 			reg = <0x200>;
 			enable-method = "psci";
+			clocks = <&cpu_ccu CLK_CPU_L>;
 			capacity-dmips-mhz = <530>;
 		};
 
@@ -48,6 +52,7 @@
 			device_type = "cpu";
 			reg = <0x300>;
 			enable-method = "psci";
+			clocks = <&cpu_ccu CLK_CPU_L>;
 			capacity-dmips-mhz = <530>;
 		};
 
@@ -56,6 +61,7 @@
 			device_type = "cpu";
 			reg = <0x400>;
 			enable-method = "psci";
+			clocks = <&cpu_ccu CLK_CPU_L>;
 			capacity-dmips-mhz = <530>;
 		};
 
@@ -64,6 +70,7 @@
 			device_type = "cpu";
 			reg = <0x500>;
 			enable-method = "psci";
+			clocks = <&cpu_ccu CLK_CPU_L>;
 			capacity-dmips-mhz = <530>;
 		};
 
@@ -72,6 +79,7 @@
 			device_type = "cpu";
 			reg = <0x600>;
 			enable-method = "psci";
+			clocks = <&cpu_ccu CLK_CPU_B>;
 			capacity-dmips-mhz = <1024>;
 		};
 
@@ -80,6 +88,7 @@
 			device_type = "cpu";
 			reg = <0x700>;
 			enable-method = "psci";
+			clocks = <&cpu_ccu CLK_CPU_B>;
 			capacity-dmips-mhz = <1024>;
 		};
 	};
@@ -538,6 +547,18 @@
 			#size-cells = <0>;
 		};
 
+		sid: efuse@3006000 {
+			compatible = "allwinner,sun60i-a733-sid",
+				     "allwinner,sun50i-a64-sid";
+			reg = <0x03006000 0x1000>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			cpu_speed_grade: cpu-speed-grade@4c {
+				reg = <0x4c 0x4>;
+			};
+		};
+
 		gic: interrupt-controller@3400000 {
 			compatible = "arm,gic-v3";
 			#interrupt-cells = <3>;
@@ -963,6 +984,22 @@
 				 <&r_ccu CLK_R_AHB>;
 			clock-names = "bus", "hosc", "ahb";
 			#clock-cells = <1>;
+		};
+
+		cpu_ccu: clock-controller@8870000 {
+			compatible = "allwinner,sun60i-a733-cpu-ccu";
+			reg = <0x08870000 0x4000>;
+			clocks = <&osc26M>, <&ccu CLK_PLL_PERIPH0_2X>,
+				 <&ccu CLK_PLL_PERIPH0_600M>;
+			clock-names = "hosc", "pll-periph0-2x", "pll-periph0-600m";
+			#clock-cells = <1>;
+			/*
+			 * The DSU shares the little cluster supply and has no
+			 * DVFS yet, so keep it at a rate every speed bin runs
+			 * at the lowest voltage of that supply.
+			 */
+			assigned-clocks = <&cpu_ccu CLK_CPU_DSU>;
+			assigned-clock-rates = <780000000>;
 		};
 	};
 };
