@@ -77,6 +77,16 @@ config SUN60I_A733_R_CCU
 	default ARCH_SUNXI
 	depends on ARM64 || COMPILE_TEST
 
+config SUN60I_A733_CPU_CCU
+	tristate "Support for the Allwinner A733 CPU CCU"
+	default ARCH_SUNXI
+	depends on ARM64 || COMPILE_TEST
+	help
+	  The A733 clocks its CPU clusters and the DSU from a block separate
+	  from the CCU, with a PLL and a clock selector for each of them.
+	  Say Y here to support it, which cpufreq needs to scale the CPU
+	  clocks on this SoC.
+
 config SUN60I_A733_SERDES_CCU
 	tristate "Support for the Allwinner A733 SerDes subsystem CCU"
 	default ARCH_SUNXI
