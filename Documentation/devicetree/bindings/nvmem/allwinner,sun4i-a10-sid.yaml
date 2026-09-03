@@ -28,6 +28,7 @@ properties:
               - allwinner,sun50i-a100-sid
               - allwinner,sun50i-h616-sid
               - allwinner,sun55i-a523-sid
+              - allwinner,sun60i-a733-sid
           - const: allwinner,sun50i-a64-sid
       - const: allwinner,sun50i-h5-sid
       - const: allwinner,sun50i-h6-sid
