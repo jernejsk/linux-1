@@ -33,6 +33,9 @@ properties:
           - const: allwinner,sun20i-d1-wdt-reset
           - const: allwinner,sun20i-d1-wdt
       - const: allwinner,sun55i-a523-wdt
+      - items:
+          - const: allwinner,sun60i-a733-wdt
+          - const: allwinner,sun55i-a523-wdt
 
   reg:
     maxItems: 1
