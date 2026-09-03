@@ -82,6 +82,16 @@
 		regulator-always-on;
 	};
 
+	reg_pcie_3v3: pcie-3v3 {
+		compatible = "regulator-fixed";
+		regulator-name = "pcie-3v3";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		vin-supply = <&reg_dcdc1>;
+		gpio = <&pio 4 11 GPIO_ACTIVE_HIGH>; /* PE11 */
+		enable-active-high;
+	};
+
 	reg_ldo2v5: ldo2v5 {
 		/* SY8089A buck feeding the PMIC BLDO and CLDO groups */
 		compatible = "regulator-fixed";
@@ -158,11 +168,23 @@
 	status = "okay";
 };
 
+&combophy1 {
+	status = "okay";
+};
+
 &ohci0 {
 	status = "okay";
 };
 
 &ohci1 {
+	status = "okay";
+};
+
+&pcie {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pcie_pe_pins>;
+	reset-gpios = <&pio 4 13 GPIO_ACTIVE_LOW>; /* PE13 */
+	vpcie3v3-supply = <&reg_pcie_3v3>;
 	status = "okay";
 };
 
@@ -181,6 +203,12 @@
 		pins = "PG8", "PG9";
 		allwinner,pinmux = <6>;
 		function = "i2c0";
+	};
+
+	pcie_pe_pins: pcie-pe-pins {
+		pins = "PE12", "PE14";
+		allwinner,pinmux = <6>;
+		function = "pcie";
 	};
 
 	rgmii0_pins: rgmii0-pins {
