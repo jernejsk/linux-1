@@ -131,6 +131,13 @@
 		status = "disabled";
 	};
 
+	hdmi_sound: sound-hdmi {
+		compatible = "allwinner,sun8i-a83t-hdmi-audio";
+		audio-cpu = <&i2s2>;
+		audio-codec = <&hdmi>;
+		status = "disabled";
+	};
+
 	gpu_opp_table: opp-table-gpu {
 		compatible = "operating-points-v2";
 
@@ -1271,6 +1278,7 @@
 		};
 
 		hdmi: hdmi@1ee0000 {
+			#sound-dai-cells = <0>;
 			compatible = "allwinner,sun50i-a64-dw-hdmi",
 				     "allwinner,sun8i-a83t-dw-hdmi";
 			reg = <0x01ee0000 0x10000>;
