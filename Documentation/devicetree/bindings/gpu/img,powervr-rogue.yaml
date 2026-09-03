@@ -37,6 +37,7 @@ properties:
           - const: img,img-rogue
       - items:
           - enum:
+              - allwinner,sun60i-a733-gpu
               - thead,th1520-gpu
           - const: img,img-bxm-4-64
           - const: img,img-rogue
