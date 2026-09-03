@@ -759,9 +759,56 @@
 			};
 		};
 
+		pcie: pcie@6000000 {
+			compatible = "allwinner,sun60i-a733-pcie";
+			reg = <0x06000000 0x400000>,
+			      <0x06400000 0x2000>,
+			      <0x20000000 0x1000000>;
+			reg-names = "dbi", "app", "config";
+			interrupts = <GIC_SPI 153 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "msi";
+			#interrupt-cells = <1>;
+			interrupt-map-mask = <0 0 0 7>;
+			interrupt-map = <0 0 0 1 &pcie_intc 0>,
+					<0 0 0 2 &pcie_intc 1>,
+					<0 0 0 3 &pcie_intc 2>,
+					<0 0 0 4 &pcie_intc 3>;
+			clocks = <&serdes_ccu CLK_SERDES_PCIE>,
+				 <&ccu CLK_PCIE_AUX>,
+				 <&ccu CLK_PCIE_AXI_SLV>,
+				 <&ccu CLK_BUS_ITS_PCIE0_ACLK>;
+			clock-names = "dbi", "aux", "slv", "its";
+			resets = <&ccu RST_BUS_PCIE>,
+				 <&ccu RST_BUS_PCIE_PWRUP>,
+				 <&ccu RST_BUS_ITS_PCIE0>;
+			reset-names = "core", "pwr", "its";
+			phys = <&combophy1>;
+			phy-names = "pcie-phy";
+			power-domains = <&pck600 PD_PCIE>;
+			device_type = "pci";
+			bus-range = <0x0 0xff>;
+			num-lanes = <1>;
+			max-link-speed = <3>;
+			#address-cells = <3>;
+			#size-cells = <2>;
+			ranges = <0x81000000 0 0x00000000 0x21000000 0 0x00100000>,
+				 <0x82000000 0 0x22000000 0x22000000 0 0x06000000>;
+			/* The master port reaches only the first 4 GiB */
+			dma-ranges = <0x02000000 0 0x40000000 0x40000000 0 0xc0000000>;
+			status = "disabled";
+
+			pcie_intc: legacy-interrupt-controller {
+				interrupt-controller;
+				#address-cells = <0>;
+				#interrupt-cells = <1>;
+				interrupt-parent = <&gic>;
+				interrupts = <GIC_SPI 152 IRQ_TYPE_LEVEL_HIGH>;
+			};
+		};
+
 		serdes_ccu: clock-controller@6c00000 {
-			compatible = "allwinner,sun60i-a733-serdes-ccu";
-			reg = <0x06c00000 0x1000>;
+			compatible = "allwinner,sun60i-a733-serdes-ccu", "syscon";
+			reg = <0x06c00000 0x400>;
 			clocks = <&ccu CLK_AHB_SERDES>,
 				 <&ccu CLK_MBUS_SERDES>,
 				 <&ccu CLK_SERDES_PHY>,
@@ -770,6 +817,20 @@
 			resets = <&ccu RST_BUS_SERDES>;
 			#clock-cells = <1>;
 			#reset-cells = <1>;
+		};
+
+		combophy1: phy@6c02000 {
+			compatible = "allwinner,sun60i-a733-combophy";
+			reg = <0x06c02000 0xa00>,
+			      <0x06ca0000 0x20000>,
+			      <0x06c06000 0x2000>;
+			reg-names = "top", "phy", "pipe";
+			clocks = <&ccu CLK_SERDES_PHY>, <&rtc CLK_HOSC_SERDES1>;
+			clock-names = "cfg", "ref";
+			allwinner,serdes = <&serdes_ccu>;
+			power-domains = <&pck600 PD_PCIE>;
+			#phy-cells = <0>;
+			status = "disabled";
 		};
 
 		r_ccu: clock-controller@7010000 {
