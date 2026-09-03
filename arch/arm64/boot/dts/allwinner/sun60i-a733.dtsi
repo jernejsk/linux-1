@@ -578,7 +578,7 @@
 
 		mmc0: mmc@4020000 {
 			compatible = "allwinner,sun60i-a733-mmc",
-				     "allwinner,sun20i-d1-mmc";
+				     "allwinner,sun55i-a523-mmc";
 			reg = <0x04020000 0x1000>;
 			interrupts = <GIC_SPI 161 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&ccu CLK_BUS_MMC0>, <&ccu CLK_MMC0>;
@@ -596,7 +596,7 @@
 
 		mmc1: mmc@4021000 {
 			compatible = "allwinner,sun60i-a733-mmc",
-				     "allwinner,sun20i-d1-mmc";
+				     "allwinner,sun55i-a523-mmc";
 			reg = <0x04021000 0x1000>;
 			interrupts = <GIC_SPI 162 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&ccu CLK_BUS_MMC1>, <&ccu CLK_MMC1>;
@@ -613,7 +613,7 @@
 
 		mmc2: mmc@4022000 {
 			compatible = "allwinner,sun60i-a733-mmc",
-				     "allwinner,sun20i-d1-mmc";
+				     "allwinner,sun55i-a523-mmc";
 			reg = <0x04022000 0x1000>;
 			interrupts = <GIC_SPI 163 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&ccu CLK_BUS_MMC2>, <&ccu CLK_MMC2>;
