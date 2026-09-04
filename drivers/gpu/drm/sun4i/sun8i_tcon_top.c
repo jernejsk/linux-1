@@ -18,6 +18,14 @@
 struct sun8i_tcon_top_quirks {
 	bool has_tcon_tv1;
 	bool has_dsi;
+	/*
+	 * The A733 generation has no mixer to TCON mux and no TVE, and its
+	 * TCON TV clocks come straight from the CCU, so it hands out no
+	 * clocks of its own.
+	 */
+	bool has_port_sel;
+	bool has_clk_outputs;
+	bool tv_clk_from_ccu;
 };
 
 static bool sun8i_tcon_top_node_is_tcon_top(struct device_node *node)
@@ -109,6 +117,10 @@ int sun8i_tcon_top_de_config(struct device *dev, int mixer, int tcon)
 		return -EINVAL;
 	}
 
+	/* Without a mux there is only ever one way through. */
+	if (!tcon_top->quirks->has_port_sel)
+		return 0;
+
 	if (mixer > 1) {
 		dev_err(dev, "Mixer index is too high!\n");
 		return -EINVAL;
@@ -193,11 +205,12 @@ static int sun8i_tcon_top_bind(struct device *dev, struct device *master,
 		return -ENOMEM;
 	clk_data->num = CLK_NUM;
 	tcon_top->clk_data = clk_data;
+	tcon_top->quirks = quirks;
 	tcon_top->tcon_map = sun8i_tcon_top_get_tcon_map(dev->of_node);
 
 	spin_lock_init(&tcon_top->reg_lock);
 
-	tcon_top->rst = devm_reset_control_get(dev, NULL);
+	tcon_top->rst = devm_reset_control_array_get_exclusive(dev);
 	if (IS_ERR(tcon_top->rst)) {
 		dev_err(dev, "Couldn't get our reset line\n");
 		return PTR_ERR(tcon_top->rst);
@@ -226,8 +239,22 @@ static int sun8i_tcon_top_bind(struct device *dev, struct device *master,
 		goto err_assert_reset;
 	}
 
-	writel(0, regs + TCON_TOP_PORT_SEL_REG);
+	if (quirks->has_port_sel)
+		writel(0, regs + TCON_TOP_PORT_SEL_REG);
 	writel(0, regs + TCON_TOP_GATE_SRC_REG);
+
+	if (quirks->tv_clk_from_ccu) {
+		writel(SUN60I_A733_TCON_TOP_TV0_FROM_CCU,
+		       regs + TCON_TOP_TCON_TV_SETUP_REG);
+		/*
+		 * The TCON TV clock arrives from the CCU, so this gate is not
+		 * a clock this block hands out. Open it, along with the path
+		 * from the first TCON TV to HDMI, and leave them open.
+		 */
+		writel(TCON_TOP_TCON_TV0_GATE_MSK |
+		       FIELD_PREP(TCON_TOP_HDMI_SRC_MSK, 1),
+		       regs + TCON_TOP_GATE_SRC_REG);
+	}
 
 	/*
 	 * TCON TOP has two muxes, which select parent clock for each TCON TV
@@ -237,6 +264,11 @@ static int sun8i_tcon_top_bind(struct device *dev, struct device *master,
 	 * if TVE is active on each TCON TV. If it is, mux should be switched
 	 * to TVE clock parent.
 	 */
+	if (!quirks->has_clk_outputs) {
+		dev_set_drvdata(dev, tcon_top);
+		return 0;
+	}
+
 	i = 0;
 	clk_data->hws[CLK_TCON_TOP_TV0] =
 		sun8i_tcon_top_register_gate(dev, "tcon-tv0", regs,
@@ -313,20 +345,31 @@ static void sun8i_tcon_top_remove(struct platform_device *pdev)
 }
 
 static const struct sun8i_tcon_top_quirks sun8i_r40_tcon_top_quirks = {
+	.has_clk_outputs = true,
 	.has_tcon_tv1	= true,
 	.has_dsi	= true,
+	.has_port_sel	= true,
 };
 
 static const struct sun8i_tcon_top_quirks sun20i_d1_tcon_top_quirks = {
+	.has_clk_outputs = true,
 	.has_dsi	= true,
+	.has_port_sel	= true,
 };
 
 static const struct sun8i_tcon_top_quirks sun50i_h6_tcon_top_quirks = {
-	/* Nothing special */
+	.has_clk_outputs = true,
+	.has_port_sel	= true,
 };
 
 static const struct sun8i_tcon_top_quirks sun50i_h616_tcon_top_quirks = {
+	.has_clk_outputs = true,
 	.has_tcon_tv1	= true,
+	.has_port_sel	= true,
+};
+
+static const struct sun8i_tcon_top_quirks sun60i_a733_tcon_top_quirks = {
+	.tv_clk_from_ccu = true,
 };
 
 /* sun4i_drv uses this list to check if a device node is a TCON TOP */
@@ -346,6 +389,10 @@ const struct of_device_id sun8i_tcon_top_of_table[] = {
 	{
 		.compatible = "allwinner,sun50i-h616-tcon-top",
 		.data = &sun50i_h616_tcon_top_quirks
+	},
+	{
+		.compatible = "allwinner,sun60i-a733-tcon-top",
+		.data = &sun60i_a733_tcon_top_quirks
 	},
 	{ /* sentinel */ }
 };

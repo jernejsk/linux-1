@@ -10,6 +10,12 @@
 #include <linux/spinlock.h>
 
 #define TCON_TOP_TCON_TV_SETUP_REG	0x00
+/*
+ * On the A733 generation this register picks where each TCON TV takes its
+ * pixel clock from. Everything we drive wants the CCU rather than the HDMI
+ * PHY, and HDMI rather than eDP, which is all zeroes except for this bit.
+ */
+#define SUN60I_A733_TCON_TOP_TV0_FROM_CCU	BIT(3)
 
 #define TCON_TOP_PORT_SEL_REG		0x1C
 #define TCON_TOP_PORT_DE0_MSK			GENMASK(1, 0)
@@ -23,11 +29,15 @@
 #define TCON_TOP_HDMI_SRC_MSK			GENMASK(29, 28)
 #define TCON_TOP_TCON_TV1_GATE			24
 #define TCON_TOP_TCON_TV0_GATE			20
+#define TCON_TOP_TCON_TV0_GATE_MSK		BIT(20)
 #define TCON_TOP_TCON_DSI_GATE			16
 
 #define CLK_NUM					3
 
+struct sun8i_tcon_top_quirks;
+
 struct sun8i_tcon_top {
+	const struct sun8i_tcon_top_quirks *quirks;
 	struct clk			*bus;
 	struct clk_hw_onecell_data	*clk_data;
 	void __iomem			*regs;
