@@ -667,6 +667,15 @@
 			#size-cells = <0>;
 		};
 
+		syscon: syscon@3000000 {
+			compatible = "allwinner,sun60i-a733-system-control",
+				     "allwinner,sun50i-a64-system-control";
+			reg = <0x03000000 0x1000>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+			ranges;
+		};
+
 		sid: efuse@3006000 {
 			compatible = "allwinner,sun60i-a733-sid",
 				     "allwinner,sun50i-a64-sid";
@@ -1194,6 +1203,7 @@
 			clock-names = "bus", "mod";
 			resets = <&ccu RST_BUS_HDMI_SUB>;
 			reset-names = "phy";
+			syscon = <&syscon>;
 			power-domains = <&pck600 PD_VO1>;
 			#phy-cells = <0>;
 		};
