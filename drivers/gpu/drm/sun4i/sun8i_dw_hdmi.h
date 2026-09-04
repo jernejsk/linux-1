@@ -148,7 +148,10 @@
 
 struct sun8i_hdmi_phy;
 
+struct regmap_config;
+
 struct sun8i_hdmi_phy_variant {
+	const struct regmap_config *regmap_config;
 	bool has_phy_clk;
 	bool has_second_pll;
 	bool has_rescal;
