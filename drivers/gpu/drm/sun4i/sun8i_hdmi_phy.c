@@ -655,6 +655,494 @@ static const struct regmap_config sun8i_hdmi_phy_regmap_config = {
 	.name		= "phy"
 };
 
+
+/*
+ * The A733 pairs the controller with a Synopsys PHY, reached through the
+ * controller's own PHY interface rather than a register window of its own.
+ * What it does have is a small wrapper holding the pad and clock selection.
+ */
+#define SUN60I_A733_HDMI_PHY_CTRL		0x00
+#define SUN60I_A733_HDMI_PHY_CTRL_RESET		BIT(0)
+#define SUN60I_A733_HDMI_PHY_CTRL_PDDQ		BIT(1)
+#define SUN60I_A733_HDMI_PHY_CTRL_TXPWRON	BIT(2)
+#define SUN60I_A733_HDMI_PHY_CTRL_SVSRET	BIT(3)
+#define SUN60I_A733_HDMI_PHY_CTRL_HPDRXSENSE	BIT(4)
+#define SUN60I_A733_HDMI_PHY_PAD		0x04
+#define SUN60I_A733_HDMI_PHY_PAD_GPIO		BIT(0)
+#define SUN60I_A733_HDMI_PHY_PLL		0x20
+#define SUN60I_A733_HDMI_PHY_PLL_OUT_GATE	BIT(27)
+#define SUN60I_A733_HDMI_PHY_CLK		0x24
+#define SUN60I_A733_HDMI_PHY_CLK_FROM_CCU	BIT(8)
+
+/* One set of values per output colour depth, 8, 10, 12 and 16 bit. */
+struct sun60i_a733_hdmi_phy_mpll {
+	unsigned long mpixelclock;
+	struct {
+		u16 opmode;
+		u16 curr;
+		u16 drvana;
+	} res[4];
+};
+
+static const struct sun60i_a733_hdmi_phy_mpll sun60i_a733_hdmi_phy_mpll[] = {
+	{
+		25175000, {
+			{ 0x0003, 0x0283, 0x0628 },
+			{ 0x1003, 0x0281, 0x0632 },
+			{ 0x2003, 0x02C2, 0x023C },
+			{ 0x3002, 0x1283, 0x0628 },
+		}
+	},
+	{
+		27000000, {
+			{ 0x0003, 0x0283, 0x0628 },
+			{ 0x1003, 0x0281, 0x0632 },
+			{ 0x2003, 0x02C2, 0x023C },
+			{ 0x3002, 0x1283, 0x0628 },
+		}
+	},
+	{
+		33750000, {
+			{ 0x0003, 0x0283, 0x0628 },
+			{ 0x0003, 0x0283, 0x0628 },
+			{ 0x0003, 0x0283, 0x0628 },
+			{ 0x0003, 0x0283, 0x0628 },
+		}
+	},
+	{
+		35500000, {
+			{ 0x0003, 0x0283, 0x0628 },
+			{ 0x0003, 0x0283, 0x0628 },
+			{ 0x0003, 0x0283, 0x0628 },
+			{ 0x0003, 0x0283, 0x0628 },
+		}
+	},
+	{
+		36000000, {
+			{ 0x0003, 0x0285, 0x0228 },
+			{ 0x0003, 0x0285, 0x0228 },
+			{ 0x0003, 0x0285, 0x0228 },
+			{ 0x0003, 0x0285, 0x0228 },
+		}
+	},
+	{
+		40000000, {
+			{ 0x0003, 0x0285, 0x0228 },
+			{ 0x0003, 0x0285, 0x0228 },
+			{ 0x0003, 0x0285, 0x0228 },
+			{ 0x0003, 0x0285, 0x0228 },
+		}
+	},
+	{
+		44900000, {
+			{ 0x0003, 0x0285, 0x0228 },
+			{ 0x0003, 0x0285, 0x0228 },
+			{ 0x0003, 0x0285, 0x0228 },
+			{ 0x0003, 0x0285, 0x0228 },
+		}
+	},
+	{
+		49500000, {
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x0002, 0x1183, 0x0614 },
+		}
+	},
+	{
+		50000000, {
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x0002, 0x1183, 0x0614 },
+		}
+	},
+	{
+		50350000, {
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x1002, 0x1203, 0x0619 },
+			{ 0x2002, 0x1202, 0x021E },
+			{ 0x3001, 0x2183, 0x0614 },
+		}
+	},
+	{
+		54000000, {
+			{ 0x0002, 0x1183, 0x0694 },
+			{ 0x1002, 0x0203, 0x0619 },
+			{ 0x2002, 0x1202, 0x021E },
+			{ 0x3001, 0x2183, 0x0614 },
+		}
+	},
+	{
+		56250000, {
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x0002, 0x1183, 0x0614 },
+		}
+	},
+	{
+		59400000, {
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x1002, 0x1182, 0x0C14 },
+			{ 0x2002, 0x1202, 0x021E },
+			{ 0x3001, 0x2183, 0x0614 },
+		}
+	},
+	{
+		65000000, {
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x0002, 0x1183, 0x0614 },
+		}
+	},
+	{
+		68250000, {
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x0002, 0x1183, 0x0614 },
+		}
+	},
+	{
+		71000000, {
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x0002, 0x1183, 0x0614 },
+			{ 0x0002, 0x1183, 0x0614 },
+		}
+	},
+	{
+		72000000, {
+			{ 0x0002, 0x1142, 0x0214 },
+			{ 0x1002, 0x1182, 0x0219 },
+			{ 0x2001, 0x2141, 0x060F },
+			{ 0x3001, 0x2142, 0x0214 },
+		}
+	},
+	{
+		73250000, {
+			{ 0x0002, 0x1142, 0x0214 },
+			{ 0x0002, 0x1142, 0x0214 },
+			{ 0x0002, 0x1142, 0x0214 },
+			{ 0x0002, 0x1142, 0x0214 },
+		}
+	},
+	{
+		74250000, {
+			{ 0x0002, 0x1142, 0x0214 },
+			{ 0x1009, 0x2203, 0x0619 },
+			{ 0x2001, 0x2141, 0x060F },
+			{ 0x3001, 0x2142, 0x0214 },
+		}
+	},
+	{
+		82500000, {
+			{ 0x0002, 0x1142, 0x0214 },
+			{ 0x1009, 0x2203, 0x0619 },
+			{ 0x2001, 0x2141, 0x060F },
+			{ 0x3001, 0x2142, 0x0214 },
+		}
+	},
+	{
+		90000000, {
+			{ 0x0002, 0x1142, 0x0214 },
+			{ 0x1009, 0x2203, 0x0619 },
+			{ 0x2001, 0x2141, 0x060F },
+			{ 0x3001, 0x2142, 0x0214 },
+		}
+	},
+	{
+		99000000, {
+			{ 0x0001, 0x20C0, 0x060A },
+			{ 0x1009, 0x2203, 0x0619 },
+			{ 0x2001, 0x2100, 0x020F },
+			{ 0x3000, 0x30C0, 0x060A },
+		}
+	},
+	{
+		100700000, {
+			{ 0x0001, 0x20C0, 0x060A },
+			{ 0x1009, 0x2203, 0x0619 },
+			{ 0x2001, 0x2100, 0x020F },
+			{ 0x3000, 0x30C0, 0x060A },
+		}
+	},
+	{
+		108000000, {
+			{ 0x0001, 0x20C0, 0x060A },
+			{ 0x1009, 0x2203, 0x0619 },
+			{ 0x2001, 0x2100, 0x020F },
+			{ 0x3000, 0x30C0, 0x060A },
+		}
+	},
+	{
+		118000000, {
+			{ 0x0001, 0x20C0, 0x060A },
+			{ 0x1009, 0x2182, 0x0219 },
+			{ 0x2001, 0x2100, 0x020F },
+			{ 0x3000, 0x30C0, 0x060A },
+		}
+	},
+	{
+		144000000, {
+			{ 0x0001, 0x2080, 0x020A },
+			{ 0x1009, 0x2182, 0x0219 },
+			{ 0x2008, 0x3141, 0x060F },
+			{ 0x3000, 0x3080, 0x020A },
+		}
+	},
+	{
+		148500000, {
+			{ 0x0001, 0x2080, 0x020A },
+			{ 0x1018, 0x3203, 0x0619 },
+			{ 0x2008, 0x3141, 0x060F },
+			{ 0x3000, 0x3080, 0x020A },
+		}
+	},
+	{
+		165000000, {
+			{ 0x0001, 0x2080, 0x020A },
+			{ 0x1018, 0x3203, 0x0619 },
+			{ 0x2008, 0x3141, 0x060F },
+			{ 0x3000, 0x3080, 0x020A },
+		}
+	},
+	{
+		180000000, {
+			{ 0x0001, 0x2080, 0x020A },
+			{ 0x1018, 0x3203, 0x0619 },
+			{ 0x2008, 0x3141, 0x060F },
+			{ 0x3640, 0x3080, 0x020A },
+		}
+	},
+	{
+		185625000, {
+			{ 0x0000, 0x3040, 0x0605 },
+			{ 0x1018, 0x3203, 0x0619 },
+			{ 0x2008, 0x3141, 0x060F },
+			{ 0x3640, 0x3080, 0x020A },
+		}
+	},
+	{
+		198000000, {
+			{ 0x0000, 0x3040, 0x0605 },
+			{ 0x1018, 0x3203, 0x0619 },
+			{ 0x2008, 0x3100, 0x020F },
+			{ 0x3640, 0x3080, 0x020A },
+		}
+	},
+	{
+		216000000, {
+			{ 0x0000, 0x3040, 0x0605 },
+			{ 0x1018, 0x3203, 0x0619 },
+			{ 0x2008, 0x3100, 0x020F },
+			{ 0x3640, 0x3080, 0x020A },
+		}
+	},
+	{
+		237600000, {
+			{ 0x0000, 0x3040, 0x0605 },
+			{ 0x1018, 0x3182, 0x0219 },
+			{ 0x2648, 0x3100, 0x020F },
+			{ 0x3640, 0x30C0, 0x000A },
+		}
+	},
+	{
+		288000000, {
+			{ 0x0000, 0x3041, 0x0205 },
+			{ 0x1658, 0x3182, 0x0219 },
+			{ 0x2648, 0x3100, 0x020F },
+			{ 0x3640, 0x30C0, 0x000A },
+		}
+	},
+	{
+		297000000, {
+			{ 0x0000, 0x3041, 0x0205 },
+			{ 0x1658, 0x3182, 0x0219 },
+			{ 0x2648, 0x3100, 0x020F },
+			{ 0x3640, 0x30C0, 0x000A },
+		}
+	},
+	{
+		330000000, {
+			{ 0x0000, 0x3041, 0x0205 },
+			{ 0x1658, 0x3182, 0x0219 },
+			{ 0x2648, 0x3100, 0x000F },
+			{ 0x0000, 0x0000, 0x0000 },
+		}
+	},
+	{
+		360000000, {
+			{ 0x0640, 0x3041, 0x0205 },
+			{ 0x1658, 0x3182, 0x0219 },
+			{ 0x2648, 0x3100, 0x000F },
+			{ 0x0000, 0x0000, 0x0000 },
+		}
+	},
+	{
+		371250000, {
+			{ 0x0640, 0x3041, 0x0205 },
+			{ 0x1658, 0x3182, 0x0219 },
+			{ 0x2648, 0x3100, 0x000F },
+			{ 0x0000, 0x0000, 0x0000 },
+		}
+	},
+	{
+		396000000, {
+			{ 0x0640, 0x3041, 0x0205 },
+			{ 0x1658, 0x31C0, 0x0019 },
+			{ 0x2648, 0x3100, 0x000F },
+			{ 0x0000, 0x0000, 0x0000 },
+		}
+	},
+	{
+		432000000, {
+			{ 0x0640, 0x3041, 0x0205 },
+			{ 0x1658, 0x31C0, 0x0019 },
+			{ 0x0000, 0x0000, 0x0000 },
+			{ 0x0000, 0x0000, 0x0000 },
+		}
+	},
+	{
+		495000000, {
+			{ 0x0640, 0x3080, 0x0005 },
+			{ 0x0000, 0x0000, 0x0000 },
+			{ 0x0000, 0x0000, 0x0000 },
+			{ 0x0000, 0x0000, 0x0000 },
+		}
+	},
+	{
+		505250000, {
+			{ 0x0640, 0x3080, 0x0005 },
+			{ 0x0000, 0x0000, 0x0000 },
+			{ 0x0000, 0x0000, 0x0000 },
+			{ 0x0000, 0x0000, 0x0000 },
+		}
+	},
+	{
+		552750000, {
+			{ 0x0640, 0x3080, 0x0005 },
+			{ 0x0000, 0x0000, 0x0000 },
+			{ 0x0000, 0x0000, 0x0000 },
+			{ 0x0000, 0x0000, 0x0000 },
+		}
+	},
+	{
+		594000000, {
+			{ 0x0640, 0x3080, 0x0005 },
+			{ 0x0000, 0x0000, 0x0000 },
+			{ 0x0000, 0x0000, 0x0000 },
+			{ 0x0000, 0x0000, 0x0000 },
+		}
+	},
+	{ ~0UL }
+};
+
+struct sun60i_a733_hdmi_phy_drive {
+	unsigned long min_clock;
+	unsigned long max_clock;
+	u16 term;
+	u16 vlev;
+	u16 sym;
+};
+
+static const struct sun60i_a733_hdmi_phy_drive sun60i_a733_hdmi_phy_drive[] = {
+	{  25000000, 165000000, 0x0007, 0x8160, 0x8188 },
+	{ 165000000, 340000000, 0x0004, 0x8040, 0x8e85 },
+	{ 340000000, 600000000, 0x0000, 0x80c0, 0x82f6 },
+};
+
+static int sun60i_a733_hdmi_phy_config(struct dw_hdmi *hdmi, void *data,
+				       const struct drm_display_info *display,
+				       const struct drm_display_mode *mode)
+{
+	unsigned long clk_rate = mode->crtc_clock * 1000L;
+	const struct sun60i_a733_hdmi_phy_mpll *mpll;
+	const struct sun60i_a733_hdmi_phy_drive *drive = NULL;
+	struct sun8i_hdmi_phy *phy = data;
+	unsigned int i;
+
+	for (mpll = sun60i_a733_hdmi_phy_mpll; mpll->mpixelclock != ~0UL; mpll++)
+		if (mpll->mpixelclock >= clk_rate)
+			break;
+	if (mpll->mpixelclock == ~0UL)
+		return -EINVAL;
+
+	for (i = 0; i < ARRAY_SIZE(sun60i_a733_hdmi_phy_drive); i++)
+		if (clk_rate <= sun60i_a733_hdmi_phy_drive[i].max_clock) {
+			drive = &sun60i_a733_hdmi_phy_drive[i];
+			break;
+		}
+	if (!drive)
+		return -EINVAL;
+
+	clk_set_rate(phy->clk_mod, clk_rate);
+
+	dw_hdmi_phy_gen2_txpwron(hdmi, 0);
+	dw_hdmi_phy_gen2_pddq(hdmi, 1);
+	dw_hdmi_phy_gen2_reset(hdmi);
+	dw_hdmi_phy_gen2_pddq(hdmi, 0);
+	dw_hdmi_phy_i2c_set_addr(hdmi, I2C_ADDR);
+
+	/* Only 8-bit output is described for now. */
+	dw_hdmi_phy_i2c_write(hdmi, mpll->res[0].opmode, 0x06);
+	dw_hdmi_phy_i2c_write(hdmi, mpll->res[0].curr, 0x10);
+	dw_hdmi_phy_i2c_write(hdmi, mpll->res[0].drvana, 0x11);
+	dw_hdmi_phy_i2c_write(hdmi, drive->term, 0x19);
+	dw_hdmi_phy_i2c_write(hdmi, drive->vlev, 0x0e);
+	dw_hdmi_phy_i2c_write(hdmi, drive->sym, 0x09);
+
+	dw_hdmi_phy_gen2_txpwron(hdmi, 1);
+
+	return 0;
+}
+
+/*
+ * The wrapper around the Synopsys PHY owns the supply pins, the pads and the
+ * clock select. Bring the supplies up, hand the pads to the HDMI block rather
+ * than to the pin controller, and take the transmit clock from the CCU so the
+ * wrapper's own PLL can stay switched off.
+ */
+static void sun60i_a733_hdmi_phy_init(struct sun8i_hdmi_phy *phy)
+{
+	regmap_update_bits(phy->regs, SUN60I_A733_HDMI_PHY_CTRL,
+			   SUN60I_A733_HDMI_PHY_CTRL_RESET |
+			   SUN60I_A733_HDMI_PHY_CTRL_PDDQ |
+			   SUN60I_A733_HDMI_PHY_CTRL_TXPWRON |
+			   SUN60I_A733_HDMI_PHY_CTRL_SVSRET |
+			   SUN60I_A733_HDMI_PHY_CTRL_HPDRXSENSE,
+			   SUN60I_A733_HDMI_PHY_CTRL_RESET |
+			   SUN60I_A733_HDMI_PHY_CTRL_PDDQ |
+			   SUN60I_A733_HDMI_PHY_CTRL_TXPWRON |
+			   SUN60I_A733_HDMI_PHY_CTRL_HPDRXSENSE);
+
+	regmap_update_bits(phy->regs, SUN60I_A733_HDMI_PHY_PAD,
+			   SUN60I_A733_HDMI_PHY_PAD_GPIO, 0);
+
+	regmap_update_bits(phy->regs, SUN60I_A733_HDMI_PHY_PLL,
+			   SUN60I_A733_HDMI_PHY_PLL_OUT_GATE, 0);
+
+	regmap_update_bits(phy->regs, SUN60I_A733_HDMI_PHY_CLK,
+			   SUN60I_A733_HDMI_PHY_CLK_FROM_CCU,
+			   SUN60I_A733_HDMI_PHY_CLK_FROM_CCU);
+}
+
+static void sun60i_a733_hdmi_phy_disable(struct dw_hdmi *hdmi, void *data)
+{
+	dw_hdmi_phy_gen2_txpwron(hdmi, 0);
+	dw_hdmi_phy_gen2_pddq(hdmi, 1);
+}
+
+static const struct dw_hdmi_phy_ops sun60i_a733_hdmi_phy_ops = {
+	.init		= sun60i_a733_hdmi_phy_config,
+	.disable	= sun60i_a733_hdmi_phy_disable,
+	.read_hpd	= dw_hdmi_phy_read_hpd,
+	.update_hpd	= dw_hdmi_phy_update_hpd,
+	.setup_hpd	= dw_hdmi_phy_setup_hpd,
+};
+
 static const struct sun8i_hdmi_phy_variant sun8i_a83t_hdmi_phy = {
 	.phy_ops = &sun8i_a83t_hdmi_phy_ops,
 	.phy_init = &sun8i_hdmi_phy_init_a83t,
@@ -684,6 +1172,11 @@ static const struct sun8i_hdmi_phy_variant sun50i_h6_hdmi_phy = {
 	.mpll_cfg = sun50i_h6_mpll_cfg,
 	.phy_cfg  = sun50i_h6_phy_config,
 	.phy_init = &sun50i_hdmi_phy_init_h6,
+};
+
+static const struct sun8i_hdmi_phy_variant sun60i_a733_hdmi_phy = {
+	.phy_ops = &sun60i_a733_hdmi_phy_ops,
+	.phy_init = &sun60i_a733_hdmi_phy_init,
 };
 
 static const struct sun8i_hdmi_phy_variant sun50i_h616_hdmi_phy = {
@@ -717,6 +1210,10 @@ static const struct of_device_id sun8i_hdmi_phy_of_table[] = {
 	{
 		.compatible = "allwinner,sun50i-h616-hdmi-phy",
 		.data = &sun50i_h616_hdmi_phy,
+	},
+	{
+		.compatible = "allwinner,sun60i-a733-hdmi-phy",
+		.data = &sun60i_a733_hdmi_phy,
 	},
 	{ /* sentinel */ }
 };
