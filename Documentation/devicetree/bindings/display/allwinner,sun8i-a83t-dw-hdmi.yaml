@@ -28,6 +28,8 @@ properties:
       - const: allwinner,sun8i-a83t-dw-hdmi
       - const: allwinner,sun50i-h6-dw-hdmi
 
+      - const: allwinner,sun60i-a733-dw-hdmi
+
       - items:
           - const: allwinner,sun50i-h616-dw-hdmi
           - const: allwinner,sun50i-h6-dw-hdmi
@@ -91,6 +93,9 @@ properties:
   hvcc-supply:
     description:
       The VCC power supply of the controller
+
+  power-domains:
+    maxItems: 1
 
   ports:
     $ref: /schemas/graph.yaml#/properties/ports

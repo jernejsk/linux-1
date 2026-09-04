@@ -22,6 +22,7 @@ properties:
       - allwinner,sun50i-a64-hdmi-phy
       - allwinner,sun50i-h6-hdmi-phy
       - allwinner,sun50i-h616-hdmi-phy
+      - allwinner,sun60i-a733-hdmi-phy
 
   reg:
     maxItems: 1
@@ -42,11 +43,20 @@ properties:
       - const: pll-0
       - const: pll-1
 
+  power-domains:
+    maxItems: 1
+
   resets:
     maxItems: 1
 
   reset-names:
     const: phy
+
+  syscon:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description:
+      Phandle to the system controller, which holds the transmit
+      resistance calibration.
 
 required:
   - compatible
@@ -95,6 +105,19 @@ else:
 
       clock-names:
         maxItems: 2
+
+allOf:
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: allwinner,sun60i-a733-hdmi-phy
+    then:
+      required:
+        - syscon
+    else:
+      properties:
+        syscon: false
 
 additionalProperties: false
 
