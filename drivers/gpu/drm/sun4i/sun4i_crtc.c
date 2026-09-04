@@ -63,6 +63,7 @@ void sun4i_crtc_finish_page_flip(struct drm_crtc *crtc)
 	}
 	spin_unlock_irqrestore(&crtc->dev->event_lock, flags);
 }
+EXPORT_SYMBOL_GPL(sun4i_crtc_finish_page_flip);
 
 static int sun4i_crtc_atomic_check(struct drm_crtc *crtc,
 				    struct drm_atomic_commit *state)
