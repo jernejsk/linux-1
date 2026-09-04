@@ -46,10 +46,40 @@ static const struct sun50i_planes_quirks sun50i_h616_planes_quirks = {
 	},
 };
 
+static const struct sun50i_planes_quirks sun60i_a733_planes_quirks = {
+	.def_map = {
+		{
+			/*
+			 * Channel 0 has an advanced scaler this driver cannot
+			 * program yet, so leave it out and give the display
+			 * the five channels whose scalers are understood.
+			 */
+			.map = {1, 2, 6, 7, 8},
+			.num_ch = 5,
+		},
+	},
+	.cfg = {
+		.de_type	= SUN8I_MIXER_DE33,
+		.scaler_type    = {
+			[1] = SUN8I_SCALER_VI_8,
+			[2] = SUN8I_SCALER_VI_8,
+			[6] = SUN8I_SCALER_VI_8,
+			[7] = SUN8I_SCALER_VI_8,
+			[8] = SUN8I_SCALER_VI_8,
+		},
+		.scanline_yuv	= {4096, 2048, 2048},
+		.scanline_rgb	= {4096, 2048, 2048, 0, 0, 0, 2048, 2048, 2048},
+	},
+};
+
 static const struct of_device_id sun50i_planes_of_table[] = {
 	{
 		.compatible = "allwinner,sun50i-h616-de33-planes",
 		.data = &sun50i_h616_planes_quirks
+	},
+	{
+		.compatible = "allwinner,sun60i-a733-de33-planes",
+		.data = &sun60i_a733_planes_quirks
 	},
 	{ }
 };
