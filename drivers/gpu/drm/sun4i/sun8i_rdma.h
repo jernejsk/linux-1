@@ -21,6 +21,7 @@ void sun8i_rdma_deinit(struct sun8i_rdma *rdma);
 int sun8i_rdma_apply(struct sun8i_rdma *rdma);
 void sun8i_rdma_sync(struct sun8i_rdma *rdma);
 int sun8i_rdma_prepare(struct sun8i_rdma *rdma);
+void sun8i_rdma_reprepare(struct sun8i_rdma *rdma);
 
 struct sun8i_rdma_unit *
 sun8i_rdma_add_unit(struct sun8i_rdma *rdma, void __iomem *base,

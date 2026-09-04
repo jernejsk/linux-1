@@ -41,6 +41,8 @@
 
 #include "sun4i_crtc.h"
 #include "sunxi_engine.h"
+#include "sun8i_mixer.h"
+#include "sun8i_rdma.h"
 
 #define WB_GCTRL		0x00
 #define WB_GCTRL_CLK_GATE	BIT(29)
@@ -157,6 +159,8 @@ struct sun50i_wb_cfg {
 	unsigned int max_output_width;
 	const struct sun50i_wb_rtwb *rtwb;
 	bool has_rcq;
+	/* the display's queue carries the writeback registers */
+	bool shared_rcq;
 };
 
 struct sun50i_wb {
@@ -173,6 +177,8 @@ struct sun50i_wb {
 	void				*shadow;
 	dma_addr_t			shadow_dma;
 	struct sun50i_wb_rcq_head	*heads;
+	struct sun8i_rdma_unit		*units[WB_MAX_CRTCS];
+	struct sun8i_rdma_unit		*unit;
 	dma_addr_t			heads_dma;
 	u8				crtc_port[WB_MAX_CRTCS];
 	u32				rtwb_mux;
@@ -279,9 +285,18 @@ static struct sun50i_wb *encoder_to_wb(struct drm_encoder *encoder)
 	return container_of(wb_conn, struct sun50i_wb, wb_conn);
 }
 
+static const struct reg_region sun50i_wb_regions[] = {
+	{ WB_GCTRL, 0xd0 / 4 },
+	{ 0x200, 0x40 / 4 },
+	{ 0x280, 0x40 / 4 },
+	{ }
+};
+
 static void sun50i_wb_write(struct sun50i_wb *wb, u32 reg, u32 value)
 {
-	if (wb->cfg->has_rcq)
+	if (wb->cfg->shared_rcq)
+		sun8i_rdma_write(wb->unit, reg, value);
+	else if (wb->cfg->has_rcq)
 		*(u32 *)(wb->shadow + reg) = value;
 	else
 		writel(value, wb->regs + reg);
@@ -685,6 +700,7 @@ static void sun50i_wb_atomic_commit(struct drm_connector *conn,
 	external_timing = !wb->cfg->has_rcq ||
 			  sun50i_wb_prepare_rtwb(wb, crtc);
 	crtc_index = drm_crtc_index(crtc);
+	wb->unit = wb->units[crtc_index];
 	port = wb->crtc_port[crtc_index];
 	format = sun50i_wb_format(fb->format->format);
 
@@ -731,7 +747,10 @@ static void sun50i_wb_atomic_commit(struct drm_connector *conn,
 	sun50i_wb_set_scaler(wb, w, h, out_w, out_h, fb->format);
 	sun50i_wb_set_csc(wb, drm_crtc_to_sun4i_crtc(crtc)->engine->format,
 			  fb->format, out_w, out_h);
-	if (wb->cfg->has_rcq)
+	if (wb->cfg->shared_rcq)
+		sun50i_wb_write(wb, WB_GCTRL,
+				WB_GCTRL_AUTO_GATE | WB_GCTRL_START);
+	else if (wb->cfg->has_rcq)
 		sun50i_wb_write(wb, WB_START,
 				WB_GCTRL_AUTO_GATE | WB_GCTRL_START);
 
@@ -751,13 +770,17 @@ static void sun50i_wb_atomic_commit(struct drm_connector *conn,
 		 * Triggering one queue while the other fetch is still in
 		 * flight can corrupt either update, so serialize them.
 		 */
-		sunxi_engine_sync(scrtc->engine);
-		sun50i_wb_submit_rcq(wb);
-		ret = readl_poll_timeout(wb->rcq + WB_RCQ_STATUS, status,
-					 status & WB_RCQ_STATUS_FINISH,
-					 10, 20000);
-		if (ret)
-			drm_warn(conn->dev, "writeback RCQ sync timed out\n");
+		if (!wb->cfg->shared_rcq) {
+			sunxi_engine_sync(scrtc->engine);
+			sun50i_wb_submit_rcq(wb);
+			ret = readl_poll_timeout(wb->rcq + WB_RCQ_STATUS,
+						 status,
+						 status & WB_RCQ_STATUS_FINISH,
+						 10, 20000);
+			if (ret)
+				drm_warn(conn->dev,
+					 "writeback RCQ sync timed out\n");
+		}
 		if (!external_timing)
 			sunxi_engine_commit(scrtc->engine, crtc, state);
 		if (wb->cfg->rtwb->ctl == wb->cfg->rtwb->mux)
@@ -820,7 +843,7 @@ static int sun50i_wb_bind(struct device *dev, struct device *master,
 	u32 possible_crtcs;
 	int ret;
 
-	if (wb->cfg->has_rcq && !wb->shadow) {
+	if (wb->cfg->has_rcq && !wb->cfg->shared_rcq && !wb->shadow) {
 		wb->dma_dev = drm_dev_dma_dev(drm);
 		ret = sun50i_wb_init_rcq(wb);
 		if (ret)
@@ -840,8 +863,38 @@ static int sun50i_wb_bind(struct device *dev, struct device *master,
 			struct sun4i_crtc *scrtc = drm_crtc_to_sun4i_crtc(crtc);
 
 			if (scrtc->engine->node == mixer) {
-				wb->crtc_port[drm_crtc_index(crtc)] = endpoint.id;
+				unsigned int index = drm_crtc_index(crtc);
+
+				wb->crtc_port[index] = endpoint.id;
 				possible_crtcs |= drm_crtc_mask(crtc);
+
+				if (!wb->cfg->shared_rcq)
+					continue;
+
+				/*
+				 * This generation has no queue of its own:
+				 * the display carries the writeback
+				 * registers along with the plane updates.
+				 */
+				wb->units[index] =
+					sun8i_rdma_add_unit(engine_to_sun8i_mixer(scrtc->engine)->rdma,
+							    wb->regs,
+							    DE33_WB_OFFSET,
+							    0x300,
+							    sun50i_wb_regions);
+				if (!wb->units[index]) {
+					of_node_put(mixer);
+					of_node_put(port);
+					return -ENOMEM;
+				}
+
+				sun8i_rdma_reprepare(engine_to_sun8i_mixer(scrtc->engine)->rdma);
+				ret = sun8i_rdma_prepare(engine_to_sun8i_mixer(scrtc->engine)->rdma);
+				if (ret) {
+					of_node_put(mixer);
+					of_node_put(port);
+					return ret;
+				}
 			}
 		}
 		of_node_put(mixer);
@@ -976,6 +1029,7 @@ static const struct sun50i_wb_cfg sun60i_a733_wb_cfg = {
 	.format_count = ARRAY_SIZE(sun50i_h616_wb_formats),
 	.max_output_width = WB_YUV_MAX_WIDTH,
 	.has_rcq = true,
+	.shared_rcq = true,
 	.rtwb = &sun60i_a733_rtwb,
 };
 

@@ -56,10 +56,16 @@ static const struct clk_parent_data sun60i_a733_de_bus[] = {
 	{ .fw_name = "bus" },
 };
 
+/*
+ * This generation spaces the per-core bits four apart rather than one, so
+ * the mixers land on 0, 4, 8 and 12 and the writeback on 16.
+ */
 static SUNXI_CCU_GATE_DATA(mixer0_a733_clk, "mixer0", sun60i_a733_de_mod,
 			   0x04, BIT(0), CLK_SET_RATE_PARENT);
-static SUNXI_CCU_GATE_DATA(wb_a733_clk, "wb", sun60i_a733_de_mod,
+static SUNXI_CCU_GATE_DATA(mixer1_a733_clk, "mixer1", sun60i_a733_de_mod,
 			   0x04, BIT(4), CLK_SET_RATE_PARENT);
+static SUNXI_CCU_GATE_DATA(wb_a733_clk, "wb", sun60i_a733_de_mod,
+			   0x04, BIT(16), CLK_SET_RATE_PARENT);
 static SUNXI_CCU_GATE_DATA(bus_mixer0_a733_clk, "bus-mixer0",
 			   sun60i_a733_de_bus, 0x08, BIT(0), 0);
 
@@ -186,11 +192,18 @@ static struct clk_hw_onecell_data sun50i_a64_de2_hw_clks = {
 static struct clk_hw_onecell_data sun60i_a733_de33_hw_clks = {
 	.hws	= {
 		[CLK_MIXER0]		= &mixer0_a733_clk.common.hw,
+		[CLK_MIXER1]		= &mixer1_a733_clk.common.hw,
 		[CLK_WB]		= &wb_a733_clk.common.hw,
 
 		[CLK_BUS_MIXER0]	= &bus_mixer0_a733_clk.common.hw,
 	},
 	.num	= CLK_NUMBER_WITHOUT_ROT,
+};
+
+static const struct ccu_reset_map sun60i_a733_de33_resets[] = {
+	[RST_MIXER0]	= { 0x00, BIT(0) },
+	[RST_MIXER1]	= { 0x00, BIT(4) },
+	[RST_WB]	= { 0x00, BIT(16) },
 };
 
 static struct clk_hw_onecell_data sun50i_h616_de33_hw_clks = {
@@ -305,6 +318,7 @@ static const struct sunxi_ccu_desc sun50i_h5_de2_clk_desc = {
 
 static struct ccu_common *sun60i_a733_de33_ccu_clks[] = {
 	&mixer0_a733_clk.common,
+	&mixer1_a733_clk.common,
 	&wb_a733_clk.common,
 	&bus_mixer0_a733_clk.common,
 };
@@ -315,8 +329,8 @@ static const struct sunxi_ccu_desc sun60i_a733_de33_clk_desc = {
 
 	.hw_clks	= &sun60i_a733_de33_hw_clks,
 
-	.resets		= sun50i_h616_de33_resets,
-	.num_resets	= ARRAY_SIZE(sun50i_h616_de33_resets),
+	.resets		= sun60i_a733_de33_resets,
+	.num_resets	= ARRAY_SIZE(sun60i_a733_de33_resets),
 };
 
 static const struct sunxi_ccu_desc sun50i_h616_de33_clk_desc = {

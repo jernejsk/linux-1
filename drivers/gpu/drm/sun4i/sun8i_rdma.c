@@ -94,6 +94,26 @@ void sun8i_rdma_deinit(struct sun8i_rdma *rdma)
 	kfree(rdma);
 }
 
+/*
+ * Units can appear after the head list has been built, because the writeback
+ * only binds once every display exists. Throw the list away so the next
+ * prepare covers the new units too.
+ */
+void sun8i_rdma_reprepare(struct sun8i_rdma *rdma)
+{
+	if (!rdma->rcq_ready)
+		return;
+
+	dma_free_coherent(rdma->dev, rdma->head_alloc * sizeof(*rdma->heads),
+			  rdma->heads, rdma->heads_dma);
+	rdma->heads = NULL;
+	rdma->head_alloc = 0;
+	rdma->head_count = 0;
+	rdma->rcq_ready = false;
+	rdma->rcq_armed = false;
+}
+EXPORT_SYMBOL_GPL(sun8i_rdma_reprepare);
+
 int sun8i_rdma_prepare(struct sun8i_rdma *rdma)
 {
 	struct sun8i_rdma_unit *unit;
@@ -147,6 +167,7 @@ int sun8i_rdma_prepare(struct sun8i_rdma *rdma)
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(sun8i_rdma_prepare);
 
 /* Wait until a previously triggered queue fetch was consumed. */
 void sun8i_rdma_sync(struct sun8i_rdma *rdma)
@@ -307,6 +328,7 @@ sun8i_rdma_add_unit(struct sun8i_rdma *rdma, void __iomem *base,
 
 	return unit;
 }
+EXPORT_SYMBOL_GPL(sun8i_rdma_add_unit);
 
 void sun8i_rdma_write(struct sun8i_rdma_unit *unit,
 		      unsigned int reg, u32 value)
@@ -317,6 +339,7 @@ void sun8i_rdma_write(struct sun8i_rdma_unit *unit,
 	*ptr = value;
 	unit->dirty = true;
 }
+EXPORT_SYMBOL_GPL(sun8i_rdma_write);
 
 void sun8i_rdma_memcpy(struct sun8i_rdma_unit *unit, unsigned int reg,
 		       const u32 *values, unsigned int count)
