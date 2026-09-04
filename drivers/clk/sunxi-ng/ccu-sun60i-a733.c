@@ -499,10 +499,16 @@ static SUNXI_CCU_GATE_HWS(ahb_ve_enc_clk, "ahb-ve-enc", ahb_hws,
 			  0x5c0, BIT(1), 0);
 static SUNXI_CCU_GATE_HWS(ahb_vid_in_clk, "ahb-vid-in", ahb_hws,
 			  0x5c0, BIT(2), 0);
+/*
+ * These two carry the register bus into the video output islands, which hold
+ * the display tops, the timing controllers and HDMI. Nothing else turns them
+ * on, and with them off those blocks read back zero and swallow writes, so
+ * keep them running.
+ */
 static SUNXI_CCU_GATE_HWS(ahb_vid_cout0_clk, "ahb-vid-cout0", ahb_hws,
-			  0x5c0, BIT(3), 0);
+			  0x5c0, BIT(3), CLK_IS_CRITICAL);
 static SUNXI_CCU_GATE_HWS(ahb_vid_cout1_clk, "ahb-vid-cout1", ahb_hws,
-			  0x5c0, BIT(4), 0);
+			  0x5c0, BIT(4), CLK_IS_CRITICAL);
 /*
  * The display engine reaches memory through these two gates, and nothing
  * else turns them on, so keep them running.
