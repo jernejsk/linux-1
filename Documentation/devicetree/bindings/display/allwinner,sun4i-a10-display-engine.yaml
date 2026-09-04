@@ -66,6 +66,7 @@ properties:
       - allwinner,sun50i-a64-display-engine
       - allwinner,sun50i-h6-display-engine
       - allwinner,sun50i-h616-display-engine
+      - allwinner,sun60i-a733-display-engine
 
   allwinner,pipelines:
     $ref: /schemas/types.yaml#/definitions/phandle-array

@@ -11,9 +11,13 @@ maintainers:
 
 properties:
   compatible:
-    enum:
-      - allwinner,sun50i-h6-de3-wb
-      - allwinner,sun50i-h616-de33-wb
+    oneOf:
+      - enum:
+          - allwinner,sun50i-h6-de3-wb
+          - allwinner,sun50i-h616-de33-wb
+      - items:
+          - const: allwinner,sun60i-a733-de33-wb
+          - const: allwinner,sun50i-h616-de33-wb
 
   reg:
     minItems: 1
@@ -38,6 +42,9 @@ properties:
     maxItems: 1
 
   interrupts:
+    maxItems: 1
+
+  power-domains:
     maxItems: 1
 
   resets:
@@ -94,7 +101,8 @@ allOf:
   - if:
       properties:
         compatible:
-          const: allwinner,sun50i-h616-de33-wb
+          contains:
+            const: allwinner,sun50i-h616-de33-wb
     then:
       properties:
         reg:

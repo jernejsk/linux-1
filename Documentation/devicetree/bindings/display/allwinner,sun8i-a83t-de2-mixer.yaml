@@ -25,6 +25,7 @@ properties:
       - allwinner,sun50i-a64-de2-mixer-1
       - allwinner,sun50i-h6-de3-mixer-0
       - allwinner,sun50i-h616-de33-mixer-0
+      - allwinner,sun60i-a733-de33-mixer-0
 
   reg: true
 
@@ -41,6 +42,9 @@ properties:
       - const: mod
 
   iommus:
+    maxItems: 1
+
+  power-domains:
     maxItems: 1
 
   resets:
@@ -74,6 +78,7 @@ allOf:
           contains:
             enum:
               - allwinner,sun50i-h616-de33-mixer-0
+              - allwinner,sun60i-a733-de33-mixer-0
     then:
       properties:
         reg:

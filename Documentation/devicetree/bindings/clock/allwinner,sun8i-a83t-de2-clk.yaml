@@ -26,6 +26,7 @@ properties:
       - const: allwinner,sun50i-h5-de2-clk
       - const: allwinner,sun50i-h6-de3-clk
       - const: allwinner,sun50i-h616-de33-clk
+      - const: allwinner,sun60i-a733-de33-clk
       - items:
           - const: allwinner,sun8i-r40-de2-clk
           - const: allwinner,sun8i-h3-de2-clk
