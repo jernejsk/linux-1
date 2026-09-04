@@ -481,6 +481,18 @@
 			#size-cells = <0>;
 		};
 
+		ths: thermal-sensor@2522000 {
+			compatible = "allwinner,sun60i-a733-ths";
+			reg = <0x02522000 0x1000>;
+			interrupts = <GIC_SPI 39 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ccu CLK_BUS_THS0>, <&ccu CLK_GPADC0_24M>;
+			clock-names = "bus", "mod";
+			resets = <&ccu RST_BUS_THS0>;
+			nvmem-cells = <&ths_calibration>;
+			nvmem-cell-names = "calibration";
+			#thermal-sensor-cells = <1>;
+		};
+
 		spi0: spi@2540000 {
 			compatible = "allwinner,sun60i-a733-spi",
 				     "allwinner,sun55i-a523-spi";
@@ -562,6 +574,10 @@
 			reg = <0x03006000 0x1000>;
 			#address-cells = <1>;
 			#size-cells = <1>;
+
+			ths_calibration: thermal-sensor-calibration@44 {
+				reg = <0x44 0xc>;
+			};
 
 			cpu_speed_grade: cpu-speed-grade@4c {
 				reg = <0x4c 0x4>;
