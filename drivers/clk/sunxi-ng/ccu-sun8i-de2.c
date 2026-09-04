@@ -44,6 +44,25 @@ static SUNXI_CCU_GATE(mixer1_h616_clk,	"mixer1",	"de",
 static SUNXI_CCU_GATE(wb_h616_clk,	"wb",		"de",
 		      0x04, BIT(4), CLK_SET_RATE_PARENT);
 
+/*
+ * Later SoCs name their display clocks after the engine instance, so take
+ * the parents from the device tree rather than by a fixed name.
+ */
+static const struct clk_parent_data sun60i_a733_de_mod[] = {
+	{ .fw_name = "mod" },
+};
+
+static const struct clk_parent_data sun60i_a733_de_bus[] = {
+	{ .fw_name = "bus" },
+};
+
+static SUNXI_CCU_GATE_DATA(mixer0_a733_clk, "mixer0", sun60i_a733_de_mod,
+			   0x04, BIT(0), CLK_SET_RATE_PARENT);
+static SUNXI_CCU_GATE_DATA(wb_a733_clk, "wb", sun60i_a733_de_mod,
+			   0x04, BIT(4), CLK_SET_RATE_PARENT);
+static SUNXI_CCU_GATE_DATA(bus_mixer0_a733_clk, "bus-mixer0",
+			   sun60i_a733_de_bus, 0x08, BIT(0), 0);
+
 static SUNXI_CCU_M(mixer0_div_clk, "mixer0-div", "de", 0x0c, 0, 4,
 		   CLK_SET_RATE_PARENT);
 static SUNXI_CCU_M(mixer1_div_clk, "mixer1-div", "de", 0x0c, 4, 4,
@@ -164,6 +183,16 @@ static struct clk_hw_onecell_data sun50i_a64_de2_hw_clks = {
 	.num	= CLK_NUMBER_WITH_ROT,
 };
 
+static struct clk_hw_onecell_data sun60i_a733_de33_hw_clks = {
+	.hws	= {
+		[CLK_MIXER0]		= &mixer0_a733_clk.common.hw,
+		[CLK_WB]		= &wb_a733_clk.common.hw,
+
+		[CLK_BUS_MIXER0]	= &bus_mixer0_a733_clk.common.hw,
+	},
+	.num	= CLK_NUMBER_WITHOUT_ROT,
+};
+
 static struct clk_hw_onecell_data sun50i_h616_de33_hw_clks = {
 	.hws	= {
 		[CLK_MIXER0]		= &mixer0_h616_clk.common.hw,
@@ -274,6 +303,22 @@ static const struct sunxi_ccu_desc sun50i_h5_de2_clk_desc = {
 	.num_resets	= ARRAY_SIZE(sun50i_h5_de2_resets),
 };
 
+static struct ccu_common *sun60i_a733_de33_ccu_clks[] = {
+	&mixer0_a733_clk.common,
+	&wb_a733_clk.common,
+	&bus_mixer0_a733_clk.common,
+};
+
+static const struct sunxi_ccu_desc sun60i_a733_de33_clk_desc = {
+	.ccu_clks	= sun60i_a733_de33_ccu_clks,
+	.num_ccu_clks	= ARRAY_SIZE(sun60i_a733_de33_ccu_clks),
+
+	.hw_clks	= &sun60i_a733_de33_hw_clks,
+
+	.resets		= sun50i_h616_de33_resets,
+	.num_resets	= ARRAY_SIZE(sun50i_h616_de33_resets),
+};
+
 static const struct sunxi_ccu_desc sun50i_h616_de33_clk_desc = {
 	.ccu_clks	= sun8i_de2_ccu_clks,
 	.num_ccu_clks	= ARRAY_SIZE(sun8i_de2_ccu_clks),
@@ -372,7 +417,9 @@ static int sunxi_de2_clk_probe(struct platform_device *pdev)
 	 * during initialisation.
 	 */
 	if (of_device_is_compatible(pdev->dev.of_node,
-				    "allwinner,sun50i-h616-de33-clk")) {
+				    "allwinner,sun50i-h616-de33-clk") ||
+	    of_device_is_compatible(pdev->dev.of_node,
+				    "allwinner,sun60i-a733-de33-clk")) {
 		struct regmap *regmap;
 
 		regmap = devm_regmap_init_mmio(&pdev->dev, reg,
@@ -430,6 +477,10 @@ static const struct of_device_id sunxi_de2_clk_ids[] = {
 	{
 		.compatible = "allwinner,sun50i-h616-de33-clk",
 		.data = &sun50i_h616_de33_clk_desc,
+	},
+	{
+		.compatible = "allwinner,sun60i-a733-de33-clk",
+		.data = &sun60i_a733_de33_clk_desc,
 	},
 	{ }
 };
