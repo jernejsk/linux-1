@@ -6,6 +6,7 @@
 #include <linux/delay.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
+#include <linux/mfd/syscon.h>
 #include <linux/platform_device.h>
 
 #include "sun8i_dw_hdmi.h"
@@ -674,6 +675,16 @@ static const struct regmap_config sun8i_hdmi_phy_regmap_config = {
 #define SUN60I_A733_HDMI_PHY_CLK		0x24
 #define SUN60I_A733_HDMI_PHY_CLK_FROM_CCU	BIT(8)
 
+/*
+ * The transmit resistance is calibrated from the system controller rather
+ * than from the PHY. Boards carry a precision resistor on the HDMI_REXT pin,
+ * so select that and clear the trim that would otherwise override it.
+ */
+#define SUN60I_A733_SYS_RESCAL_CTRL		0x160
+#define SUN60I_A733_SYS_RESCAL_CTRL_HDMI_SEL	BIT(12)
+#define SUN60I_A733_SYS_RES0_CTRL		0x164
+#define SUN60I_A733_SYS_RES0_CTRL_TRIM		GENMASK(31, 24)
+
 /* One set of values per output colour depth, 8, 10, 12 and 16 bit. */
 struct sun60i_a733_hdmi_phy_mpll {
 	unsigned long mpixelclock;
@@ -1107,6 +1118,12 @@ static int sun60i_a733_hdmi_phy_config(struct dw_hdmi *hdmi, void *data,
  */
 static void sun60i_a733_hdmi_phy_init(struct sun8i_hdmi_phy *phy)
 {
+	regmap_update_bits(phy->rescal, SUN60I_A733_SYS_RESCAL_CTRL,
+			   SUN60I_A733_SYS_RESCAL_CTRL_HDMI_SEL,
+			   SUN60I_A733_SYS_RESCAL_CTRL_HDMI_SEL);
+	regmap_update_bits(phy->rescal, SUN60I_A733_SYS_RES0_CTRL,
+			   SUN60I_A733_SYS_RES0_CTRL_TRIM, 0);
+
 	regmap_update_bits(phy->regs, SUN60I_A733_HDMI_PHY_CTRL,
 			   SUN60I_A733_HDMI_PHY_CTRL_RESET |
 			   SUN60I_A733_HDMI_PHY_CTRL_PDDQ |
@@ -1175,6 +1192,7 @@ static const struct sun8i_hdmi_phy_variant sun50i_h6_hdmi_phy = {
 };
 
 static const struct sun8i_hdmi_phy_variant sun60i_a733_hdmi_phy = {
+	.has_rescal = true,
 	.phy_ops = &sun60i_a733_hdmi_phy_ops,
 	.phy_init = &sun60i_a733_hdmi_phy_init,
 };
@@ -1285,6 +1303,14 @@ static int sun8i_hdmi_phy_probe(struct platform_device *pdev)
 				return dev_err_probe(dev, PTR_ERR(phy->clk_pll1),
 						     "Could not get pll-1 clock\n");
 		}
+	}
+
+	if (phy->variant->has_rescal) {
+		phy->rescal = syscon_regmap_lookup_by_phandle(dev->of_node,
+							      "syscon");
+		if (IS_ERR(phy->rescal))
+			return dev_err_probe(dev, PTR_ERR(phy->rescal),
+					     "Couldn't get the system controller\n");
 	}
 
 	phy->rst_phy = devm_reset_control_get_shared(dev, "phy");

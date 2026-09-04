@@ -151,6 +151,7 @@ struct sun8i_hdmi_phy;
 struct sun8i_hdmi_phy_variant {
 	bool has_phy_clk;
 	bool has_second_pll;
+	bool has_rescal;
 	const struct dw_hdmi_curr_ctrl *cur_ctr;
 	const struct dw_hdmi_mpll_config *mpll_cfg;
 	const struct dw_hdmi_phy_config *phy_cfg;
@@ -167,6 +168,7 @@ struct sun8i_hdmi_phy {
 	struct device			*dev;
 	unsigned int			rcal;
 	struct regmap			*regs;
+	struct regmap			*rescal;
 	struct reset_control		*rst_phy;
 	const struct sun8i_hdmi_phy_variant *variant;
 };
