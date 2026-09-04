@@ -29,6 +29,12 @@ static const struct sun50i_planes_quirks sun50i_h616_planes_quirks = {
 			.num_ch = 3,
 		},
 	},
+	.mux = {
+		.vi_chn		= 0x24,
+		.ui_chn		= 0x24,
+		.ui_chn_shift	= 16,
+		.port_chn	= 0x28,
+	},
 	.cfg = {
 		.de_type	= SUN8I_MIXER_DE33,
 		.afbc_mask	= BIT(0),
@@ -57,6 +63,12 @@ static const struct sun50i_planes_quirks sun60i_a733_planes_quirks = {
 			.map = {1, 2, 6, 7, 8},
 			.num_ch = 5,
 		},
+	},
+	.mux = {
+		.vi_chn		= 0x28,
+		.ui_chn		= 0x2c,
+		.ui_chn_shift	= 0,
+		.port_chn	= 0x30,
 	},
 	.cfg = {
 		.de_type	= SUN8I_MIXER_DE33,
@@ -154,20 +166,28 @@ sun50i_planes_setup(struct device *dev, struct drm_device *drm,
 static void sun50i_planes_init_mapping(struct sun50i_planes *planes)
 {
 	const struct sun50i_planes_quirks *quirks = planes->quirks;
+	u32 mapping, vi_mapping, ui_mapping;
 	unsigned int i, j;
-	u32 mapping;
 
-	mapping = 0;
+	vi_mapping = 0;
+	ui_mapping = 0;
 	for (j = 0; j < MAX_DISP; j++)
 		for (i = 0; i < quirks->def_map[j].num_ch; i++) {
 			unsigned int ch = quirks->def_map[j].map[i];
 
 			if (ch < UI_PLANE_OFFSET)
-				mapping |= j << (ch * 2);
+				vi_mapping |= j << (ch * 2);
 			else
-				mapping |= j << ((ch - UI_PLANE_OFFSET) * 2 + 16);
+				ui_mapping |= j << ((ch - UI_PLANE_OFFSET) * 2 +
+						    quirks->mux.ui_chn_shift);
 		}
-	regmap_write(planes->mapping, SUNXI_DE33_DE_CHN2CORE_MUX_REG, mapping);
+	if (quirks->mux.ui_chn == quirks->mux.vi_chn) {
+		regmap_write(planes->mapping, quirks->mux.vi_chn,
+			     vi_mapping | ui_mapping);
+	} else {
+		regmap_write(planes->mapping, quirks->mux.vi_chn, vi_mapping);
+		regmap_write(planes->mapping, quirks->mux.ui_chn, ui_mapping);
+	}
 
 	for (j = 0; j < MAX_DISP; j++) {
 		mapping = 0;
@@ -179,7 +199,8 @@ static void sun50i_planes_init_mapping(struct sun50i_planes *planes)
 
 			mapping |= ch << (i * 4);
 		}
-		regmap_write(planes->mapping, SUNXI_DE33_DE_PORT02CHN_MUX_REG + j * 4, mapping);
+		regmap_write(planes->mapping, quirks->mux.port_chn + j * 4,
+			     mapping);
 	}
 }
 

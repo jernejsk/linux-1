@@ -105,11 +105,39 @@
 #define WB_MIN_HEIGHT		4
 #define WB_YUV_MAX_WIDTH	2048
 
-#define DE33_RTWB_MUX		0x20
-#define DE33_RTWB_FROM_DSC	BIT(0)
-#define DE33_RTWB_START		BIT(4)
-#define DE33_RTWB_SELF_TIMING	BIT(5)
 #define DE33_WB_OFFSET		0x11000
+
+/*
+ * The routing block differs between DE33 generations. On the first one a
+ * single register carries the source, the start bit and the timing mode. On
+ * the A733 the source moved to a register of its own and the control bits
+ * changed position.
+ */
+struct sun50i_wb_rtwb {
+	unsigned int	ctl;		/* start and timing mode */
+	unsigned int	mux;		/* source select */
+	unsigned int	src_shift;
+	u32		start;
+	u32		self_timing;
+	u32		from_dsc;
+};
+
+static const struct sun50i_wb_rtwb sun50i_de33_rtwb = {
+	.ctl		= 0x20,
+	.mux		= 0x20,
+	.src_shift	= 1,
+	.start		= BIT(4),
+	.self_timing	= BIT(5),
+	.from_dsc	= BIT(0),
+};
+
+static const struct sun50i_wb_rtwb sun60i_a733_rtwb = {
+	.ctl		= 0x20,
+	.mux		= 0x24,
+	.src_shift	= 0,
+	.start		= BIT(0),
+	.self_timing	= BIT(4),
+};
 
 #define WB_RCQ_STATUS		0x04
 #define WB_RCQ_STATUS_FINISH	BIT(2)
@@ -127,6 +155,7 @@ struct sun50i_wb_cfg {
 	const u32 *formats;
 	unsigned int format_count;
 	unsigned int max_output_width;
+	const struct sun50i_wb_rtwb *rtwb;
 	bool has_rcq;
 };
 
@@ -194,6 +223,7 @@ static const struct sun50i_wb_cfg sun50i_h616_wb_cfg = {
 	.format_count = ARRAY_SIZE(sun50i_h616_wb_formats),
 	.max_output_width = WB_YUV_MAX_WIDTH,
 	.has_rcq = true,
+	.rtwb = &sun50i_de33_rtwb,
 };
 
 static const u32 sun50i_wb_coeff_up[] = {
@@ -459,7 +489,7 @@ static irqreturn_t sun50i_wb_irq(int irq, void *data)
 
 	writel(WB_STATUS_W1C, wb->regs + WB_STATUS);
 	if (wb->cfg->has_rcq)
-		regmap_write(wb->top, DE33_RTWB_MUX, wb->rtwb_mux);
+		regmap_write(wb->top, wb->cfg->rtwb->mux, wb->rtwb_mux);
 	writel(0, wb->regs + WB_INT);
 
 	/*
@@ -570,12 +600,19 @@ static bool sun50i_wb_prepare_rtwb(struct sun50i_wb *wb,
 	unsigned int crtc_index = drm_crtc_index(crtc);
 	bool external_timing;
 
-	wb->rtwb_mux = wb->crtc_port[crtc_index] * 2;
+	const struct sun50i_wb_rtwb *rtwb = wb->cfg->rtwb;
+
+	wb->rtwb_mux = wb->crtc_port[crtc_index] << rtwb->src_shift;
 	external_timing = sun50i_wb_has_external_timing(wb, crtc);
-	if (!external_timing)
-		wb->rtwb_mux |= DE33_RTWB_FROM_DSC |
-				  DE33_RTWB_SELF_TIMING;
-	regmap_write(wb->top, DE33_RTWB_MUX, wb->rtwb_mux);
+	if (rtwb->ctl == rtwb->mux) {
+		if (!external_timing)
+			wb->rtwb_mux |= rtwb->from_dsc | rtwb->self_timing;
+		regmap_write(wb->top, rtwb->mux, wb->rtwb_mux);
+	} else {
+		regmap_write(wb->top, rtwb->mux, wb->rtwb_mux);
+		regmap_write(wb->top, rtwb->ctl,
+			     external_timing ? 0 : rtwb->self_timing);
+	}
 
 	return external_timing;
 }
@@ -629,7 +666,7 @@ static void sun50i_wb_atomic_commit(struct drm_connector *conn,
 		writel(0, wb->regs + WB_INT);
 		writel(WB_STATUS_W1C, wb->regs + WB_STATUS);
 		if (wb->cfg->has_rcq)
-			regmap_write(wb->top, DE33_RTWB_MUX, wb->rtwb_mux);
+			regmap_write(wb->top, wb->cfg->rtwb->mux, wb->rtwb_mux);
 		wb->self_timing_crtc = NULL;
 		if (wb->self_timing_commit) {
 			complete_all(&wb->self_timing_commit->flip_done);
@@ -723,8 +760,14 @@ static void sun50i_wb_atomic_commit(struct drm_connector *conn,
 			drm_warn(conn->dev, "writeback RCQ sync timed out\n");
 		if (!external_timing)
 			sunxi_engine_commit(scrtc->engine, crtc, state);
-		regmap_write(wb->top, DE33_RTWB_MUX,
-			     wb->rtwb_mux | DE33_RTWB_START);
+		if (wb->cfg->rtwb->ctl == wb->cfg->rtwb->mux)
+			regmap_write(wb->top, wb->cfg->rtwb->mux,
+				     wb->rtwb_mux | wb->cfg->rtwb->start);
+		else
+			regmap_write(wb->top, wb->cfg->rtwb->ctl,
+				     (external_timing ? 0 :
+				      wb->cfg->rtwb->self_timing) |
+				     wb->cfg->rtwb->start);
 	} else {
 		writel(gctrl | WB_GCTRL_START, wb->regs + WB_GCTRL);
 	}
@@ -928,9 +971,18 @@ static void sun50i_wb_remove(struct platform_device *pdev)
 	reset_control_assert(wb->reset);
 }
 
+static const struct sun50i_wb_cfg sun60i_a733_wb_cfg = {
+	.formats = sun50i_h616_wb_formats,
+	.format_count = ARRAY_SIZE(sun50i_h616_wb_formats),
+	.max_output_width = WB_YUV_MAX_WIDTH,
+	.has_rcq = true,
+	.rtwb = &sun60i_a733_rtwb,
+};
+
 static const struct of_device_id sun50i_wb_of_table[] = {
 	{ .compatible = "allwinner,sun50i-h6-de3-wb", .data = &sun50i_h6_wb_cfg },
 	{ .compatible = "allwinner,sun50i-h616-de33-wb", .data = &sun50i_h616_wb_cfg },
+	{ .compatible = "allwinner,sun60i-a733-de33-wb", .data = &sun60i_a733_wb_cfg },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, sun50i_wb_of_table);

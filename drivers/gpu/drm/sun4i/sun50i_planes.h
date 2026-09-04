@@ -6,10 +6,17 @@
 
 #include "sun8i_mixer.h"
 
-/* mapping registers, located in clock register space */
-#define SUNXI_DE33_DE_CHN2CORE_MUX_REG	0x24
-#define SUNXI_DE33_DE_PORT02CHN_MUX_REG	0x28
-#define SUNXI_DE33_DE_PORT12CHN_MUX_REG	0x2c
+/*
+ * Mapping registers, located in the clock register space. Later parts split
+ * the single channel mux into one register per channel kind and moved the
+ * per-display port muxes up, so the offsets are described per SoC.
+ */
+struct sun50i_planes_mux_regs {
+	unsigned int	vi_chn;		/* video channel to display mux */
+	unsigned int	ui_chn;		/* interface channel to display mux */
+	unsigned int	ui_chn_shift;	/* where the interface channels start */
+	unsigned int	port_chn;	/* first per-display port mux */
+};
 
 #define MAX_DISP	2
 #define UI_PLANE_OFFSET	6
@@ -24,8 +31,9 @@ struct default_map {
 };
 
 struct sun50i_planes_quirks {
-	struct default_map	def_map[MAX_DISP];
-	struct sun8i_layer_cfg	cfg;
+	struct default_map		def_map[MAX_DISP];
+	struct sun50i_planes_mux_regs	mux;
+	struct sun8i_layer_cfg		cfg;
 };
 
 struct sun50i_planes {

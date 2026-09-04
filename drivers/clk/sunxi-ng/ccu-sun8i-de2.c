@@ -338,10 +338,17 @@ static const struct sunxi_ccu_desc sun50i_h616_de33_clk_desc = {
 
 #define SUN50I_DE33_RTWB_MUX_REG 0x20
 #define SUN50I_DE33_CHN2CORE_REG 0x24
-#define SUN50I_DE33_PORT12CHN_REG 0x2c
+/*
+ * The routing block grew on later parts: the writeback source, the two
+ * channel muxes and the per-display port muxes each moved up a register.
+ */
+#define SUN50I_DE33_LAST_MUX_REG 0x34
+
+#define SUN60I_A733_DE_MBUS_REG		0x08
+#define SUN60I_A733_DE_MBUS_DEASSERT	BIT(4)
 
 static const struct regmap_range sun8i_de2_ccu_regmap_accessible_ranges[] = {
-	regmap_reg_range(SUN50I_DE33_RTWB_MUX_REG, SUN50I_DE33_PORT12CHN_REG),
+	regmap_reg_range(SUN50I_DE33_RTWB_MUX_REG, SUN50I_DE33_LAST_MUX_REG),
 };
 
 static const struct regmap_access_table sun8i_de2_ccu_regmap_accessible_table = {
@@ -353,7 +360,7 @@ static const struct regmap_config sun8i_de2_ccu_regmap_config = {
 	.reg_bits	= 32,
 	.val_bits	= 32,
 	.reg_stride	= 4,
-	.max_register	= SUN50I_DE33_PORT12CHN_REG,
+	.max_register	= SUN50I_DE33_LAST_MUX_REG,
 
 	/* other devices have no business accessing other registers */
 	.wr_table	= &sun8i_de2_ccu_regmap_accessible_table,
@@ -412,10 +419,27 @@ static int sunxi_de2_clk_probe(struct platform_device *pdev)
 		goto err_disable_mod_clk;
 	}
 
-	/*
-	 * The DE33 requires these additional plane mapping registers set
-	 * during initialisation.
-	 */
+	if (of_device_is_compatible(pdev->dev.of_node,
+				    "allwinner,sun50i-h616-de33-clk")) {
+		/*
+		 * The DE33 requires these additional plane mapping registers
+		 * set during initialisation.
+		 */
+		writel(0, reg + SUN50I_DE33_CHN2CORE_REG);
+		writel(0x0000a980, reg + SUN50I_DE33_CHN2CORE_REG + 4);
+	}
+
+	if (of_device_is_compatible(pdev->dev.of_node,
+				    "allwinner,sun60i-a733-de33-clk")) {
+		/*
+		 * This generation holds the memory bus in reset until asked
+		 * otherwise, and the engine cannot reach memory until then.
+		 */
+		writel(readl(reg + SUN60I_A733_DE_MBUS_REG) |
+		       SUN60I_A733_DE_MBUS_DEASSERT,
+		       reg + SUN60I_A733_DE_MBUS_REG);
+	}
+
 	if (of_device_is_compatible(pdev->dev.of_node,
 				    "allwinner,sun50i-h616-de33-clk") ||
 	    of_device_is_compatible(pdev->dev.of_node,
