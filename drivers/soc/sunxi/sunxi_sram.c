@@ -329,6 +329,7 @@ struct sunxi_sramc_variant {
 	int num_emac_clocks;
 	bool has_ldo_ctrl;
 	bool has_ths_offset;
+	bool has_hdmi_rescal;
 };
 
 static const struct sunxi_sramc_variant sun4i_a10_sramc_variant = {
@@ -357,9 +358,16 @@ static const struct sunxi_sramc_variant sun55i_a523_sramc_variant = {
 	.num_emac_clocks = 2,
 };
 
+static const struct sunxi_sramc_variant sun60i_a733_sramc_variant = {
+	/* The EMAC clocks live in the CCU on this generation. */
+	.has_hdmi_rescal = true,
+};
+
 #define SUNXI_SRAM_THS_OFFSET_REG	0x0
 #define SUNXI_SRAM_EMAC_CLOCK_REG	0x30
 #define SUNXI_SYS_LDO_CTRL_REG		0x150
+#define SUNXI_SYS_RESCAL_CTRL_REG	0x160
+#define SUNXI_SYS_RES0_CTRL_REG		0x164
 
 static bool sunxi_sram_regmap_accessible_reg(struct device *dev,
 					     unsigned int reg)
@@ -372,6 +380,9 @@ static bool sunxi_sram_regmap_accessible_reg(struct device *dev,
 	    reg <  SUNXI_SRAM_EMAC_CLOCK_REG + variant->num_emac_clocks * 4)
 		return true;
 	if (reg == SUNXI_SYS_LDO_CTRL_REG && variant->has_ldo_ctrl)
+		return true;
+	if ((reg == SUNXI_SYS_RESCAL_CTRL_REG ||
+	     reg == SUNXI_SYS_RES0_CTRL_REG) && variant->has_hdmi_rescal)
 		return true;
 
 	return false;
@@ -396,7 +407,7 @@ static const struct regmap_config sunxi_sram_regmap_config = {
 	.val_bits       = 32,
 	.reg_stride     = 4,
 	/* last defined register */
-	.max_register   = SUNXI_SYS_LDO_CTRL_REG,
+	.max_register   = SUNXI_SYS_RES0_CTRL_REG,
 	/* other devices have no business accessing other registers */
 	.readable_reg	= sunxi_sram_regmap_accessible_reg,
 	.writeable_reg	= sunxi_sram_regmap_accessible_reg,
@@ -424,7 +435,8 @@ static int __init sunxi_sram_probe(struct platform_device *pdev)
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 
-	if (variant->num_emac_clocks || variant->has_ldo_ctrl) {
+	if (variant->num_emac_clocks || variant->has_ldo_ctrl ||
+	    variant->has_hdmi_rescal) {
 		regmap = devm_regmap_init_mmio(dev, base, &sunxi_sram_regmap_config);
 		if (IS_ERR(regmap))
 			return PTR_ERR(regmap);
@@ -485,6 +497,10 @@ static const struct of_device_id sunxi_sram_dt_match[] = {
 	{
 		.compatible = "allwinner,sun55i-a523-system-control",
 		.data = &sun55i_a523_sramc_variant,
+	},
+	{
+		.compatible = "allwinner,sun60i-a733-system-control",
+		.data = &sun60i_a733_sramc_variant,
 	},
 	{ },
 };
