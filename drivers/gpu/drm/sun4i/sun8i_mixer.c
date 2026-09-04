@@ -880,6 +880,19 @@ static const struct sun8i_mixer_cfg sun50i_h616_mixer0_cfg = {
 	.map		= {0, 6, 7, 8},
 };
 
+static const struct sun8i_mixer_cfg sun60i_a733_mixer0_cfg = {
+	.lay_cfg = {
+		.de_type	= SUN8I_MIXER_DE33,
+		.scaler_mask	= 0x3f,
+		.scanline_yuv	= 4096,
+	},
+	.de_type	= SUN8I_MIXER_DE33,
+	.mod_rate	= 600000000,
+	.ui_num		= 3,
+	.vi_num		= 3,
+	.map		= {0, 1, 2, 6, 7, 8},
+};
+
 static const struct of_device_id sun8i_mixer_of_table[] = {
 	{
 		.compatible = "allwinner,sun8i-a83t-de2-mixer-0",
@@ -928,6 +941,10 @@ static const struct of_device_id sun8i_mixer_of_table[] = {
 	{
 		.compatible = "allwinner,sun50i-h616-de33-mixer-0",
 		.data = &sun50i_h616_mixer0_cfg,
+	},
+	{
+		.compatible = "allwinner,sun60i-a733-de33-mixer-0",
+		.data = &sun60i_a733_mixer0_cfg,
 	},
 	{ }
 };
