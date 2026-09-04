@@ -44,24 +44,29 @@ properties:
       - allwinner,sun20i-d1-tcon-top
       - allwinner,sun50i-h6-tcon-top
       - allwinner,sun50i-h616-tcon-top
+      - allwinner,sun60i-a733-tcon-top
 
   reg:
     maxItems: 1
 
   clocks:
-    minItems: 2
+    minItems: 1
     maxItems: 6
 
   clock-names:
-    minItems: 2
+    minItems: 1
     maxItems: 6
 
   clock-output-names:
     minItems: 1
     maxItems: 3
 
-  resets:
+  power-domains:
     maxItems: 1
+
+  resets:
+    minItems: 1
+    maxItems: 2
 
   ports:
     $ref: /schemas/graph.yaml#/properties/ports
@@ -104,18 +109,49 @@ properties:
       - port@5
 
 required:
-  - "#clock-cells"
   - compatible
   - reg
   - clocks
   - clock-names
-  - clock-output-names
   - resets
   - ports
 
 additionalProperties: false
 
 allOf:
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: allwinner,sun60i-a733-tcon-top
+
+    then:
+      properties:
+        "#clock-cells": false
+        clock-output-names: false
+
+        clocks:
+          items:
+            - description: The TCON TOP interface clock
+
+        clock-names:
+          items:
+            - const: bus
+
+        resets:
+          items:
+            - description: The TCON TOP reset
+            - description: The video output island reset
+
+    else:
+      required:
+        - "#clock-cells"
+        - clock-output-names
+
+      properties:
+        resets:
+          maxItems: 1
+
   - if:
       properties:
         compatible:

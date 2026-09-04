@@ -39,6 +39,10 @@ properties:
       - const: allwinner,sun50i-h616-tcon-tv
 
       - items:
+          - const: allwinner,sun60i-a733-tcon-tv
+          - const: allwinner,sun50i-h616-tcon-tv
+
+      - items:
           - enum:
               - allwinner,sun7i-a20-tcon0
               - allwinner,sun7i-a20-tcon1
@@ -85,6 +89,9 @@ properties:
     maxItems: 1
 
   dmas:
+    maxItems: 1
+
+  power-domains:
     maxItems: 1
 
   resets:
