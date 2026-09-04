@@ -423,7 +423,8 @@ static const struct regmap_config sun8i_mixer_regmap_config = {
 	.reg_bits	= 32,
 	.val_bits	= 32,
 	.reg_stride	= 4,
-	.max_register	= 0xffffc, /* guessed */
+	/* The highest channel a DE33 mixer can be given is the ninth one */
+	.max_register	= DE33_CH_BASE + 9 * DE33_CH_SIZE,
 };
 
 static const struct regmap_config sun8i_top_regmap_config = {
