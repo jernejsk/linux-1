@@ -590,3 +590,7 @@
 	pinctrl-0 = <&uart0_pb9_pb10_pins>;
 	status = "okay";
 };
+
+&de {
+	status = "okay";
+};
