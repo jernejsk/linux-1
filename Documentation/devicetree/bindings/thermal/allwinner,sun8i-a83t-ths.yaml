@@ -24,6 +24,7 @@ properties:
       - allwinner,sun50i-h5-ths
       - allwinner,sun50i-h6-ths
       - allwinner,sun50i-h616-ths
+      - allwinner,sun60i-a733-ths
 
   clocks:
     minItems: 1
