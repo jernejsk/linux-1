@@ -12,10 +12,11 @@
 #define TCON_TOP_TCON_TV_SETUP_REG	0x00
 /*
  * On the A733 generation this register picks where each TCON TV takes its
- * pixel clock from. Everything we drive wants the CCU rather than the HDMI
- * PHY, and HDMI rather than eDP, which is all zeroes except for this bit.
+ * pixel clock from. Taking it from the HDMI PHY keeps the pixel and transmit
+ * clocks on one PLL, and HDMI rather than eDP is what we drive, so every
+ * field here wants to be zero.
  */
-#define SUN60I_A733_TCON_TOP_TV0_FROM_CCU	BIT(3)
+#define SUN60I_A733_TCON_TOP_TV_SETUP_HDMI	0
 
 #define TCON_TOP_PORT_SEL_REG		0x1C
 #define TCON_TOP_PORT_DE0_MSK			GENMASK(1, 0)

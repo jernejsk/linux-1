@@ -25,7 +25,7 @@ struct sun8i_tcon_top_quirks {
 	 */
 	bool has_port_sel;
 	bool has_clk_outputs;
-	bool tv_clk_from_ccu;
+	bool tv_clk_from_phy;
 };
 
 static bool sun8i_tcon_top_node_is_tcon_top(struct device_node *node)
@@ -243,8 +243,8 @@ static int sun8i_tcon_top_bind(struct device *dev, struct device *master,
 		writel(0, regs + TCON_TOP_PORT_SEL_REG);
 	writel(0, regs + TCON_TOP_GATE_SRC_REG);
 
-	if (quirks->tv_clk_from_ccu) {
-		writel(SUN60I_A733_TCON_TOP_TV0_FROM_CCU,
+	if (quirks->tv_clk_from_phy) {
+		writel(SUN60I_A733_TCON_TOP_TV_SETUP_HDMI,
 		       regs + TCON_TOP_TCON_TV_SETUP_REG);
 		/*
 		 * The TCON TV clock arrives from the CCU, so this gate is not
@@ -369,7 +369,7 @@ static const struct sun8i_tcon_top_quirks sun50i_h616_tcon_top_quirks = {
 };
 
 static const struct sun8i_tcon_top_quirks sun60i_a733_tcon_top_quirks = {
-	.tv_clk_from_ccu = true,
+	.tv_clk_from_phy = true,
 };
 
 /* sun4i_drv uses this list to check if a device node is a TCON TOP */
