@@ -138,9 +138,6 @@ sun8i_dw_hdmi_encoder_atomic_mode_set(struct drm_encoder *encoder,
 
 	clk_set_rate(hdmi->clk_tmds, rate);
 }
-static const struct drm_encoder_funcs sun8i_dw_hdmi_encoder_funcs = {
-	.destroy = drm_encoder_cleanup,
-};
 
 static const struct drm_encoder_helper_funcs
 sun8i_dw_hdmi_encoder_helper_funcs = {
@@ -407,6 +404,10 @@ static const struct of_device_id sun8i_dw_hdmi_dt_ids[] = {
 	},
 	{
 		.compatible = "allwinner,sun50i-h6-dw-hdmi",
+		.data = &sun50i_h6_quirks,
+	},
+	{
+		.compatible = "allwinner,sun60i-a733-dw-hdmi",
 		.data = &sun50i_h6_quirks,
 	},
 	{ /* sentinel */ },
