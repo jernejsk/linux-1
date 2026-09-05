@@ -88,6 +88,17 @@ properties:
   resets:
     maxItems: 1
 
+  power-supply:
+    description: Supply feeding the GPU core, scaled along with its clock.
+
+  operating-points-v2: true
+
+  opp-table:
+    type: object
+
+  "#cooling-cells":
+    const: 2
+
 required:
   - compatible
   - reg
