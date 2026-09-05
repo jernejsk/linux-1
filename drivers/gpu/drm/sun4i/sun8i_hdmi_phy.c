@@ -600,7 +600,7 @@ int sun8i_hdmi_phy_init(struct sun8i_hdmi_phy *phy)
 		goto err_disable_clk_bus;
 	}
 
-	if (phy->variant->has_phy_clk) {
+	if (phy->variant->has_phy_clk && !phy->variant->has_clk_provider) {
 		ret = sun8i_phy_clk_create(phy, phy->dev,
 					   phy->variant->has_second_pll);
 		if (ret) {
@@ -667,167 +667,6 @@ static const struct regmap_config sun60i_a733_hdmi_phy_regmap_config = {
 	.name		= "phy"
 };
 
-
-/*
- * The A733 pairs the controller with a Synopsys PHY, reached through the
- * controller's own PHY interface rather than a register window of its own.
- * What it does have is a small wrapper holding the pad and clock selection.
- */
-#define SUN60I_A733_HDMI_PHY_CTRL		0x00
-#define SUN60I_A733_HDMI_PHY_CTRL_RESET		BIT(0)
-#define SUN60I_A733_HDMI_PHY_CTRL_PDDQ		BIT(1)
-#define SUN60I_A733_HDMI_PHY_CTRL_TXPWRON	BIT(2)
-#define SUN60I_A733_HDMI_PHY_CTRL_SVSRET	BIT(3)
-#define SUN60I_A733_HDMI_PHY_CTRL_HPDRXSENSE	BIT(4)
-#define SUN60I_A733_HDMI_PHY_PAD		0x04
-#define SUN60I_A733_HDMI_PHY_PAD_GPIO		BIT(0)
-#define SUN60I_A733_HDMI_PHY_PLL		0x20
-#define SUN60I_A733_HDMI_PHY_PLL_INPUT_DIV2	BIT(1)
-#define SUN60I_A733_HDMI_PHY_PLL_LOCK_MODE	BIT(5)
-#define SUN60I_A733_HDMI_PHY_PLL_UNLOCK_MODE	GENMASK(7, 6)
-#define SUN60I_A733_HDMI_PHY_PLL_N		GENMASK(15, 8)
-#define SUN60I_A733_HDMI_PHY_PLL_P0		GENMASK(22, 16)
-#define SUN60I_A733_HDMI_PHY_PLL_OUT_GATE	BIT(27)
-#define SUN60I_A733_HDMI_PHY_PLL_LOCK_EN	BIT(29)
-#define SUN60I_A733_HDMI_PHY_PLL_LDO_EN		BIT(30)
-#define SUN60I_A733_HDMI_PHY_PLL_EN		BIT(31)
-#define SUN60I_A733_HDMI_PHY_CLK		0x24
-#define SUN60I_A733_HDMI_PHY_CLK_SHIFTER_GATE	BIT(7)
-#define SUN60I_A733_HDMI_PHY_CLK_FROM_CCU	BIT(8)
-#define SUN60I_A733_HDMI_PHY_PLL_LDO		0x28
-#define SUN60I_A733_HDMI_PHY_PLL_PATTERN0	0x2c
-#define SUN60I_A733_HDMI_PHY_PLL_PATTERN1	0x30
-#define SUN60I_A733_HDMI_PHY_PLL_STATUS		0x40
-#define SUN60I_A733_HDMI_PHY_PLL_STATUS_LOCK	BIT(0)
-
-/*
- * The wrapper's own PLL drives the transmit clock. Its settings are keyed on
- * the pixel clock and assume the 26 MHz oscillator; the factors are packed
- * the way the vendor tables carry them, so unpack them on the way out.
- */
-struct sun60i_a733_hdmi_phy_pll {
-	unsigned long	mpixelclock;
-	u32		factors;
-	u32		ldo;
-	u32		pattern0;
-	u32		pattern1;
-};
-
-static const struct sun60i_a733_hdmi_phy_pll sun60i_a733_hdmi_phy_pll[] = {
-	{  13500000, 0xe8673500, 0x00035000, 0x00000000, 0x30000000 },
-	{  27000000, 0xe8595c00, 0x00035000, 0x80000000, 0x30000000 },
-	{  54000000, 0xe80c1a00, 0x00035000, 0x80000000, 0x30000000 },
-	{  65000000, 0xe8235a00, 0x00035000, 0x80000000, 0x30000000 },
-	{  74250000, 0xe81f5a00, 0x00035000, 0x80000000, 0x30000000 },
-	{ 108000000, 0xe80c3500, 0x00035000, 0x00000000, 0x30000000 },
-	{ 148500000, 0xe80f5a00, 0x00035000, 0x80000000, 0x30000000 },
-	{ 185625000, 0xe80f5a00, 0x00035000, 0x80000000, 0x30000000 },
-	{ 297000000, 0xe807b602, 0x00035000, 0x00000000, 0x30000000 },
-	{ 371250000, 0xe807b602, 0x00035000, 0x00000000, 0x30000000 },
-	{ 594000000, 0xe803b602, 0x00035000, 0x00000000, 0x30000000 },
-};
-
-/* The factors sit in the low half of the packed value. */
-#define SUN60I_A733_PLL_FACTOR_INPUT_DIV2	BIT(1)
-#define SUN60I_A733_PLL_FACTOR_LOCK_MODE	BIT(5)
-#define SUN60I_A733_PLL_FACTOR_UNLOCK_MODE	GENMASK(7, 6)
-#define SUN60I_A733_PLL_FACTOR_N		GENMASK(15, 8)
-#define SUN60I_A733_PLL_FACTOR_P0		GENMASK(22, 16)
-
-static const struct sun60i_a733_hdmi_phy_pll *
-sun60i_a733_hdmi_phy_find_pll(unsigned long rate)
-{
-	const struct sun60i_a733_hdmi_phy_pll *table = sun60i_a733_hdmi_phy_pll;
-	unsigned int last = ARRAY_SIZE(sun60i_a733_hdmi_phy_pll) - 1;
-	unsigned int i;
-
-	if (rate <= table[0].mpixelclock)
-		return &table[0];
-	if (rate >= table[last].mpixelclock)
-		return &table[last];
-
-	for (i = 0; i < last; i++) {
-		if (rate == table[i].mpixelclock)
-			return &table[i];
-		if (rate > table[i].mpixelclock &&
-		    rate < table[i + 1].mpixelclock)
-			return (table[i + 1].mpixelclock - rate) >
-			       (rate - table[i].mpixelclock) ?
-			       &table[i] : &table[i + 1];
-	}
-
-	return &table[last];
-}
-
-static int sun60i_a733_hdmi_phy_pll_enable(struct sun8i_hdmi_phy *phy,
-					   unsigned long rate)
-{
-	const struct sun60i_a733_hdmi_phy_pll *pll;
-	unsigned int val;
-	int ret;
-
-	pll = sun60i_a733_hdmi_phy_find_pll(rate);
-
-	regmap_update_bits(phy->regs, SUN60I_A733_HDMI_PHY_PLL,
-			   SUN60I_A733_HDMI_PHY_PLL_OUT_GATE, 0);
-
-	val = 0;
-	if (pll->factors & SUN60I_A733_PLL_FACTOR_INPUT_DIV2)
-		val |= SUN60I_A733_HDMI_PHY_PLL_INPUT_DIV2;
-	if (pll->factors & SUN60I_A733_PLL_FACTOR_LOCK_MODE)
-		val |= SUN60I_A733_HDMI_PHY_PLL_LOCK_MODE;
-	val |= FIELD_PREP(SUN60I_A733_HDMI_PHY_PLL_UNLOCK_MODE,
-			  FIELD_GET(SUN60I_A733_PLL_FACTOR_UNLOCK_MODE,
-				    pll->factors));
-	val |= FIELD_PREP(SUN60I_A733_HDMI_PHY_PLL_N,
-			  FIELD_GET(SUN60I_A733_PLL_FACTOR_N, pll->factors));
-	val |= FIELD_PREP(SUN60I_A733_HDMI_PHY_PLL_P0,
-			  FIELD_GET(SUN60I_A733_PLL_FACTOR_P0, pll->factors));
-
-	regmap_update_bits(phy->regs, SUN60I_A733_HDMI_PHY_PLL,
-			   SUN60I_A733_HDMI_PHY_PLL_INPUT_DIV2 |
-			   SUN60I_A733_HDMI_PHY_PLL_LOCK_MODE |
-			   SUN60I_A733_HDMI_PHY_PLL_UNLOCK_MODE |
-			   SUN60I_A733_HDMI_PHY_PLL_N |
-			   SUN60I_A733_HDMI_PHY_PLL_P0, val);
-
-	regmap_write(phy->regs, SUN60I_A733_HDMI_PHY_PLL_LDO, pll->ldo);
-	regmap_write(phy->regs, SUN60I_A733_HDMI_PHY_PLL_PATTERN0,
-		     pll->pattern0);
-	regmap_write(phy->regs, SUN60I_A733_HDMI_PHY_PLL_PATTERN1,
-		     pll->pattern1);
-
-	regmap_update_bits(phy->regs, SUN60I_A733_HDMI_PHY_PLL,
-			   SUN60I_A733_HDMI_PHY_PLL_EN |
-			   SUN60I_A733_HDMI_PHY_PLL_LDO_EN,
-			   SUN60I_A733_HDMI_PHY_PLL_EN |
-			   SUN60I_A733_HDMI_PHY_PLL_LDO_EN);
-
-	regmap_update_bits(phy->regs, SUN60I_A733_HDMI_PHY_CLK,
-			   SUN60I_A733_HDMI_PHY_CLK_SHIFTER_GATE,
-			   SUN60I_A733_HDMI_PHY_CLK_SHIFTER_GATE);
-
-	regmap_update_bits(phy->regs, SUN60I_A733_HDMI_PHY_PLL,
-			   SUN60I_A733_HDMI_PHY_PLL_LOCK_EN,
-			   SUN60I_A733_HDMI_PHY_PLL_LOCK_EN);
-
-	ret = regmap_read_poll_timeout(phy->regs,
-				       SUN60I_A733_HDMI_PHY_PLL_STATUS, val,
-				       val & SUN60I_A733_HDMI_PHY_PLL_STATUS_LOCK,
-				       100, 20000);
-	if (ret) {
-		dev_err(phy->dev, "PLL failed to lock for %lu Hz\n", rate);
-		return ret;
-	}
-
-	udelay(20);
-
-	regmap_update_bits(phy->regs, SUN60I_A733_HDMI_PHY_PLL,
-			   SUN60I_A733_HDMI_PHY_PLL_OUT_GATE,
-			   SUN60I_A733_HDMI_PHY_PLL_OUT_GATE);
-
-	return 0;
-}
 
 /*
  * The transmit resistance is calibrated from the system controller rather
@@ -1266,9 +1105,7 @@ static int sun60i_a733_hdmi_phy_config(struct dw_hdmi *hdmi, void *data,
 	if (!drive)
 		return -EINVAL;
 
-	clk_set_rate(phy->clk_mod, clk_rate);
-
-	ret = sun60i_a733_hdmi_phy_pll_enable(phy, clk_rate);
+	ret = clk_set_rate(phy->clk_phy, clk_rate);
 	if (ret)
 		return ret;
 
@@ -1378,6 +1215,8 @@ static const struct sun8i_hdmi_phy_variant sun50i_h6_hdmi_phy = {
 };
 
 static const struct sun8i_hdmi_phy_variant sun60i_a733_hdmi_phy = {
+	.has_phy_clk = true,
+	.has_clk_provider = true,
 	.has_rescal = true,
 	.regmap_config = &sun60i_a733_hdmi_phy_regmap_config,
 	.phy_ops = &sun60i_a733_hdmi_phy_ops,
@@ -1449,6 +1288,7 @@ static int sun8i_hdmi_phy_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct sun8i_hdmi_phy *phy;
 	void __iomem *regs;
+	int ret;
 
 	phy = devm_kzalloc(dev, sizeof(*phy), GFP_KERNEL);
 	if (!phy)
@@ -1491,6 +1331,18 @@ static int sun8i_hdmi_phy_probe(struct platform_device *pdev)
 				return dev_err_probe(dev, PTR_ERR(phy->clk_pll1),
 						     "Could not get pll-1 clock\n");
 		}
+	}
+
+	/*
+	 * Where this PLL clocks the timing controller as well, it has to exist
+	 * before that binds, which is well before the HDMI component does.
+	 */
+	if (phy->variant->has_clk_provider) {
+		ret = sun8i_phy_clk_create(phy, dev,
+					   phy->variant->has_second_pll);
+		if (ret)
+			return dev_err_probe(dev, ret,
+					     "Couldn't create the PHY clock\n");
 	}
 
 	if (phy->variant->has_rescal) {

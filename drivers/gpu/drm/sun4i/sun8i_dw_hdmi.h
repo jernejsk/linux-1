@@ -148,11 +148,44 @@
 
 struct sun8i_hdmi_phy;
 
+/*
+ * The A733 pairs the controller with a Synopsys PHY, reached through the
+ * controller's own PHY interface rather than a register window of its own.
+ * What it does have is a small wrapper holding the pad and clock selection.
+ */
+#define SUN60I_A733_HDMI_PHY_CTRL		0x00
+#define SUN60I_A733_HDMI_PHY_CTRL_RESET		BIT(0)
+#define SUN60I_A733_HDMI_PHY_CTRL_PDDQ		BIT(1)
+#define SUN60I_A733_HDMI_PHY_CTRL_TXPWRON	BIT(2)
+#define SUN60I_A733_HDMI_PHY_CTRL_SVSRET	BIT(3)
+#define SUN60I_A733_HDMI_PHY_CTRL_HPDRXSENSE	BIT(4)
+#define SUN60I_A733_HDMI_PHY_PAD		0x04
+#define SUN60I_A733_HDMI_PHY_PAD_GPIO		BIT(0)
+#define SUN60I_A733_HDMI_PHY_PLL		0x20
+#define SUN60I_A733_HDMI_PHY_PLL_INPUT_DIV2	BIT(1)
+#define SUN60I_A733_HDMI_PHY_PLL_LOCK_MODE	BIT(5)
+#define SUN60I_A733_HDMI_PHY_PLL_UNLOCK_MODE	GENMASK(7, 6)
+#define SUN60I_A733_HDMI_PHY_PLL_N		GENMASK(15, 8)
+#define SUN60I_A733_HDMI_PHY_PLL_P0		GENMASK(22, 16)
+#define SUN60I_A733_HDMI_PHY_PLL_OUT_GATE	BIT(27)
+#define SUN60I_A733_HDMI_PHY_PLL_LOCK_EN	BIT(29)
+#define SUN60I_A733_HDMI_PHY_PLL_LDO_EN		BIT(30)
+#define SUN60I_A733_HDMI_PHY_PLL_EN		BIT(31)
+#define SUN60I_A733_HDMI_PHY_CLK		0x24
+#define SUN60I_A733_HDMI_PHY_CLK_SHIFTER_GATE	BIT(7)
+#define SUN60I_A733_HDMI_PHY_CLK_FROM_CCU	BIT(8)
+#define SUN60I_A733_HDMI_PHY_PLL_LDO		0x28
+#define SUN60I_A733_HDMI_PHY_PLL_PATTERN0	0x2c
+#define SUN60I_A733_HDMI_PHY_PLL_PATTERN1	0x30
+#define SUN60I_A733_HDMI_PHY_PLL_STATUS		0x40
+#define SUN60I_A733_HDMI_PHY_PLL_STATUS_LOCK	BIT(0)
+
 struct regmap_config;
 
 struct sun8i_hdmi_phy_variant {
 	const struct regmap_config *regmap_config;
 	bool has_phy_clk;
+	bool has_clk_provider;
 	bool has_second_pll;
 	bool has_rescal;
 	const struct dw_hdmi_curr_ctrl *cur_ctr;
