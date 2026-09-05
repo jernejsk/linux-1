@@ -5,10 +5,13 @@
 
 #include "pvr_device.h"
 #include "pvr_fw_trace.h"
+#include "pvr_power.h"
 
 #include <linux/dcache.h>
 #include <linux/debugfs.h>
 #include <linux/err.h>
+#include <linux/fs.h>
+#include <linux/uaccess.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
 
@@ -16,8 +19,48 @@
 #include <drm/drm_file.h>
 #include <drm/drm_print.h>
 
+/*
+ * Writing "soft" or "hard" resets the GPU the way the driver does after a
+ * firmware stall, so the recovery path can be exercised on demand.
+ */
+static ssize_t pvr_debugfs_reset_write(struct file *file, const char __user *ubuf,
+				       size_t len, loff_t *off)
+{
+	struct pvr_device *pvr_dev = file->private_data;
+	char buf[8] = {};
+	int err;
+
+	if (len >= sizeof(buf))
+		return -EINVAL;
+
+	if (copy_from_user(buf, ubuf, len))
+		return -EFAULT;
+
+	if (sysfs_streq(buf, "hard"))
+		err = pvr_power_reset(pvr_dev, true);
+	else if (sysfs_streq(buf, "soft"))
+		err = pvr_power_reset(pvr_dev, false);
+	else
+		return -EINVAL;
+
+	return err ? err : len;
+}
+
+static const struct file_operations pvr_debugfs_reset_fops = {
+	.owner = THIS_MODULE,
+	.open = simple_open,
+	.write = pvr_debugfs_reset_write,
+	.llseek = default_llseek,
+};
+
+static void pvr_debugfs_reset_init(struct pvr_device *pvr_dev, struct dentry *dir)
+{
+	debugfs_create_file("reset", 0200, dir, pvr_dev, &pvr_debugfs_reset_fops);
+}
+
 static const struct pvr_debugfs_entry pvr_debugfs_entries[] = {
 	{"pvr_fw", pvr_fw_trace_debugfs_init},
+	{"pvr_power", pvr_debugfs_reset_init},
 };
 
 void
