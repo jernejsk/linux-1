@@ -50,14 +50,12 @@
 			function = LED_FUNCTION_POWER;
 			color = <LED_COLOR_ID_GREEN>;
 			gpios = <&pio 9 26 GPIO_ACTIVE_HIGH>; /* PJ26 */
-			default-state = "on";
 		};
 
 		led-1 {
 			function = LED_FUNCTION_HEARTBEAT;
 			color = <LED_COLOR_ID_BLUE>;
 			gpios = <&pio 9 27 GPIO_ACTIVE_HIGH>; /* PJ27 */
-			linux,default-trigger = "heartbeat";
 		};
 	};
 
