@@ -550,6 +550,17 @@ pvr_power_reset(struct pvr_device *pvr_dev, bool hard_reset)
 		}
 
 		err = pvr_power_fw_disable(pvr_dev, hard_reset, false);
+		if (err && hard_reset) {
+			/*
+			 * A locked-up core never reports idle. Powering it off
+			 * below resets the whole thing, so carry on.
+			 */
+			drm_warn(from_pvr_device(pvr_dev),
+				 "GPU did not go idle for reset (%d), forcing it off\n",
+				 err);
+			err = 0;
+		}
+
 		if (!err) {
 			if (hard_reset) {
 				WRITE_ONCE(pvr_dev->fw_dev.initialised, false);
