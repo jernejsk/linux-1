@@ -837,6 +837,12 @@ static const struct clk_parent_data gpu_parents[] = {
 	{ .hw = &pll_periph0_300M_clk.hw, },
 	{ .hw = &pll_periph0_200M_clk.hw, },
 };
+/*
+ * Only the top operating point needs the GPU PLL; everything below it comes
+ * off the fixed periphery taps. So the PLL is only ever retuned while the
+ * core runs from one of those taps, and the PLL's own gate flag refuses a
+ * change for as long as anything hangs off it.
+ */
 static struct ccu_div gpu0_clk = {
 	.enable		= BIT(31),
 	.div		= _SUNXI_CCU_DIV_TABLE(0, 4, gpu_div_table),
@@ -845,7 +851,8 @@ static struct ccu_div gpu0_clk = {
 		.reg		= 0xb20,
 		.features	= CCU_FEATURE_UPDATE_BIT,
 		.hw.init	= CLK_HW_INIT_PARENTS_DATA("gpu0", gpu_parents,
-							   &ccu_div_ops, 0),
+							   &ccu_div_ops,
+							   CLK_SET_RATE_PARENT),
 	}
 };
 static SUNXI_CCU_GATE_HWS(bus_gpu0_clk, "bus-gpu0", ahb_gpu0_hws, 0xb24,
