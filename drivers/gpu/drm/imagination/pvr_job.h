@@ -12,6 +12,7 @@
 #include <drm/drm_gem.h>
 #include <drm/gpu_scheduler.h>
 
+#include "pvr_devfreq.h"
 #include "pvr_power.h"
 
 /* Forward declaration from "pvr_context.h". */
@@ -119,6 +120,7 @@ static __always_inline void
 pvr_job_release_pm_ref(struct pvr_job *job)
 {
 	if (job->has_pm_ref) {
+		pvr_devfreq_record_idle(job->pvr_dev);
 		pvr_power_put(job->pvr_dev);
 		job->has_pm_ref = false;
 	}
@@ -141,8 +143,10 @@ pvr_job_get_pm_ref(struct pvr_job *job)
 		return 0;
 
 	err = pvr_power_get(job->pvr_dev);
-	if (!err)
+	if (!err) {
 		job->has_pm_ref = true;
+		pvr_devfreq_record_busy(job->pvr_dev);
+	}
 
 	return err;
 }

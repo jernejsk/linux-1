@@ -1439,14 +1439,21 @@ pvr_probe(struct platform_device *plat_dev)
 	if (err)
 		goto err_watchdog_fini;
 
-	err = drm_dev_register(drm_dev, 0);
+	err = pvr_devfreq_init(pvr_dev);
 	if (err)
 		goto err_device_fini;
+
+	err = drm_dev_register(drm_dev, 0);
+	if (err)
+		goto err_devfreq_fini;
 
 	xa_init_flags(&pvr_dev->free_list_ids, XA_FLAGS_ALLOC1);
 	xa_init_flags(&pvr_dev->job_ids, XA_FLAGS_ALLOC1);
 
 	return 0;
+
+err_devfreq_fini:
+	pvr_devfreq_fini(pvr_dev);
 
 err_device_fini:
 	pvr_device_fini(pvr_dev);
@@ -1476,6 +1483,7 @@ static void pvr_remove(struct platform_device *plat_dev)
 	xa_destroy(&pvr_dev->free_list_ids);
 
 	pm_runtime_suspend(drm_dev->dev);
+	pvr_devfreq_fini(pvr_dev);
 	pvr_device_fini(pvr_dev);
 	drm_dev_unplug(drm_dev);
 	pvr_watchdog_fini(pvr_dev);

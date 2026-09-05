@@ -5,6 +5,7 @@
 #define PVR_DEVICE_H
 
 #include "pvr_ccb.h"
+#include "pvr_devfreq.h"
 #include "pvr_device_info.h"
 #include "pvr_fw.h"
 #include "pvr_rogue_fwif_stream.h"
@@ -172,6 +173,9 @@ struct pvr_device {
 
 	/** @pwrseq: Pointer to a power sequencer, if one is used. */
 	struct pwrseq_desc *pwrseq;
+
+	/** @devfreq: Frequency scaling state. */
+	struct pvr_devfreq devfreq;
 
 	/** @irq: IRQ number. */
 	int irq;

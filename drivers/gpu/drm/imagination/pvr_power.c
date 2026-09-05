@@ -384,6 +384,8 @@ pvr_power_device_suspend(struct device *dev)
 			goto err_drm_dev_exit;
 	}
 
+	pvr_devfreq_suspend(pvr_dev);
+
 	err = pvr_dev->device_data->pwr_ops->power_off(pvr_dev);
 
 err_drm_dev_exit:
@@ -413,6 +415,8 @@ pvr_power_device_resume(struct device *dev)
 		if (err)
 			goto err_power_off;
 	}
+
+	pvr_devfreq_resume(pvr_dev);
 
 	drm_dev_exit(idx);
 
