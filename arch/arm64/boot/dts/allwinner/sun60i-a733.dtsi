@@ -1199,12 +1199,15 @@
 		hdmi_phy: hdmi-phy@5600000 {
 			compatible = "allwinner,sun60i-a733-hdmi-phy";
 			reg = <0x05600000 0x10000>;
-			clocks = <&ccu CLK_BUS_HDMI_TV>, <&ccu CLK_HDMI_TV>;
-			clock-names = "bus", "mod";
+			clocks = <&ccu CLK_BUS_HDMI_TV>, <&ccu CLK_HDMI_TV>,
+				 <&osc26M>;
+			clock-names = "bus", "mod", "pll-0";
+			clock-output-names = "hdmi-phy-clk";
 			resets = <&ccu RST_BUS_HDMI_SUB>;
 			reset-names = "phy";
 			syscon = <&syscon>;
 			power-domains = <&pck600 PD_VO1>;
+			#clock-cells = <0>;
 			#phy-cells = <0>;
 		};
 
@@ -1213,7 +1216,7 @@
 				     "allwinner,sun50i-h616-tcon-tv";
 			reg = <0x05730000 0x1000>;
 			interrupts = <GIC_SPI 57 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&ccu CLK_BUS_TCON_TV0>, <&ccu CLK_HDMI_TV>;
+			clocks = <&ccu CLK_BUS_TCON_TV0>, <&hdmi_phy>;
 			clock-names = "ahb", "tcon-ch1";
 			resets = <&ccu RST_BUS_TCON_TV0>;
 			reset-names = "lcd";
