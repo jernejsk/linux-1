@@ -46,6 +46,12 @@ properties:
   power-domains:
     maxItems: 1
 
+  "#clock-cells":
+    const: 0
+
+  clock-output-names:
+    maxItems: 1
+
   resets:
     maxItems: 1
 
@@ -89,14 +95,17 @@ else:
           enum:
             - allwinner,sun8i-h3-hdmi-phy
             - allwinner,sun50i-a64-hdmi-phy
+            - allwinner,sun60i-a733-hdmi-phy
 
   then:
     properties:
       clocks:
         minItems: 3
+        maxItems: 3
 
       clock-names:
         minItems: 3
+        maxItems: 3
 
   else:
     properties:
@@ -115,9 +124,13 @@ allOf:
     then:
       required:
         - syscon
+        - "#clock-cells"
+        - clock-output-names
     else:
       properties:
         syscon: false
+        "#clock-cells": false
+        clock-output-names: false
 
 additionalProperties: false
 
