@@ -192,6 +192,13 @@
 		reset-gpios = <&pio 7 16 GPIO_ACTIVE_LOW>; /* PH16 */
 		reset-assert-us = <10000>;
 		reset-deassert-us = <150000>;
+		/*
+		 * With EEE negotiated the link drops every few minutes under
+		 * load and comes back with a dead data path; the vendor driver
+		 * for this PHY clears the EEE advertisement outright.
+		 */
+		eee-broken-100tx;
+		eee-broken-1000t;
 	};
 };
 
