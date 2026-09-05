@@ -18,8 +18,11 @@
 #include <drm/drm_auth.h>
 #include <drm/drm_managed.h>
 
+#include <linux/atomic.h>
 #include <linux/bug.h>
+#include <linux/delay.h>
 #include <linux/errno.h>
+#include <linux/jiffies.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/sched.h>
@@ -28,6 +31,8 @@
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/xarray.h>
+
+#include <drm/drm_print.h>
 
 static int
 remap_priority(struct pvr_file *pvr_file, s32 uapi_priority,
@@ -270,6 +275,49 @@ static void pvr_context_kill_queues(struct pvr_context *ctx)
 	}
 }
 
+/* Long enough for the firmware to notice and kill a locked-up job. */
+#define PVR_CONTEXT_DRAIN_TIMEOUT_MS 15000
+
+static int pvr_context_jobs_in_flight(struct pvr_context *ctx)
+{
+	switch (ctx->type) {
+	case DRM_PVR_CTX_TYPE_RENDER:
+		return atomic_read(&ctx->queues.fragment->in_flight_job_count) +
+		       atomic_read(&ctx->queues.geometry->in_flight_job_count);
+	case DRM_PVR_CTX_TYPE_COMPUTE:
+		return atomic_read(&ctx->queues.compute->in_flight_job_count);
+	case DRM_PVR_CTX_TYPE_TRANSFER_FRAG:
+		return atomic_read(&ctx->queues.transfer->in_flight_job_count);
+	}
+
+	return 0;
+}
+
+/**
+ * pvr_context_drain() - Wait for the jobs a context has on the GPU to finish.
+ * @ctx: Context being torn down.
+ *
+ * A job the firmware is still running keeps reading and writing the context's
+ * memory, so unmapping that memory underneath it makes the GPU fault and
+ * drags the firmware through a lockup recovery. Jobs cannot be aborted, but
+ * they do finish: a healthy one within milliseconds, a locked-up one once the
+ * firmware kills it. Wait for that, within reason.
+ */
+static void pvr_context_drain(struct pvr_context *ctx)
+{
+	unsigned long timeout = jiffies + msecs_to_jiffies(PVR_CONTEXT_DRAIN_TIMEOUT_MS);
+
+	while (pvr_context_jobs_in_flight(ctx)) {
+		if (time_after(jiffies, timeout)) {
+			drm_warn(from_pvr_device(ctx->pvr_dev),
+				 "Context still has jobs running at close, unmapping under them\n");
+			break;
+		}
+
+		msleep(1);
+	}
+}
+
 /**
  * pvr_context_create() - Create a context.
  * @pvr_file: File to attach the created context to.
@@ -458,6 +506,7 @@ void pvr_destroy_contexts_for_file(struct pvr_file *pvr_file)
 		if (pvr_context_get_if_referenced(ctx)) {
 			spin_unlock(&pvr_dev->ctx_list_lock);
 
+			pvr_context_drain(ctx);
 			pvr_vm_unmap_all(ctx->vm_ctx);
 
 			pvr_context_put(ctx);
