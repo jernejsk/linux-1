@@ -260,6 +260,12 @@ struct pvr_device {
 		 * KCCB has been stalled for.
 		 */
 		u32 kccb_stall_count;
+
+		/**
+		 * @watchdog.reset_work: Hard reset requested by a queue whose
+		 * jobs keep timing out without the firmware noticing.
+		 */
+		struct work_struct reset_work;
 	} watchdog;
 
 	/**

@@ -96,6 +96,7 @@ pvr_power_fw_disable(struct pvr_device *pvr_dev, bool hard_reset, bool rpm_suspe
 
 	if (!hard_reset) {
 		cancel_delayed_work_sync(&pvr_dev->watchdog.work);
+	cancel_work_sync(&pvr_dev->watchdog.reset_work);
 
 		err = pvr_power_request_idle(pvr_dev);
 		if (err)
@@ -246,10 +247,31 @@ out_requeue:
  *  * 0 on success, or
  *  * -%ENOMEM on out of memory.
  */
+/*
+ * The firmware normally spots a locked-up data master itself and resets the
+ * guilty context. When jobs on a queue time out again and again with nothing
+ * completing and no such notification, it has not, and the whole core has to
+ * be brought back the hard way.
+ */
+static void
+pvr_lockup_reset_worker(struct work_struct *work)
+{
+	struct pvr_device *pvr_dev = container_of(work, struct pvr_device,
+						  watchdog.reset_work);
+
+	if (pvr_dev->lost)
+		return;
+
+	drm_err(from_pvr_device(pvr_dev),
+		"Jobs keep timing out, resetting the GPU\n");
+	pvr_power_reset(pvr_dev, true);
+}
+
 int
 pvr_watchdog_init(struct pvr_device *pvr_dev)
 {
 	INIT_DELAYED_WORK(&pvr_dev->watchdog.work, pvr_watchdog_worker);
+	INIT_WORK(&pvr_dev->watchdog.reset_work, pvr_lockup_reset_worker);
 
 	return 0;
 }
@@ -631,6 +653,7 @@ void
 pvr_watchdog_fini(struct pvr_device *pvr_dev)
 {
 	cancel_delayed_work_sync(&pvr_dev->watchdog.work);
+	cancel_work_sync(&pvr_dev->watchdog.reset_work);
 }
 
 int pvr_power_domains_init(struct pvr_device *pvr_dev)

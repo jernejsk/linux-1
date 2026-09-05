@@ -875,6 +875,9 @@ pvr_queue_timedout_job(struct drm_sched_job *s_job)
 
 	dev_err(sched->dev, "Job timeout\n");
 
+	if (++queue->timeout_streak >= 2)
+		schedule_work(&pvr_dev->watchdog.reset_work);
+
 	/* Before we stop the scheduler, make sure the queue is out of any list, so
 	 * any call to pvr_queue_update_active_state_locked() that might happen
 	 * until the scheduler is really stopped doesn't end up re-inserting the
@@ -984,6 +987,7 @@ pvr_queue_signal_done_fences(struct pvr_queue *queue)
 			dma_fence_signal(job->done_fence);
 			pvr_job_release_pm_ref(job);
 			atomic_dec(&queue->in_flight_job_count);
+			queue->timeout_streak = 0;
 		}
 	}
 	spin_unlock(&queue->scheduler.job_list_lock);

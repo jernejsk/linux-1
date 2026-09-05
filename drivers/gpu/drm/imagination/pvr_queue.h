@@ -139,6 +139,12 @@ struct pvr_queue {
 
 	/** @callstack_addr: Initial call stack address for register state object. */
 	u64 callstack_addr;
+
+	/**
+	 * @timeout_streak: Consecutive job timeouts with nothing completing in
+	 * between; the firmware has given up on the queue past a couple.
+	 */
+	u32 timeout_streak;
 };
 
 bool pvr_queue_fence_is_native(struct dma_fence *f);
