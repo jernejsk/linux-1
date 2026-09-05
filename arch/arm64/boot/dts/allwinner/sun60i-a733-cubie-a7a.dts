@@ -166,6 +166,7 @@
 };
 
 &gpu {
+	power-supply = <&reg_dcdc4>;
 	status = "okay";
 };
 
@@ -331,6 +332,7 @@
 				regulator-always-on;
 				regulator-min-microvolt = <800000>;
 				regulator-max-microvolt = <960000>;
+				regulator-ramp-delay = <250>;
 				regulator-name = "vdd-gpu";
 			};
 
