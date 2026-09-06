@@ -992,6 +992,19 @@
 			status = "disabled";
 		};
 
+		ahub: audio-hub@5097000 {
+			#sound-dai-cells = <1>;
+			compatible = "allwinner,sun50i-h616-ahub";
+			reg = <0x05097000 0xb00>;
+			clocks = <&ccu CLK_BUS_AUDIO_HUB>, <&ccu CLK_AUDIO_HUB>;
+			clock-names = "bus", "mod";
+			resets = <&ccu RST_BUS_AUDIO_HUB>;
+			dmas = <&dma 3>, <&dma 3>, <&dma 4>, <&dma 4>,
+			       <&dma 5>, <&dma 5>;
+			dma-names = "tx0", "rx0", "tx1", "rx1", "tx2", "rx2";
+			status = "disabled";
+		};
+
 		usbotg: usb@5100000 {
 			compatible = "allwinner,sun50i-h616-musb",
 				     "allwinner,sun8i-h3-musb";
