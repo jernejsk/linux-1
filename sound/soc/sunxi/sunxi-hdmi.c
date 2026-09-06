@@ -58,6 +58,7 @@ static void sunxi_hdmi_put_nodes(void *data)
 static int sunxi_hdmi_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	struct of_phandle_args args;
 	struct sunxi_hdmi *hdmi;
 	int ret;
 
@@ -65,10 +66,12 @@ static int sunxi_hdmi_probe(struct platform_device *pdev)
 	if (!hdmi)
 		return -ENOMEM;
 
-	hdmi->cpu_node = of_parse_phandle(dev->of_node, "audio-cpu", 0);
-	if (!hdmi->cpu_node)
-		return dev_err_probe(dev, -EINVAL,
-				     "missing audio-cpu phandle\n");
+	ret = of_parse_phandle_with_args(dev->of_node, "audio-cpu",
+					 "#sound-dai-cells", 0, &args);
+	if (ret)
+		return dev_err_probe(dev, ret, "missing audio-cpu phandle\n");
+
+	hdmi->cpu_node = args.np;
 
 	hdmi->codec_node = of_parse_phandle(dev->of_node, "audio-codec", 0);
 	if (!hdmi->codec_node) {
@@ -81,7 +84,14 @@ static int sunxi_hdmi_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	hdmi->components[0].of_node = hdmi->cpu_node;
+	/*
+	 * The transport can be one DAI out of a component with many, so the
+	 * DAI name has to be resolved from the phandle arguments.
+	 */
+	ret = snd_soc_get_dlc(&args, &hdmi->components[0]);
+	if (ret)
+		return dev_err_probe(dev, ret, "invalid audio-cpu phandle\n");
+
 	hdmi->components[1].of_node = hdmi->codec_node;
 	hdmi->components[1].dai_name = "i2s-hifi";
 	hdmi->components[2].of_node = hdmi->cpu_node;
