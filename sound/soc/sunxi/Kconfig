@@ -47,16 +47,28 @@ config SND_SUN4I_I2S
 	  the Allwinner A10 I2S. You will also need to select the
 	  individual machine drivers to support below.
 
+config SND_SUN50I_H616_AHUB
+	tristate "Allwinner H616 Audio Hub Support"
+	depends on (ARM64 && ARCH_SUNXI) || COMPILE_TEST
+	select SND_SOC_GENERIC_DMAENGINE_PCM
+	select REGMAP_MMIO
+	help
+	  Say Y or M to add support for the audio hub found in the Allwinner
+	  H616 SoC. The audio hub connects the DMA interfaces to the I2S/PCM
+	  controllers, one of which is wired to the HDMI controller. Select
+	  this to use any of those controllers, including HDMI audio. The
+	  module will be called sun50i-h616-ahub.
+
 config SND_SOC_SUNXI_HDMI
 	tristate "Allwinner HDMI audio support"
 	depends on OF
-	depends on SND_SUN4I_I2S
+	depends on SND_SUN4I_I2S || SND_SUN50I_H616_AHUB
 	depends on DRM_DW_HDMI_I2S_AUDIO
 	help
 	  Say Y or M to add support for the fixed internal connection between
 	  the HDMI I2S controller and DesignWare HDMI on Allwinner H3, H5, A64,
-	  and H6 SoCs. This driver configures the SoC-specific link used for
-	  HDMI audio playback. The module will be called sunxi-hdmi.
+	  H6 and H616 SoCs. This driver configures the SoC-specific link used
+	  for HDMI audio playback. The module will be called sunxi-hdmi.
 
 config SND_SUN4I_SPDIF
 	tristate "Allwinner A10 SPDIF Support"
