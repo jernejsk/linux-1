@@ -45,6 +45,10 @@
 	};
 };
 
+&ahub {
+	status = "okay";
+};
+
 &codec {
 	allwinner,audio-routing = "Line Out", "LINEOUT";
 	status = "okay";
@@ -84,6 +88,10 @@
 
 &hdmi {
 	hvcc-supply = <&reg_bldo1>;
+	status = "okay";
+};
+
+&hdmi_sound {
 	status = "okay";
 };
 

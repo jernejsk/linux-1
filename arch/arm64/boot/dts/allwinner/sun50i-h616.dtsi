@@ -103,6 +103,13 @@
 		status = "disabled";
 	};
 
+	hdmi_sound: sound-hdmi {
+		compatible = "allwinner,sun8i-a83t-hdmi-audio";
+		audio-cpu = <&ahub 1>;
+		audio-codec = <&hdmi>;
+		status = "disabled";
+	};
+
 	reserved-memory {
 		#address-cells = <2>;
 		#size-cells = <2>;
@@ -1166,6 +1173,7 @@
 		};
 
 		hdmi: hdmi@6000000 {
+			#sound-dai-cells = <0>;
 			compatible = "allwinner,sun50i-h616-dw-hdmi",
 				     "allwinner,sun50i-h6-dw-hdmi";
 			reg = <0x06000000 0x10000>;
