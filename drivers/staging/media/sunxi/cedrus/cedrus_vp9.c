@@ -768,6 +768,17 @@ static int cedrus_vp9_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 			  (vp9->last_flags & V4L2_VP9_FRAME_FLAG_SHOW_FRAME) &&
 			  !resolution_change;
 
+	/*
+	 * The HW predicts segment IDs from the map left in prob_tbl by
+	 * earlier frames. VP9 says the prediction is 0 after a key frame,
+	 * intra-only, error-resilient frame or size change, so clear it.
+	 */
+	if ((dec->seg.flags & V4L2_VP9_SEGMENTATION_FLAG_ENABLED) &&
+	    (intra_only || resolution_change || !vp9->last_valid ||
+	     (dec->flags & V4L2_VP9_FRAME_FLAG_ERROR_RESILIENT)))
+		memset(vp9->prob_tbl + CEDRUS_VP9_SEGMAP_OFFSET, 0,
+		       CEDRUS_VP9_PROB_TBL_SIZE - CEDRUS_VP9_SEGMAP_OFFSET);
+
 	/* Record per-buffer dimensions so future frames can use them as refs. */
 	dst_cb->codec.vp9.width = cur_w;
 	dst_cb->codec.vp9.height = cur_h;
