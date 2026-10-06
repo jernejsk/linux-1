@@ -13,6 +13,7 @@
  * Marek Szyprowski, <m.szyprowski@samsung.com>
  */
 
+#include <linux/reset.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-ioctl.h>
 #include <media/v4l2-event.h>
@@ -21,6 +22,38 @@
 #include "cedrus.h"
 #include "cedrus_dec.h"
 #include "cedrus_hw.h"
+
+/*
+ * Let the other contexts run again once @ctx no longer holds the engine in
+ * the middle of a picture. Snapshot the contexts under the lock and schedule
+ * them outside it: job_ready() is called with the m2m job lock held and takes
+ * sched_lock, so the reverse nesting must be avoided.
+ */
+/* DEBUG (h616-bench): 0 = off, 1 = ctx-switch reset only, 2 = reset + picture gating */
+int cedrus_sched_gate;
+module_param_named(sched_gate, cedrus_sched_gate, int, 0644);
+
+void cedrus_release_held(struct cedrus_dev *dev, struct cedrus_ctx *ctx)
+{
+	struct v4l2_m2m_ctx *wake[16];
+	struct cedrus_ctx *other;
+	unsigned long flags;
+	unsigned int n = 0, i;
+
+	spin_lock_irqsave(&dev->sched_lock, flags);
+	if (dev->held_ctx != ctx) {
+		spin_unlock_irqrestore(&dev->sched_lock, flags);
+		return;
+	}
+	dev->held_ctx = NULL;
+	list_for_each_entry(other, &dev->ctxs, list)
+		if (other != ctx && n < ARRAY_SIZE(wake))
+			wake[n++] = other->fh.m2m_ctx;
+	spin_unlock_irqrestore(&dev->sched_lock, flags);
+
+	for (i = 0; i < n; i++)
+		v4l2_m2m_try_schedule(wake[i]);
+}
 
 void cedrus_device_run(void *priv)
 {
@@ -32,6 +65,32 @@ void cedrus_device_run(void *priv)
 
 	run.src = v4l2_m2m_next_src_buf(ctx->fh.m2m_ctx);
 	run.dst = v4l2_m2m_next_dst_buf(ctx->fh.m2m_ctx);
+
+	/*
+	 * The engine keeps internal state between jobs (SRAM tables, row
+	 * buffers, entropy state) that belongs to the context that ran last.
+	 * Reset it whenever another context takes over, as the vendor library
+	 * does on every decoder switch.
+	 */
+	if (cedrus_sched_gate && dev->last_ctx != ctx) {
+		reset_control_reset(dev->rstc);
+		dev->last_ctx = ctx;
+	}
+
+	/*
+	 * A source buffer with HOLD_CAPTURE_BUF is not the last slice of its
+	 * picture: keep the engine for this context until the picture is done.
+	 */
+	if (cedrus_sched_gate >= 2 &&
+	    (run.src->flags & V4L2_BUF_FLAG_M2M_HOLD_CAPTURE_BUF)) {
+		unsigned long flags;
+
+		spin_lock_irqsave(&dev->sched_lock, flags);
+		dev->held_ctx = ctx;
+		spin_unlock_irqrestore(&dev->sched_lock, flags);
+	} else {
+		cedrus_release_held(dev, ctx);
+	}
 
 	/* Apply request(s) controls if needed. */
 	src_req = run.src->vb2_buf.req_obj.req;

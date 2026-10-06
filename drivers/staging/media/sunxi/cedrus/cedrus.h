@@ -150,6 +150,7 @@ struct cedrus_buffer {
 struct cedrus_ctx {
 	struct v4l2_fh			fh;
 	struct cedrus_dev		*dev;
+	struct list_head		list;
 
 	struct v4l2_pix_format		src_fmt;
 	struct v4l2_pix_format		dst_fmt;
@@ -260,8 +261,22 @@ struct cedrus_dev {
 	unsigned int		capabilities;
 	u32			ve_mode_ddr;
 
+	/* Context of the last job; the VE is reset when this changes. */
+	struct cedrus_ctx	*last_ctx;
+
+	/*
+	 * Context in the middle of a multi-job picture (capture buffer held):
+	 * other contexts must not run until it completes the picture.
+	 */
+	spinlock_t		sched_lock;
+	struct list_head	ctxs;
+	struct cedrus_ctx	*held_ctx;
+
 	struct delayed_work	watchdog_work;
 };
+
+extern int cedrus_sched_gate;
+void cedrus_release_held(struct cedrus_dev *dev, struct cedrus_ctx *ctx);
 
 extern struct cedrus_dec_ops cedrus_dec_ops_mpeg2;
 extern struct cedrus_dec_ops cedrus_dec_ops_h264;

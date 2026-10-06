@@ -272,6 +272,8 @@ int cedrus_hw_resume(struct device *device)
 	struct cedrus_dev *dev = dev_get_drvdata(device);
 	int ret;
 
+	dev->last_ctx = NULL;
+
 	ret = reset_control_reset(dev->rstc);
 	if (ret) {
 		dev_err(dev->dev, "Failed to apply reset\n");
