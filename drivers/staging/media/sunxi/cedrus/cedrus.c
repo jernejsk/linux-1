@@ -27,6 +27,7 @@
 #include "cedrus_video.h"
 #include "cedrus_dec.h"
 #include "cedrus_hw.h"
+#include "cedrus_regs.h"
 
 /*
  * The engine writes whatever picture size the bitstream headers describe:
@@ -741,6 +742,11 @@ static const struct cedrus_variant sun50i_h616_cedrus_variant = {
 			  CEDRUS_CAPABILITY_VP8_DEC |
 			  CEDRUS_CAPABILITY_VP9_DEC,
 	.mod_rate	= 600000000,
+	/*
+	 * With the 128-bit DDR mode, H.264 and VP8 read corrupted reference
+	 * chroma (luma is fine); the 256-bit mode decodes all codecs correctly.
+	 */
+	.ve_mode_ddr	= VE_MODE_DDR_MODE_BW_256,
 };
 
 static const struct of_device_id cedrus_dt_match[] = {
