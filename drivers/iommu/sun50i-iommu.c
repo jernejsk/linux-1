@@ -395,6 +395,29 @@ static int sun50i_iommu_flush_all_tlb(struct sun50i_iommu *iommu)
 	return ret;
 }
 
+/*
+ * A master that keeps issuing accesses to unmapped addresses after the
+ * fault interrupt was handled latches the page table fault status in
+ * L1PG/L2PG_INT without raising a new interrupt, and stays blocked until
+ * it is reset. Reset such masters once their mappings are torn down.
+ */
+static void sun50i_iommu_recover_masters(struct sun50i_iommu *iommu)
+{
+	u32 stuck;
+
+	assert_spin_locked(&iommu->iommu_lock);
+
+	stuck = (iommu_read(iommu, IOMMU_L1PG_INT_REG) |
+		 iommu_read(iommu, IOMMU_L2PG_INT_REG)) & IOMMU_INT_MASTER_MASK;
+	if (!stuck)
+		return;
+
+	dev_warn_ratelimited(iommu->dev, "resetting stalled masters 0x%x\n",
+			     stuck);
+	iommu_write(iommu, IOMMU_RESET_REG, ~stuck);
+	iommu_write(iommu, IOMMU_RESET_REG, IOMMU_RESET_RELEASE_ALL);
+}
+
 static void sun50i_iommu_flush_iotlb_all(struct iommu_domain *domain)
 {
 	struct sun50i_iommu_domain *sun50i_domain = to_sun50i_domain(domain);
@@ -414,6 +437,7 @@ static void sun50i_iommu_flush_iotlb_all(struct iommu_domain *domain)
 
 	spin_lock_irqsave(&iommu->iommu_lock, flags);
 	sun50i_iommu_flush_all_tlb(iommu);
+	sun50i_iommu_recover_masters(iommu);
 	spin_unlock_irqrestore(&iommu->iommu_lock, flags);
 }
 
