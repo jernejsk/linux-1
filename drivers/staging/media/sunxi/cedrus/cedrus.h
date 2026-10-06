@@ -145,6 +145,11 @@ struct cedrus_ctx {
 			dma_addr_t	entry_points_buf_addr;
 		} h265;
 		struct {
+			bool		pair_pending;
+			unsigned int	pair_dst;
+			u8		pair_structure;
+		} mpeg2;
+		struct {
 			unsigned int	last_frame_p_type;
 			unsigned int	last_filter_type;
 			unsigned int	last_sharpness_level;
