@@ -29,6 +29,28 @@
 #include "cedrus_hw.h"
 #include "cedrus_regs.h"
 
+/*
+ * The engine writes whatever picture size the bitstream headers describe:
+ * reject sizes beyond the hardware limits, or beyond the buffers once the
+ * capture queue is allocated, instead of letting the VE overrun memory and
+ * hang (seen with JCT-VC PICSIZE_A..D, 8440 and 4216 pixel dimensions).
+ */
+static int cedrus_check_pic_size(struct cedrus_ctx *ctx, u32 width, u32 height)
+{
+	struct vb2_queue *vq;
+
+	if (width > CEDRUS_MAX_WIDTH || height > CEDRUS_MAX_HEIGHT)
+		return -EINVAL;
+
+	vq = v4l2_m2m_get_vq(ctx->fh.m2m_ctx, V4L2_BUF_TYPE_VIDEO_CAPTURE);
+	if (vb2_is_busy(vq) &&
+	    (width > ALIGN(ctx->src_fmt.width, 16) ||
+	     height > ALIGN(ctx->src_fmt.height, 16)))
+		return -EINVAL;
+
+	return 0;
+}
+
 static int cedrus_try_ctrl(struct v4l2_ctrl *ctrl)
 {
 	if (ctrl->id == V4L2_CID_STATELESS_H264_SPS) {
@@ -43,6 +65,12 @@ static int cedrus_try_ctrl(struct v4l2_ctrl *ctrl)
 		if (sps->bit_depth_luma_minus8 != 0)
 			/* Only 8-bit is supported */
 			return -EINVAL;
+		if (cedrus_check_pic_size(container_of(ctrl->handler,
+						       struct cedrus_ctx, hdl),
+				(sps->pic_width_in_mbs_minus1 + 1) * 16,
+				(sps->pic_height_in_map_units_minus1 + 1) * 16 *
+				((sps->flags & V4L2_H264_SPS_FLAG_FRAME_MBS_ONLY) ? 1 : 2)))
+			return -EINVAL;
 	} else if (ctrl->id == V4L2_CID_STATELESS_HEVC_SPS) {
 		const struct v4l2_ctrl_hevc_sps *sps = ctrl->p_new.p_hevc_sps;
 		struct cedrus_ctx *ctx = container_of(ctrl->handler, struct cedrus_ctx, hdl);
@@ -51,6 +79,10 @@ static int cedrus_try_ctrl(struct v4l2_ctrl *ctrl)
 
 		if (sps->chroma_format_idc != 1)
 			/* Only 4:2:0 is supported */
+			return -EINVAL;
+
+		if (cedrus_check_pic_size(ctx, sps->pic_width_in_luma_samples,
+					  sps->pic_height_in_luma_samples))
 			return -EINVAL;
 
 		bit_depth = max(sps->bit_depth_luma_minus8,
