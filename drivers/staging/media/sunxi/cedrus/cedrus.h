@@ -206,6 +206,7 @@ struct cedrus_dec_ops {
 	int (*setup)(struct cedrus_ctx *ctx, struct cedrus_run *run);
 	int (*start)(struct cedrus_ctx *ctx);
 	void (*stop)(struct cedrus_ctx *ctx);
+	void (*buf_cleanup)(struct cedrus_ctx *ctx, struct cedrus_buffer *buf);
 	void (*trigger)(struct cedrus_ctx *ctx);
 	unsigned int (*extra_cap_size)(struct cedrus_ctx *ctx,
 				       struct v4l2_pix_format *pix_fmt);
@@ -441,5 +442,7 @@ void *cedrus_find_control_data(struct cedrus_ctx *ctx, u32 id);
 bool cedrus_ctrl_in_request(struct cedrus_ctx *ctx, struct media_request *req,
 			    u32 id);
 u32 cedrus_get_num_of_controls(struct cedrus_ctx *ctx, u32 id);
+
+extern int cedrus_mvcol_live;
 
 #endif
