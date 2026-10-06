@@ -562,6 +562,10 @@ static int cedrus_open(struct file *file)
 	if (ret)
 		goto err_m2m_release;
 
+	spin_lock_irq(&dev->sched_lock);
+	list_add_tail(&ctx->list, &dev->ctxs);
+	spin_unlock_irq(&dev->sched_lock);
+
 	v4l2_fh_add(&ctx->fh, file);
 
 	mutex_unlock(&dev->dev_mutex);
@@ -587,6 +591,14 @@ static int cedrus_release(struct file *file)
 
 	v4l2_fh_del(&ctx->fh, file);
 	v4l2_m2m_ctx_release(ctx->fh.m2m_ctx);
+
+	if (dev->last_ctx == ctx)
+		dev->last_ctx = NULL;
+
+	spin_lock_irq(&dev->sched_lock);
+	list_del(&ctx->list);
+	spin_unlock_irq(&dev->sched_lock);
+	cedrus_release_held(dev, ctx);
 
 	v4l2_ctrl_handler_free(&ctx->hdl);
 	kfree(ctx->ctrls);
@@ -619,8 +631,23 @@ static const struct video_device cedrus_video_device = {
 	.device_caps	= V4L2_CAP_VIDEO_M2M | V4L2_CAP_STREAMING,
 };
 
+static int cedrus_job_ready(void *priv)
+{
+	struct cedrus_ctx *ctx = priv;
+	struct cedrus_dev *dev = ctx->dev;
+	unsigned long flags;
+	int ready;
+
+	spin_lock_irqsave(&dev->sched_lock, flags);
+	ready = !dev->held_ctx || dev->held_ctx == ctx || !cedrus_sched_gate;
+	spin_unlock_irqrestore(&dev->sched_lock, flags);
+
+	return ready;
+}
+
 static const struct v4l2_m2m_ops cedrus_m2m_ops = {
 	.device_run	= cedrus_device_run,
+	.job_ready	= cedrus_job_ready,
 };
 
 static const struct media_device_ops cedrus_m2m_media_ops = {
@@ -653,6 +680,8 @@ static int cedrus_probe(struct platform_device *pdev)
 	mutex_init(&dev->dev_mutex);
 
 	INIT_DELAYED_WORK(&dev->watchdog_work, cedrus_watchdog);
+	spin_lock_init(&dev->sched_lock);
+	INIT_LIST_HEAD(&dev->ctxs);
 
 	ret = v4l2_device_register(&pdev->dev, &dev->v4l2_dev);
 	if (ret) {
