@@ -110,6 +110,9 @@ struct sun50i_iommu {
 
 	struct iommu_domain *domain;
 	struct kmem_cache *pt_pool;
+
+	/* For each master, all the masters of the device it belongs to */
+	u32 sibling_masters[32];
 };
 
 struct sun50i_iommu_domain {
@@ -854,9 +857,20 @@ static struct iommu_device *sun50i_iommu_probe_device(struct device *dev)
 {
 	struct sun50i_iommu *iommu;
 
+	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
+	u32 mask = 0;
+	unsigned int i;
+
 	iommu = sun50i_iommu_from_dev(dev);
 	if (!iommu)
 		return ERR_PTR(-ENODEV);
+
+	for (i = 0; i < fwspec->num_ids; i++)
+		if (fwspec->ids[i] < ARRAY_SIZE(iommu->sibling_masters))
+			mask |= BIT(fwspec->ids[i]);
+	for (i = 0; i < fwspec->num_ids; i++)
+		if (fwspec->ids[i] < ARRAY_SIZE(iommu->sibling_masters))
+			iommu->sibling_masters[fwspec->ids[i]] |= mask;
 
 	return &iommu->iommu;
 }
@@ -988,7 +1002,8 @@ static phys_addr_t sun50i_iommu_handle_perm_irq(struct sun50i_iommu *iommu)
 
 static irqreturn_t sun50i_iommu_irq(int irq, void *dev_id)
 {
-	u32 status, l1_status, l2_status, resets;
+	u32 status, l1_status, l2_status, resets, faulted;
+	unsigned int m;
 	struct sun50i_iommu *iommu = dev_id;
 
 	spin_lock(&iommu->iommu_lock);
@@ -1015,7 +1030,19 @@ static irqreturn_t sun50i_iommu_irq(int irq, void *dev_id)
 
 	iommu_write(iommu, IOMMU_INT_CLR_REG, status);
 
-	resets = (status | l1_status | l2_status) & IOMMU_INT_MASTER_MASK;
+	/*
+	 * Reset the faulting masters together with the other masters of the
+	 * same device. A device that keeps running after a fault (the Cedrus
+	 * VE uses two masters) otherwise leaves its other master stalled for
+	 * good, and the device can't do any DMA until reboot.
+	 */
+	faulted = (status | l1_status | l2_status) & IOMMU_INT_MASTER_MASK;
+	resets = faulted;
+	for (m = 0; m < ARRAY_SIZE(iommu->sibling_masters); m++)
+		if (faulted & BIT(m))
+			resets |= iommu->sibling_masters[m];
+	resets &= IOMMU_INT_MASTER_MASK;
+
 	iommu_write(iommu, IOMMU_RESET_REG, ~resets);
 	iommu_write(iommu, IOMMU_RESET_REG, IOMMU_RESET_RELEASE_ALL);
 
