@@ -1265,6 +1265,11 @@ const char *v4l2_ctrl_get_name(u32 id)
 	case V4L2_CID_STATELESS_AV1_TILE_GROUP_ENTRY:		return "AV1 Tile Group Entry";
 	case V4L2_CID_STATELESS_AV1_FRAME:			return "AV1 Frame Parameters";
 	case V4L2_CID_STATELESS_AV1_FILM_GRAIN:			return "AV1 Film Grain";
+	case V4L2_CID_STATELESS_VC1_SEQUENCE:			return "VC-1 Sequence Layer";
+	case V4L2_CID_STATELESS_VC1_ENTRYPOINT:		return "VC-1 Entry-Point Header";
+	case V4L2_CID_STATELESS_VC1_PICTURE:		return "VC-1 Picture Layer";
+	case V4L2_CID_STATELESS_VC1_BITPLANES:			return "VC-1 Bitplanes";
+	case V4L2_CID_STATELESS_VC1_SLICE_PARAMS:		return "VC-1 Slice Parameters";
 
 	/* Colorimetry controls */
 	/* Keep the order of the 'case's the same as in v4l2-controls.h! */
@@ -1636,6 +1641,23 @@ void v4l2_ctrl_fill(u32 id, const char **name, enum v4l2_ctrl_type *type,
 		break;
 	case V4L2_CID_STATELESS_AV1_FILM_GRAIN:
 		*type = V4L2_CTRL_TYPE_AV1_FILM_GRAIN;
+		break;
+	case V4L2_CID_STATELESS_VC1_SEQUENCE:
+		*type = V4L2_CTRL_TYPE_VC1_SEQUENCE;
+		break;
+	case V4L2_CID_STATELESS_VC1_ENTRYPOINT:
+		*type = V4L2_CTRL_TYPE_VC1_ENTRYPOINT;
+		break;
+	case V4L2_CID_STATELESS_VC1_PICTURE:
+		*type = V4L2_CTRL_TYPE_VC1_PICTURE;
+		break;
+	case V4L2_CID_STATELESS_VC1_BITPLANES:
+		*type = V4L2_CTRL_TYPE_U8;
+		*flags |= V4L2_CTRL_FLAG_DYNAMIC_ARRAY;
+		break;
+	case V4L2_CID_STATELESS_VC1_SLICE_PARAMS:
+		*type = V4L2_CTRL_TYPE_VC1_SLICE_PARAMS;
+		*flags |= V4L2_CTRL_FLAG_DYNAMIC_ARRAY;
 		break;
 	case V4L2_CID_UNIT_CELL_SIZE:
 		*type = V4L2_CTRL_TYPE_AREA;

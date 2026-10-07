@@ -579,6 +579,30 @@ See also the examples in :ref:`control`.
       - n/a
       - A struct :c:type:`v4l2_ctrl_av1_film_grain`, containing AV1 Film Grain
         parameters for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_VC1_SEQUENCE``
+      - n/a
+      - n/a
+      - n/a
+      - A struct :c:type:`v4l2_ctrl_vc1_sequence`, containing VC-1
+	sequence layer parameters for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_VC1_ENTRYPOINT``
+      - n/a
+      - n/a
+      - n/a
+      - A struct :c:type:`v4l2_ctrl_vc1_entrypoint`, containing VC-1
+	entry-point header parameters for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_VC1_PICTURE``
+      - n/a
+      - n/a
+      - n/a
+      - A struct :c:type:`v4l2_ctrl_vc1_picture`, containing VC-1
+	picture layer parameters for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_VC1_SLICE_PARAMS``
+      - n/a
+      - n/a
+      - n/a
+      - A struct :c:type:`v4l2_ctrl_vc1_slice_params`, containing VC-1
+	slice parameters for stateless video decoders.
 
 .. raw:: latex
 
