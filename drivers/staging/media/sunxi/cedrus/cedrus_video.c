@@ -443,8 +443,11 @@ static int cedrus_s_fmt_vid_out_p(struct cedrus_ctx *ctx,
 			VB2_V4L2_FL_SUPPORTS_M2M_HOLD_CAPTURE_BUF;
 		break;
 	default:
-		vq->subsystem_flags &=
-			~VB2_V4L2_FL_SUPPORTS_M2M_HOLD_CAPTURE_BUF;
+		/*
+		 * Keep advertising capture holding: userspace (FFmpeg) probes
+		 * the OUTPUT queue capabilities before setting the format and
+		 * would otherwise submit every slice as a separate frame.
+		 */
 		break;
 	}
 
@@ -717,6 +720,7 @@ int cedrus_queue_init(void *priv, struct vb2_queue *src_vq,
 	src_vq->dev = ctx->dev->dev;
 	src_vq->supports_requests = true;
 	src_vq->requires_requests = true;
+	src_vq->subsystem_flags |= VB2_V4L2_FL_SUPPORTS_M2M_HOLD_CAPTURE_BUF;
 
 	ret = vb2_queue_init(src_vq);
 	if (ret)

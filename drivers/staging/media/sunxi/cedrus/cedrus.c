@@ -602,6 +602,8 @@ static int cedrus_release(struct file *file)
 
 	if (dev->last_ctx == ctx)
 		dev->last_ctx = NULL;
+	if (dev->yield_ctx == ctx)
+		dev->yield_ctx = NULL;
 
 	spin_lock_irq(&dev->sched_lock);
 	list_del(&ctx->list);
@@ -639,6 +641,19 @@ static const struct video_device cedrus_video_device = {
 	.device_caps	= V4L2_CAP_VIDEO_M2M | V4L2_CAP_STREAMING,
 };
 
+/* Called with sched_lock held. */
+static bool cedrus_others_waiting(struct cedrus_dev *dev, struct cedrus_ctx *ctx)
+{
+	struct cedrus_ctx *other;
+
+	list_for_each_entry(other, &dev->ctxs, list)
+		if (other != ctx &&
+		    v4l2_m2m_num_src_bufs_ready(other->fh.m2m_ctx))
+			return true;
+
+	return false;
+}
+
 static int cedrus_job_ready(void *priv)
 {
 	struct cedrus_ctx *ctx = priv;
@@ -647,7 +662,9 @@ static int cedrus_job_ready(void *priv)
 	int ready;
 
 	spin_lock_irqsave(&dev->sched_lock, flags);
-	ready = !dev->held_ctx || dev->held_ctx == ctx || !cedrus_sched_gate;
+	ready = !cedrus_sched_gate ||
+		((!dev->held_ctx || dev->held_ctx == ctx) &&
+		 (dev->yield_ctx != ctx || !cedrus_others_waiting(dev, ctx)));
 	spin_unlock_irqrestore(&dev->sched_lock, flags);
 
 	return ready;

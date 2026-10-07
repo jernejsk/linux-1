@@ -46,6 +46,11 @@ void cedrus_release_held(struct cedrus_dev *dev, struct cedrus_ctx *ctx)
 		return;
 	}
 	dev->held_ctx = NULL;
+	/* Let the contexts that waited for this picture go first. */
+	if (dev->deferred) {
+		dev->yield_ctx = ctx;
+		dev->deferred = false;
+	}
 	list_for_each_entry(other, &dev->ctxs, list)
 		if (other != ctx && n < ARRAY_SIZE(wake))
 			wake[n++] = other->fh.m2m_ctx;
@@ -67,12 +72,41 @@ void cedrus_device_run(void *priv)
 	run.dst = v4l2_m2m_next_dst_buf(ctx->fh.m2m_ctx);
 
 	/*
+	 * Another context is in the middle of a multi-slice picture and the
+	 * engine keeps per-picture state between its slices: don't run now.
+	 * Finishing the job without consuming buffers leaves it queued; it
+	 * is rescheduled once the holder's last slice is done.
+	 */
+	if (cedrus_sched_gate >= 2) {
+		unsigned long flags;
+		bool busy;
+
+		struct cedrus_ctx *yielded = NULL;
+
+		spin_lock_irqsave(&dev->sched_lock, flags);
+		busy = dev->held_ctx && dev->held_ctx != ctx;
+		if (busy) {
+			dev->deferred = true;
+		} else if (dev->yield_ctx && dev->yield_ctx != ctx) {
+			yielded = dev->yield_ctx;
+			dev->yield_ctx = NULL;
+		}
+		spin_unlock_irqrestore(&dev->sched_lock, flags);
+		if (busy) {
+			v4l2_m2m_job_finish(dev->m2m_dev, ctx->fh.m2m_ctx);
+			return;
+		}
+		if (yielded)
+			v4l2_m2m_try_schedule(yielded->fh.m2m_ctx);
+	}
+
+	/*
 	 * The engine keeps internal state between jobs (SRAM tables, row
 	 * buffers, entropy state) that belongs to the context that ran last.
 	 * Reset it whenever another context takes over, as the vendor library
 	 * does on every decoder switch.
 	 */
-	if (cedrus_sched_gate && dev->last_ctx != ctx) {
+	if ((cedrus_sched_gate == 1 || cedrus_sched_gate == 2) && dev->last_ctx != ctx) {
 		reset_control_reset(dev->rstc);
 		dev->last_ctx = ctx;
 	}
