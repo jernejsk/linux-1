@@ -145,6 +145,50 @@ static int cedrus_try_ctrl(struct v4l2_ctrl *ctrl)
 			ctx->bit_depth = dec->bit_depth;
 			cedrus_reset_cap_format(ctx);
 		}
+	} else if (ctrl->id == V4L2_CID_STATELESS_VC1_SEQUENCE) {
+		const struct v4l2_ctrl_vc1_sequence *seq = ctrl->p_new.p_vc1_sequence;
+
+		if (seq->profile == V4L2_VC1_PROFILE_COMPLEX)
+			/* Complex profile is not supported by the hardware */
+			return -EINVAL;
+
+		if (seq->profile != V4L2_VC1_PROFILE_ADVANCED &&
+		    !(seq->flags & V4L2_VC1_SEQUENCE_FLAG_RES_RTM))
+			/*
+			 * Pre-release WMV9 (RES_RTM == 0) codes the macroblock
+			 * layer differently from SMPTE 421M, and the hardware
+			 * has no mode for it.
+			 */
+			return -EINVAL;
+
+		if (seq->max_coded_width && seq->max_coded_width < CEDRUS_VC1_MIN_WIDTH)
+			return -EINVAL;
+
+		/* Reduced-resolution pictures (RESPIC) may be half as wide. */
+		if (seq->profile != V4L2_VC1_PROFILE_ADVANCED &&
+		    (seq->flags & V4L2_VC1_SEQUENCE_FLAG_MULTIRES) &&
+		    seq->max_coded_width &&
+		    seq->max_coded_width / 2 < CEDRUS_VC1_MIN_WIDTH)
+			return -EINVAL;
+	} else if (ctrl->id == V4L2_CID_STATELESS_VC1_ENTRYPOINT_HEADER) {
+		const struct v4l2_ctrl_vc1_entrypoint_header *ep =
+			ctrl->p_new.p_vc1_entrypoint_header;
+
+		/*
+		 * Pictures narrower than 8 macroblocks get wrong direct mode
+		 * motion vectors in B pictures: the hardware stores wrong
+		 * co-located motion vectors for some macroblocks of the last
+		 * column. Pictures 2 macroblocks wide don't decode at all.
+		 */
+		if (ep->coded_width && ep->coded_width < CEDRUS_VC1_MIN_WIDTH)
+			return -EINVAL;
+	} else if (ctrl->id == V4L2_CID_STATELESS_VC1_PICTURE_LAYER) {
+		const struct v4l2_ctrl_vc1_picture_layer *pic =
+			ctrl->p_new.p_vc1_picture_layer;
+
+		if (pic->pqindex > 31)
+			/* PQINDEX is a 5-bit field */
+			return -EINVAL;
 	}
 
 	return 0;
@@ -323,6 +367,49 @@ static const struct cedrus_control cedrus_controls[] = {
 		},
 		.capabilities	= CEDRUS_CAPABILITY_H265_DEC,
 	},
+	{
+		.cfg = {
+			.id	= V4L2_CID_STATELESS_VC1_SEQUENCE,
+			.ops	= &cedrus_ctrl_ops,
+		},
+		.capabilities	= CEDRUS_CAPABILITY_VC1_DEC,
+	},
+	{
+		.cfg = {
+			.id	= V4L2_CID_STATELESS_VC1_ENTRYPOINT_HEADER,
+		},
+		.capabilities	= CEDRUS_CAPABILITY_VC1_DEC,
+	},
+	{
+		.cfg = {
+			.id	= V4L2_CID_STATELESS_VC1_PICTURE_LAYER,
+			.ops	= &cedrus_ctrl_ops,
+		},
+		.capabilities	= CEDRUS_CAPABILITY_VC1_DEC,
+	},
+	{
+		.cfg = {
+			.id	= V4L2_CID_STATELESS_VC1_BITPLANES,
+		},
+		.capabilities	= CEDRUS_CAPABILITY_VC1_DEC,
+	},
+	{
+		.cfg = {
+			.id	= V4L2_CID_STATELESS_VC1_SLICE_PARAMS,
+			/* SLICE_ADDR is a 9-bit macroblock row number */
+			.dims	= { 512 },
+		},
+		.capabilities	= CEDRUS_CAPABILITY_VC1_DEC,
+	},
+	{
+		.cfg = {
+			.id	= V4L2_CID_MPEG_VIDEO_VC1_PROFILE,
+			.min	= V4L2_MPEG_VIDEO_VC1_PROFILE_SIMPLE,
+			.max	= V4L2_MPEG_VIDEO_VC1_PROFILE_ADVANCED,
+			.def	= V4L2_MPEG_VIDEO_VC1_PROFILE_ADVANCED,
+		},
+		.capabilities	= CEDRUS_CAPABILITY_VC1_DEC,
+	},
 };
 
 #define CEDRUS_CONTROLS_COUNT	ARRAY_SIZE(cedrus_controls)
@@ -336,6 +423,25 @@ void *cedrus_find_control_data(struct cedrus_ctx *ctx, u32 id)
 			return ctx->ctrls[i]->p_cur.p;
 
 	return NULL;
+}
+
+bool cedrus_ctrl_in_request(struct cedrus_ctx *ctx, struct media_request *req,
+			    u32 id)
+{
+	struct v4l2_ctrl_handler *hdl;
+	bool found;
+
+	if (!req)
+		return false;
+
+	hdl = v4l2_ctrl_request_hdl_find(req, &ctx->hdl);
+	if (!hdl)
+		return false;
+
+	found = !!v4l2_ctrl_request_hdl_ctrl_find(hdl, id);
+	v4l2_ctrl_request_hdl_put(hdl);
+
+	return found;
 }
 
 u32 cedrus_get_num_of_controls(struct cedrus_ctx *ctx, u32 id)

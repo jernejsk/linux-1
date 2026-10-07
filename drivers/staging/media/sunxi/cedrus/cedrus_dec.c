@@ -93,6 +93,28 @@ void cedrus_device_run(void *priv)
 			V4L2_CID_STATELESS_VP9_COMPRESSED_HDR);
 		break;
 
+	case V4L2_PIX_FMT_VC1_SLICE:
+		run.vc1.sequence = cedrus_find_control_data(ctx,
+			V4L2_CID_STATELESS_VC1_SEQUENCE);
+		run.vc1.entrypoint = cedrus_find_control_data(ctx,
+			V4L2_CID_STATELESS_VC1_ENTRYPOINT_HEADER);
+		run.vc1.picture = cedrus_find_control_data(ctx,
+			V4L2_CID_STATELESS_VC1_PICTURE_LAYER);
+		run.vc1.bitplanes = cedrus_find_control_data(ctx,
+			V4L2_CID_STATELESS_VC1_BITPLANES);
+		/*
+		 * The slice parameters only describe the picture of the
+		 * request which sets them.
+		 */
+		if (cedrus_ctrl_in_request(ctx, src_req,
+					   V4L2_CID_STATELESS_VC1_SLICE_PARAMS)) {
+			run.vc1.slices = cedrus_find_control_data(ctx,
+				V4L2_CID_STATELESS_VC1_SLICE_PARAMS);
+			run.vc1.num_slices = cedrus_get_num_of_controls(ctx,
+				V4L2_CID_STATELESS_VC1_SLICE_PARAMS);
+		}
+		break;
+
 	default:
 		break;
 	}

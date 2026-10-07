@@ -63,6 +63,11 @@ static struct cedrus_format cedrus_formats[] = {
 		.depth		= 10,
 	},
 	{
+		.pixelformat	= V4L2_PIX_FMT_VC1_SLICE,
+		.directions	= CEDRUS_DECODE_SRC,
+		.capabilities	= CEDRUS_CAPABILITY_VC1_DEC,
+	},
+	{
 		.pixelformat	= V4L2_PIX_FMT_NV12,
 		.directions	= CEDRUS_DECODE_DST,
 		.capabilities	= CEDRUS_CAPABILITY_UNTILED,
@@ -162,10 +167,19 @@ void cedrus_prepare_format(struct v4l2_pix_format *pix_fmt)
 	case V4L2_PIX_FMT_HEVC_SLICE:
 	case V4L2_PIX_FMT_VP8_FRAME:
 	case V4L2_PIX_FMT_VP9_FRAME:
+	case V4L2_PIX_FMT_VC1_SLICE:
 		/* Zero bytes per line for encoded source. */
 		bytesperline = 0;
 		/* Choose some minimum size since this can't be 0 */
 		sizeimage = max_t(u32, SZ_1K, sizeimage);
+		/*
+		 * VC-1 over-reads the bitstream a little past the end of a frame
+		 * on the last macroblock; pad the source allocation so the bit
+		 * reader has slack and the DMA does not stall (see
+		 * cedrus_vc1_setup()).
+		 */
+		if (pix_fmt->pixelformat == V4L2_PIX_FMT_VC1_SLICE)
+			sizeimage += SZ_16K;
 		/* The VP9 bitstream end address has a 1 KiB granularity. */
 		if (pix_fmt->pixelformat == V4L2_PIX_FMT_VP9_FRAME)
 			sizeimage = ALIGN(sizeimage, SZ_1K);
@@ -425,6 +439,7 @@ static int cedrus_s_fmt_vid_out_p(struct cedrus_ctx *ctx,
 	switch (ctx->src_fmt.pixelformat) {
 	case V4L2_PIX_FMT_H264_SLICE:
 	case V4L2_PIX_FMT_HEVC_SLICE:
+	case V4L2_PIX_FMT_VC1_SLICE:
 		vq->subsystem_flags |=
 			VB2_V4L2_FL_SUPPORTS_M2M_HOLD_CAPTURE_BUF;
 		break;
@@ -449,6 +464,9 @@ static int cedrus_s_fmt_vid_out_p(struct cedrus_ctx *ctx,
 		break;
 	case V4L2_PIX_FMT_VP9_FRAME:
 		ctx->current_codec = &cedrus_dec_ops_vp9;
+		break;
+	case V4L2_PIX_FMT_VC1_SLICE:
+		ctx->current_codec = &cedrus_dec_ops_vc1;
 		break;
 	}
 
