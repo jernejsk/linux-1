@@ -30,11 +30,13 @@
 
 /*
  * Decode without re-parsing the frame header through the hardware bool
- * decoder, using the coder state from the uAPI (stateless-compliant).
+ * decoder, using the coder state from the uAPI (stateless-compliant):
+ * 1 = patch the value byte into the source buffer (needs a CPU mapping),
+ * 2 = steer the bool decoder into the saved state with bit reads only.
  * The zero buffer must be large: the VLD prefetches well past VLD_END.
  */
-bool cedrus_vp8_nohdr;
-module_param_named(vp8_nohdr, cedrus_vp8_nohdr, bool, 0444);
+unsigned int cedrus_vp8_nohdr;
+module_param_named(vp8_nohdr, cedrus_vp8_nohdr, uint, 0444);
 #define VP8_PROB_HALF 128
 #define QUANT_DELTA_COUNT 5
 
@@ -531,6 +533,172 @@ static void cedrus_irq_clear(struct cedrus_dev *dev)
 		     VE_H264_STATUS_INT_MASK);
 }
 
+
+/* ---- bool decoder state reconstruction without CPU access (vp8_nohdr=2) ---- */
+
+static const u8 cedrus_vp8_norm[256] = {
+	0, 7, 6, 6, 5, 5, 5, 5, 4, 4, 4, 4, 4, 4, 4, 4,
+	3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+	2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+	2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+};
+
+/* Probability giving @split for @range, or 0 if not reachable. */
+static unsigned int cedrus_vp8_prob_for(unsigned int range, unsigned int split)
+{
+	unsigned int p;
+
+	if (range < 2 || split < 1 || split >= range)
+		return 0;
+	p = DIV_ROUND_UP((split - 1) << 8, range - 1);
+	if (!p)
+		p = 1;
+	if (p > 255 || 1 + (((range - 1) * p) >> 8) != split)
+		return 0;
+	return p;
+}
+
+static void cedrus_vp8_vld_at(struct cedrus_dev *dev, dma_addr_t addr,
+			      unsigned long len, unsigned int bitpos)
+{
+	cedrus_write(dev, VE_H264_VLD_LEN, len * 8);
+	cedrus_write(dev, VE_H264_VLD_OFFSET, bitpos);
+	cedrus_write(dev, VE_H264_VLD_END, addr + len);
+	cedrus_write(dev, VE_H264_VLD_ADDR, VE_H264_VLD_ADDR_VAL(addr) |
+		     VE_H264_VLD_ADDR_FIRST | VE_H264_VLD_ADDR_VALID |
+		     VE_H264_VLD_ADDR_LAST);
+	cedrus_write(dev, VE_H264_TRIGGER_TYPE, VE_H264_TRIGGER_TYPE_INIT_SWDEC);
+}
+
+/* Is the raw byte at @bitpos >= @t? (fresh INIT: range 255, value = byte) */
+static bool cedrus_vp8_byte_ge(struct cedrus_dev *dev, dma_addr_t addr,
+			       unsigned long len, unsigned int bitpos,
+			       unsigned int t)
+{
+	cedrus_vp8_vld_at(dev, addr, len, bitpos);
+	return read_bits(dev, 1, cedrus_vp8_prob_for(255, t));
+}
+
+/* Measure the raw byte at @bitpos with bool decoder decisions only. */
+static unsigned int cedrus_vp8_raw_byte(struct cedrus_dev *dev, dma_addr_t addr,
+				       unsigned long len, unsigned int bitpos)
+{
+	unsigned int lo = 0, hi = 254;	/* answer in [lo, hi] (254 = 254 or 255) */
+
+	while (lo < hi) {
+		unsigned int mid = (lo + hi + 1) / 2;
+
+		if (cedrus_vp8_byte_ge(dev, addr, len, bitpos, mid))
+			lo = mid;
+		else
+			hi = mid - 1;
+	}
+	/* 254 vs 255: bits 6..0 of the byte lead the byte one bit later */
+	if (lo == 254 && cedrus_vp8_byte_ge(dev, addr, len, bitpos + 1, 254))
+		lo = 255;
+
+	return lo;
+}
+
+/*
+ * Find decisions which, decoded from INIT at bit q - k, leave the decoder
+ * at bit q with range @r and value @v. @raw holds bits [q - k, q + 8).
+ * Cuts keep the interval around the true one, so the hardware decisions
+ * come out as planned. Returns the number of probabilities or -1.
+ */
+static int cedrus_vp8_plan(u64 raw, unsigned int k, unsigned int r,
+			   unsigned int v, u8 *probs)
+{
+	u64 t = ((raw - v) << 8), h = t + ((u64)r << 8), lo = 0;
+	unsigned int rg = 255, m = 8 + k, n = 0;
+
+	if (raw < v || h > ((u64)255 << m))
+		return -1;
+
+	while (m > 8) {
+		u64 u = 1ULL << m;
+		u64 s0 = (t - lo) / u, s1 = DIV_ROUND_UP_ULL(h - lo, u);
+		unsigned int best_nr = 0, best_p = 0, best_s = 0, bit, s;
+		bool best_bit = false;
+		u64 best_lo = 0;
+
+		/* tightest cut that does not overshoot the scale */
+		for (bit = 0; bit < 2; bit++) {
+			unsigned int nr, p;
+
+			s = bit ? s0 : s1;
+			if (s < 1 || s >= rg)
+				continue;
+			p = cedrus_vp8_prob_for(rg, s);
+			nr = bit ? rg - s : s;
+			if (!p || m - cedrus_vp8_norm[nr] < 8)
+				continue;
+			if (!best_nr || nr < best_nr) {
+				best_nr = nr; best_p = p; best_s = s;
+				best_bit = bit; best_lo = bit ? lo + s * u : lo;
+			}
+		}
+		/* otherwise loosen the cut to renormalise exactly to q */
+		for (bit = 0; !best_nr && bit < 2; bit++)
+			for (s = 1; s < rg; s++) {
+				unsigned int nr = bit ? rg - s : s, p;
+				u64 nlo = bit ? lo + s * u : lo;
+
+				if (cedrus_vp8_norm[nr] != m - 8 ||
+				    nlo > t || nlo + nr * u < h)
+					continue;
+				p = cedrus_vp8_prob_for(rg, s);
+				if (!p)
+					continue;
+				best_nr = nr; best_p = p; best_s = s;
+				best_bit = bit; best_lo = nlo;
+				break;
+			}
+		if (!best_nr || n >= 6)
+			return -1;
+
+		probs[n++] = best_p;
+		lo = best_lo;
+		m -= cedrus_vp8_norm[best_nr];
+		rg = best_nr << cedrus_vp8_norm[best_nr];
+	}
+
+	/* exact finish at bit q: [lo, lo + rg) -> [t, t + r) in 2^8 units */
+	{
+		unsigned int l = (t - lo) >> 8, p1, p2;
+
+		if (!l && rg == r)
+			return n;
+		if (!l) {
+			p1 = cedrus_vp8_prob_for(rg, r);
+			if (!p1)
+				return -1;
+			probs[n++] = p1;
+			return n;
+		}
+		p1 = cedrus_vp8_prob_for(rg, l + r);
+		p2 = cedrus_vp8_prob_for(l + r, l);
+		if (p1 && p2 && l + r >= 128) {
+			probs[n++] = p1;
+			probs[n++] = p2;
+			return n;
+		}
+		p1 = cedrus_vp8_prob_for(rg, l);
+		p2 = cedrus_vp8_prob_for(rg - l, r);
+		if (p1 && p2 && rg - l >= 128) {
+			probs[n++] = p1;
+			probs[n++] = p2;
+			return n;
+		}
+	}
+
+	return -1;
+}
+
 static void cedrus_read_header(struct cedrus_dev *dev,
 			       const struct v4l2_ctrl_vp8_frame *slice)
 {
@@ -772,7 +940,47 @@ static int cedrus_vp8_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 		reg |= VE_VP8_PPS_PIC_TYPE_P_FRAME;
 	cedrus_write(dev, VE_VP8_PPS, reg);
 
-	if (cedrus_vp8_nohdr) {
+	if (cedrus_vp8_nohdr == 2) {
+		unsigned int q = header_size * 8 + slice->first_part_header_bits;
+		unsigned long len = vb2_plane_size(src_buf, 0);
+		u64 raw = 0;
+		int k = -1, n = -1, i;
+		u8 probs[8];
+
+		if (!ctx->codec.vp8.zero_buf)
+			return -EINVAL;
+
+		/* load the coefficient probabilities (see vp8_nohdr=1) */
+		cedrus_vp8_vld_at(dev, ctx->codec.vp8.zero_buf_dma,
+				  CEDRUS_VP8_ZERO_SIZE, 0);
+		cedrus_write(dev, VE_H264_TRIGGER_TYPE,
+			     VE_H264_TRIGGER_TYPE_VP8_UPDATE_COEF);
+		cedrus_wait_for(dev, VE_H264_STATUS,
+				VE_H264_STATUS_VP8_UPPROB_BUSY);
+		cedrus_irq_clear(dev);
+
+		/* raw bits [q - 8j, q + 8), measured one byte at a time */
+		for (i = 0; i < 4 && n < 0; i++) {
+			unsigned int kk, from = i ? 8 * (i - 1) + 1 : 0;
+
+			if (q < 8 * i)
+				break;
+			raw |= (u64)cedrus_vp8_raw_byte(dev, src_buf_addr, len,
+							q - 8 * i) << (8 * i);
+			for (kk = from; kk <= 8 * i && n < 0; kk++) {
+				n = cedrus_vp8_plan(raw & GENMASK_ULL(kk + 7, 0), kk,
+						    slice->coder_state.range,
+						    slice->coder_state.value, probs);
+				k = kk;
+			}
+		}
+		if (n < 0)
+			return -EINVAL;
+
+		cedrus_vp8_vld_at(dev, src_buf_addr, len, q - k);
+		for (i = 0; i < n; i++)
+			read_bits(dev, 1, probs[i]);
+	} else if (cedrus_vp8_nohdr) {
 		u8 *va = vb2_plane_vaddr(src_buf, 0);
 		unsigned int q = header_size * 8 + slice->first_part_header_bits;
 		unsigned int r = slice->coder_state.range;
