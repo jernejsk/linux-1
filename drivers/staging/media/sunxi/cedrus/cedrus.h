@@ -37,6 +37,7 @@
 #define CEDRUS_CAPABILITY_VP9_DEC	BIT(6)
 #define CEDRUS_CAPABILITY_P010		BIT(7)
 #define CEDRUS_CAPABILITY_AFBC		BIT(8)
+#define CEDRUS_CAPABILITY_VC1_DEC	BIT(9)
 
 /*
  * The 10-bit configuration register of the H.265 engine selects P010 for
@@ -83,6 +84,14 @@ static inline unsigned int cedrus_vp9_stride_align(u32 pixelformat)
 
 	return CEDRUS_RECON_STRIDE_ALIGN;
 }
+
+#define CEDRUS_VC1_MIN_WIDTH		128
+/*
+ * Pictures wider than 2048 pixels need line buffers which are not set up,
+ * and the bitplanes hold 16384 macroblocks at most.
+ */
+#define CEDRUS_VC1_MAX_WIDTH		2048
+#define CEDRUS_VC1_MAX_HEIGHT		2048
 
 enum cedrus_irq_status {
 	CEDRUS_IRQ_NONE,
@@ -135,6 +144,15 @@ struct cedrus_vp9_run {
 	const struct v4l2_ctrl_vp9_compressed_hdr	*prob_updates;
 };
 
+struct cedrus_vc1_run {
+	const struct v4l2_ctrl_vc1_sequence		*sequence;
+	const struct v4l2_ctrl_vc1_entrypoint_header	*entrypoint;
+	const struct v4l2_ctrl_vc1_picture_layer	*picture;
+	const struct v4l2_ctrl_vc1_bitplanes		*bitplanes;
+	const struct v4l2_ctrl_vc1_slice_params		*slices;
+	unsigned int					num_slices;
+};
+
 struct cedrus_run {
 	struct vb2_v4l2_buffer	*src;
 	struct vb2_v4l2_buffer	*dst;
@@ -146,6 +164,7 @@ struct cedrus_run {
 		struct cedrus_h265_run	h265;
 		struct cedrus_vp8_run	vp8;
 		struct cedrus_vp9_run	vp9;
+		struct cedrus_vc1_run	vc1;
 	};
 };
 
@@ -236,6 +255,17 @@ struct cedrus_ctx {
 			ssize_t		intra_pred_buf_size;
 		} vp8;
 		struct cedrus_vp9_ctx	*vp9;
+		struct {
+			void		*aux_buf;
+			dma_addr_t	aux_buf_addr;
+			size_t		aux_buf_size;
+			void		*mv_buf;
+			dma_addr_t	mv_buf_addr;
+			void		*acdc_buf;
+			dma_addr_t	acdc_buf_addr;
+			u8		*bitplanes_buf;
+			dma_addr_t	bitplanes_buf_addr;
+		} vc1;
 	} codec;
 };
 
@@ -308,6 +338,7 @@ extern struct cedrus_dec_ops cedrus_dec_ops_h264;
 extern struct cedrus_dec_ops cedrus_dec_ops_h265;
 extern struct cedrus_dec_ops cedrus_dec_ops_vp8;
 extern struct cedrus_dec_ops cedrus_dec_ops_vp9;
+extern struct cedrus_dec_ops cedrus_dec_ops_vc1;
 
 static inline void cedrus_write(struct cedrus_dev *dev, u32 reg, u32 val)
 {
@@ -572,6 +603,8 @@ cedrus_h264_sps_height(const struct v4l2_ctrl_h264_sps *sps)
 }
 
 void *cedrus_find_control_data(struct cedrus_ctx *ctx, u32 id);
+bool cedrus_ctrl_in_request(struct cedrus_ctx *ctx, struct media_request *req,
+			    u32 id);
 u32 cedrus_get_num_of_controls(struct cedrus_ctx *ctx, u32 id);
 
 #endif

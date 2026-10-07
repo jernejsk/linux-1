@@ -62,6 +62,11 @@ static struct cedrus_format cedrus_formats[] = {
 		.depth		= 10,
 	},
 	{
+		.pixelformat	= V4L2_PIX_FMT_VC1_SLICE,
+		.directions	= CEDRUS_DECODE_SRC,
+		.capabilities	= CEDRUS_CAPABILITY_VC1_DEC,
+	},
+	{
 		.pixelformat	= V4L2_PIX_FMT_NV12,
 		.directions	= CEDRUS_DECODE_DST,
 		.capabilities	= CEDRUS_CAPABILITY_UNTILED,
@@ -167,6 +172,7 @@ void cedrus_prepare_format(struct v4l2_pix_format *pix_fmt)
 	case V4L2_PIX_FMT_HEVC_SLICE:
 	case V4L2_PIX_FMT_VP8_FRAME:
 	case V4L2_PIX_FMT_VP9_FRAME:
+	case V4L2_PIX_FMT_VC1_SLICE:
 		/* Zero bytes per line for encoded source. */
 		bytesperline = 0;
 		/* Choose some minimum size since this can't be 0 */
@@ -177,6 +183,10 @@ void cedrus_prepare_format(struct v4l2_pix_format *pix_fmt)
 		 */
 		if (pix_fmt->pixelformat == V4L2_PIX_FMT_VP9_FRAME)
 			sizeimage = ALIGN_DOWN(sizeimage, SZ_1K);
+		if (pix_fmt->pixelformat == V4L2_PIX_FMT_VC1_SLICE) {
+			width = min(width, CEDRUS_VC1_MAX_WIDTH);
+			height = min(height, CEDRUS_VC1_MAX_HEIGHT);
+		}
 		break;
 
 	case V4L2_PIX_FMT_NV12_32L32:
@@ -315,6 +325,12 @@ static int cedrus_try_fmt_vid_cap_p(struct cedrus_ctx *ctx,
 	pix_fmt->pixelformat = fmt->pixelformat;
 	pix_fmt->width = ctx->src_fmt.width;
 	pix_fmt->height = ctx->src_fmt.height;
+	/*
+	 * The two fields of a VC-1 frame are made of whole macroblock rows
+	 * each, so the frame needs room for an even number of them.
+	 */
+	if (ctx->src_fmt.pixelformat == V4L2_PIX_FMT_VC1_SLICE)
+		pix_fmt->height = ALIGN(pix_fmt->height, 32);
 	cedrus_prepare_format(pix_fmt);
 
 	/* See cedrus_vp9_stride_align(). */
@@ -458,6 +474,7 @@ static int cedrus_s_fmt_vid_out_p(struct cedrus_ctx *ctx,
 	switch (ctx->src_fmt.pixelformat) {
 	case V4L2_PIX_FMT_H264_SLICE:
 	case V4L2_PIX_FMT_HEVC_SLICE:
+	case V4L2_PIX_FMT_VC1_SLICE:
 		vq->subsystem_flags |=
 			VB2_V4L2_FL_SUPPORTS_M2M_HOLD_CAPTURE_BUF;
 		break;
@@ -482,6 +499,9 @@ static int cedrus_s_fmt_vid_out_p(struct cedrus_ctx *ctx,
 		break;
 	case V4L2_PIX_FMT_VP9_FRAME:
 		ctx->current_codec = &cedrus_dec_ops_vp9;
+		break;
+	case V4L2_PIX_FMT_VC1_SLICE:
+		ctx->current_codec = &cedrus_dec_ops_vc1;
 		break;
 	}
 
