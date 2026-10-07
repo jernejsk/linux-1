@@ -26,6 +26,15 @@
 #include "cedrus_regs.h"
 
 #define CEDRUS_ENTROPY_PROBS_SIZE 0x5400
+#define CEDRUS_VP8_ZERO_SIZE SZ_256K
+
+/*
+ * Decode without re-parsing the frame header through the hardware bool
+ * decoder, using the coder state from the uAPI (stateless-compliant).
+ * The zero buffer must be large: the VLD prefetches well past VLD_END.
+ */
+bool cedrus_vp8_nohdr;
+module_param_named(vp8_nohdr, cedrus_vp8_nohdr, bool, 0444);
 #define VP8_PROB_HALF 128
 #define QUANT_DELTA_COUNT 5
 
@@ -763,7 +772,72 @@ static int cedrus_vp8_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 		reg |= VE_VP8_PPS_PIC_TYPE_P_FRAME;
 	cedrus_write(dev, VE_VP8_PPS, reg);
 
-	cedrus_read_header(dev, slice);
+	if (cedrus_vp8_nohdr) {
+		u8 *va = vb2_plane_vaddr(src_buf, 0);
+		unsigned int q = header_size * 8 + slice->first_part_header_bits;
+		unsigned int r = slice->coder_state.range;
+		u8 v = slice->coder_state.value;
+		unsigned int i, p;
+
+		if (!va || !ctx->codec.vp8.zero_buf)
+			return -EINVAL;
+
+		/*
+		 * Let UPDATE_COEF load the coefficient probabilities from the
+		 * table: on all-zero input every update flag decodes as 0.
+		 */
+		cedrus_write(dev, VE_H264_VLD_LEN, vb2_plane_size(src_buf, 0) * 8);
+		cedrus_write(dev, VE_H264_VLD_OFFSET, 0);
+		cedrus_write(dev, VE_H264_VLD_END,
+			     ctx->codec.vp8.zero_buf_dma + CEDRUS_VP8_ZERO_SIZE);
+		cedrus_write(dev, VE_H264_VLD_ADDR,
+			     VE_H264_VLD_ADDR_VAL(ctx->codec.vp8.zero_buf_dma) |
+			     VE_H264_VLD_ADDR_FIRST | VE_H264_VLD_ADDR_VALID |
+			     VE_H264_VLD_ADDR_LAST);
+		cedrus_write(dev, VE_H264_TRIGGER_TYPE,
+			     VE_H264_TRIGGER_TYPE_INIT_SWDEC);
+		cedrus_write(dev, VE_H264_TRIGGER_TYPE,
+			     VE_H264_TRIGGER_TYPE_VP8_UPDATE_COEF);
+		cedrus_wait_for(dev, VE_H264_STATUS,
+				VE_H264_STATUS_VP8_UPPROB_BUSY);
+		cedrus_irq_clear(dev);
+
+		/*
+		 * Recreate the bool decoder state after the header: the
+		 * consumed bits before the macroblock data become the value
+		 * byte, INIT gives range 255, and one decision with the split
+		 * equal to the saved range (value < range, so it decodes 0)
+		 * brings the range down without renormalising.
+		 */
+		for (i = 0; i < 8; i++) {
+			unsigned int pos = q + i, sh = 7 - (pos & 7);
+
+			va[pos >> 3] = (va[pos >> 3] & ~BIT(sh)) |
+				       (((v >> (7 - i)) & 1) << sh);
+		}
+
+		cedrus_write(dev, VE_H264_VLD_LEN, vb2_plane_size(src_buf, 0) * 8);
+		cedrus_write(dev, VE_H264_VLD_OFFSET, q);
+		cedrus_write(dev, VE_H264_VLD_END,
+			     src_buf_addr + vb2_get_plane_payload(src_buf, 0));
+		cedrus_write(dev, VE_H264_VLD_ADDR,
+			     VE_H264_VLD_ADDR_VAL(src_buf_addr) |
+			     VE_H264_VLD_ADDR_FIRST | VE_H264_VLD_ADDR_VALID |
+			     VE_H264_VLD_ADDR_LAST);
+		cedrus_write(dev, VE_H264_TRIGGER_TYPE,
+			     VE_H264_TRIGGER_TYPE_INIT_SWDEC);
+
+		if (r != 255) {
+			for (p = 1; p < 256; p++)
+				if (1 + (((255 - 1) * p) >> 8) == r)
+					break;
+			if (p == 256)
+				return -EINVAL;
+			read_bits(dev, 1, p);
+		}
+	} else {
+		cedrus_read_header(dev, slice);
+	}
 
 	/* reset registers changed by HW */
 	cedrus_write(dev, VE_H264_CUR_MB_NUM, 0);
@@ -868,6 +942,14 @@ static int cedrus_vp8_start(struct cedrus_ctx *ctx)
 	 * no longer fit into the internal SRAM. The vendor library sizes the
 	 * deblocking buffer as 24 bytes per (32 aligned) column.
 	 */
+	if (cedrus_vp8_nohdr) {
+		ctx->codec.vp8.zero_buf =
+			dma_alloc_coherent(dev->dev, CEDRUS_VP8_ZERO_SIZE,
+					   &ctx->codec.vp8.zero_buf_dma, GFP_KERNEL);
+		if (ctx->codec.vp8.zero_buf)
+			memset(ctx->codec.vp8.zero_buf, 0, CEDRUS_VP8_ZERO_SIZE);
+	}
+
 	if (ctx->src_fmt.width > 2048) {
 		ctx->codec.vp8.deblk_buf_size =
 			ALIGN(ctx->src_fmt.width, 32) * 24;
@@ -913,6 +995,13 @@ static void cedrus_vp8_stop(struct cedrus_ctx *ctx)
 			  ctx->codec.vp8.entropy_probs_buf,
 			  ctx->codec.vp8.entropy_probs_buf_dma);
 
+	if (ctx->codec.vp8.zero_buf) {
+		dma_free_coherent(dev->dev, CEDRUS_VP8_ZERO_SIZE,
+				  ctx->codec.vp8.zero_buf,
+				  ctx->codec.vp8.zero_buf_dma);
+		ctx->codec.vp8.zero_buf = NULL;
+	}
+
 	if (ctx->codec.vp8.deblk_buf_size) {
 		dma_free_attrs(dev->dev, ctx->codec.vp8.deblk_buf_size,
 			       ctx->codec.vp8.deblk_buf,
@@ -930,6 +1019,7 @@ static void cedrus_vp8_stop(struct cedrus_ctx *ctx)
 static void cedrus_vp8_trigger(struct cedrus_ctx *ctx)
 {
 	struct cedrus_dev *dev = ctx->dev;
+
 
 	cedrus_write(dev, VE_H264_TRIGGER_TYPE,
 		     VE_H264_TRIGGER_TYPE_VP8_SLICE_DECODE);
