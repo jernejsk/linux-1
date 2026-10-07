@@ -770,12 +770,12 @@ static int cedrus_vp9_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 
 	/*
 	 * The HW predicts segment IDs from the map left in prob_tbl by
-	 * earlier frames. VP9 says the prediction is 0 after a key frame,
-	 * intra-only, error-resilient frame or size change, so clear it.
+	 * earlier frames. Like libvpx (vp9_setup_past_independence()), clear
+	 * it on key frames, intra-only and error-resilient frames, whether or
+	 * not they use segmentation, and when the frame size changes.
 	 */
-	if ((dec->seg.flags & V4L2_VP9_SEGMENTATION_FLAG_ENABLED) &&
-	    (intra_only || resolution_change || !vp9->last_valid ||
-	     (dec->flags & V4L2_VP9_FRAME_FLAG_ERROR_RESILIENT)))
+	if (intra_only || resolution_change || !vp9->last_valid ||
+	    (dec->flags & V4L2_VP9_FRAME_FLAG_ERROR_RESILIENT))
 		memset(vp9->prob_tbl + CEDRUS_VP9_SEGMAP_OFFSET, 0,
 		       CEDRUS_VP9_PROB_TBL_SIZE - CEDRUS_VP9_SEGMAP_OFFSET);
 
@@ -927,6 +927,17 @@ static int cedrus_vp9_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 		last_buf = vb2_find_buffer(cap_q, dec->last_frame_ts);
 		gold_buf = vb2_find_buffer(cap_q, dec->golden_frame_ts);
 		alt_buf  = vb2_find_buffer(cap_q, dec->alt_frame_ts);
+
+		/*
+		 * A missing reference would be programmed as address 0 and the
+		 * VE would fault reading it (seen when userspace reallocates
+		 * the CAPTURE queue on a resolution change).
+		 */
+		if (!last_buf || !gold_buf || !alt_buf) {
+			dev_warn_ratelimited(dev->dev,
+					     "VP9 reference frame not found\n");
+			return -EINVAL;
+		}
 
 		/*
 		 * Pick each reference's recorded dimensions so the hardware
