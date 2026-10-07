@@ -745,7 +745,8 @@ static const struct cedrus_variant sun8i_h3_cedrus_variant = {
 			  CEDRUS_CAPABILITY_MPEG2_DEC |
 			  CEDRUS_CAPABILITY_H264_DEC |
 			  CEDRUS_CAPABILITY_H265_DEC |
-			  CEDRUS_CAPABILITY_VP8_DEC,
+			  CEDRUS_CAPABILITY_VP8_DEC |
+			  CEDRUS_CAPABILITY_VC1_DEC,
 	.mod_rate	= 402000000,
 };
 
@@ -759,7 +760,8 @@ static const struct cedrus_variant sun8i_r40_cedrus_variant = {
 	.capabilities	= CEDRUS_CAPABILITY_UNTILED |
 			  CEDRUS_CAPABILITY_MPEG2_DEC |
 			  CEDRUS_CAPABILITY_H264_DEC |
-			  CEDRUS_CAPABILITY_VP8_DEC,
+			  CEDRUS_CAPABILITY_VP8_DEC |
+			  CEDRUS_CAPABILITY_VC1_DEC,
 	.mod_rate	= 297000000,
 };
 
@@ -776,7 +778,8 @@ static const struct cedrus_variant sun50i_a64_cedrus_variant = {
 			  CEDRUS_CAPABILITY_MPEG2_DEC |
 			  CEDRUS_CAPABILITY_H264_DEC |
 			  CEDRUS_CAPABILITY_H265_DEC |
-			  CEDRUS_CAPABILITY_VP8_DEC,
+			  CEDRUS_CAPABILITY_VP8_DEC |
+			  CEDRUS_CAPABILITY_VC1_DEC,
 	.mod_rate	= 402000000,
 };
 
@@ -785,7 +788,8 @@ static const struct cedrus_variant sun50i_h5_cedrus_variant = {
 			  CEDRUS_CAPABILITY_MPEG2_DEC |
 			  CEDRUS_CAPABILITY_H264_DEC |
 			  CEDRUS_CAPABILITY_H265_DEC |
-			  CEDRUS_CAPABILITY_VP8_DEC,
+			  CEDRUS_CAPABILITY_VP8_DEC |
+			  CEDRUS_CAPABILITY_VC1_DEC,
 	.mod_rate	= 402000000,
 };
 
@@ -795,7 +799,8 @@ static const struct cedrus_variant sun50i_h6_cedrus_variant = {
 			  CEDRUS_CAPABILITY_H264_DEC |
 			  CEDRUS_CAPABILITY_H265_DEC |
 			  CEDRUS_CAPABILITY_H265_10_DEC |
-			  CEDRUS_CAPABILITY_VP8_DEC,
+			  CEDRUS_CAPABILITY_VP8_DEC |
+			  CEDRUS_CAPABILITY_VC1_DEC,
 	.mod_rate	= 600000000,
 };
 
