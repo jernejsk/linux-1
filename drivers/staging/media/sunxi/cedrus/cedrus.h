@@ -271,6 +271,8 @@ struct cedrus_dev {
 	spinlock_t		sched_lock;
 	struct list_head	ctxs;
 	struct cedrus_ctx	*held_ctx;
+	struct cedrus_ctx	*yield_ctx;
+	bool			deferred;
 
 	struct delayed_work	watchdog_work;
 };
