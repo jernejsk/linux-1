@@ -18,7 +18,6 @@
 #include <linux/of_reserved_mem.h>
 #include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
-#include <linux/iommu.h>
 #include <linux/clk.h>
 #include <linux/pm_runtime.h>
 #include <linux/regmap.h>
@@ -238,7 +237,6 @@ static irqreturn_t cedrus_irq(int irq, void *data)
 
 void cedrus_watchdog(struct work_struct *work)
 {
-	struct iommu_domain *domain;
 	struct cedrus_dev *dev;
 	struct cedrus_ctx *ctx;
 
@@ -251,16 +249,8 @@ void cedrus_watchdog(struct work_struct *work)
 
 	v4l2_err(&dev->v4l2_dev, "frame processing timed out!\n");
 
-	/*
-	 * A VE that ran past its buffers keeps retrying the faulting
-	 * access, which leaves its IOMMU master stalled. Hold the VE in
-	 * reset while the IOMMU flush recovers the master.
-	 */
-	reset_control_assert(dev->rstc);
-	domain = iommu_get_domain_for_dev(dev->dev);
-	if (domain)
-		iommu_flush_iotlb_all(domain);
-	reset_control_deassert(dev->rstc);
+
+	reset_control_reset(dev->rstc);
 	v4l2_m2m_buf_done_and_job_finish(ctx->dev->m2m_dev, ctx->fh.m2m_ctx,
 					 VB2_BUF_STATE_ERROR);
 }
