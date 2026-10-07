@@ -66,6 +66,16 @@ ISO 13818-2
 
 :author:    International Telecommunication Union (http://www.itu.ch), International Organisation for Standardisation (http://www.iso.ch)
 
+.. _vc1:
+
+SMPTE 421M
+==========
+
+
+:title:     SMPTE 421M-2006 "Television --- VC-1 Compressed Video Bitstream Format and Decoding Process"
+
+:author:    Society of Motion Picture and Television Engineers (http://www.smpte.org)
+
 .. _itu470:
 
 ITU BT.470
