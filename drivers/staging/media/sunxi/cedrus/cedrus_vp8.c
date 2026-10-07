@@ -574,36 +574,6 @@ static void cedrus_vp8_vld_at(struct cedrus_dev *dev, dma_addr_t addr,
 	cedrus_write(dev, VE_H264_TRIGGER_TYPE, VE_H264_TRIGGER_TYPE_INIT_SWDEC);
 }
 
-/* Is the raw byte at @bitpos >= @t? (fresh INIT: range 255, value = byte) */
-static bool cedrus_vp8_byte_ge(struct cedrus_dev *dev, dma_addr_t addr,
-			       unsigned long len, unsigned int bitpos,
-			       unsigned int t)
-{
-	cedrus_vp8_vld_at(dev, addr, len, bitpos);
-	return read_bits(dev, 1, cedrus_vp8_prob_for(255, t));
-}
-
-/* Measure the raw byte at @bitpos with bool decoder decisions only. */
-static unsigned int cedrus_vp8_raw_byte(struct cedrus_dev *dev, dma_addr_t addr,
-				       unsigned long len, unsigned int bitpos)
-{
-	unsigned int lo = 0, hi = 254;	/* answer in [lo, hi] (254 = 254 or 255) */
-
-	while (lo < hi) {
-		unsigned int mid = (lo + hi + 1) / 2;
-
-		if (cedrus_vp8_byte_ge(dev, addr, len, bitpos, mid))
-			lo = mid;
-		else
-			hi = mid - 1;
-	}
-	/* 254 vs 255: bits 6..0 of the byte lead the byte one bit later */
-	if (lo == 254 && cedrus_vp8_byte_ge(dev, addr, len, bitpos + 1, 254))
-		lo = 255;
-
-	return lo;
-}
-
 /*
  * Find decisions which, decoded from INIT at bit q - k, leave the decoder
  * at bit q with range @r and value @v. @raw holds bits [q - k, q + 8).
@@ -943,8 +913,9 @@ static int cedrus_vp8_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	if (cedrus_vp8_nohdr == 2) {
 		unsigned int q = header_size * 8 + slice->first_part_header_bits;
 		unsigned long len = vb2_plane_size(src_buf, 0);
-		u64 raw = 0;
-		int k = -1, n = -1, i;
+		unsigned int start;
+		u64 raw;
+		int k, n = -1, i;
 		u8 probs[8];
 
 		if (!ctx->codec.vp8.zero_buf)
@@ -959,21 +930,25 @@ static int cedrus_vp8_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 				VE_H264_STATUS_VP8_UPPROB_BUSY);
 		cedrus_irq_clear(dev);
 
-		/* raw bits [q - 8j, q + 8), measured one byte at a time */
-		for (i = 0; i < 4 && n < 0; i++) {
-			unsigned int kk, from = i ? 8 * (i - 1) + 1 : 0;
+		/*
+		 * Raw bits [q - 24, q + 8) in one read: the VLD's show_bits
+		 * works with the engine in H.264 mode (it returns 0 in VP8 mode).
+		 */
+		start = q >= 24 ? q - 24 : 0;
+		cedrus_write(dev, VE_H264_CTRL, 0);
+		cedrus_vp8_vld_at(dev, src_buf_addr, len, start);
+		cedrus_write(dev, VE_H264_TRIGGER_TYPE,
+			     VE_H264_TRIGGER_TYPE_SHOW_BITS |
+			     VE_H264_TRIGGER_TYPE_N_BITS(q + 8 - start));
+		cedrus_wait_for(dev, VE_H264_STATUS, VE_H264_STATUS_VLD_BUSY);
+		raw = cedrus_read(dev, VE_H264_BASIC_BITS);
+		cedrus_write(dev, VE_H264_CTRL, VE_H264_CTRL_VP8);
 
-			if (q < 8 * i)
-				break;
-			raw |= (u64)cedrus_vp8_raw_byte(dev, src_buf_addr, len,
-							q - 8 * i) << (8 * i);
-			for (kk = from; kk <= 8 * i && n < 0; kk++) {
-				n = cedrus_vp8_plan(raw & GENMASK_ULL(kk + 7, 0), kk,
-						    slice->coder_state.range,
-						    slice->coder_state.value, probs);
-				k = kk;
-			}
-		}
+		for (k = 0; k <= q - start && n < 0; k++)
+			n = cedrus_vp8_plan(raw & GENMASK_ULL(k + 7, 0), k,
+					    slice->coder_state.range,
+					    slice->coder_state.value, probs);
+		k--;
 		if (n < 0)
 			return -EINVAL;
 
