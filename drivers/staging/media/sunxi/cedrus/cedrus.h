@@ -180,6 +180,8 @@ struct cedrus_ctx {
 			u8		*entropy_probs_buf;
 			dma_addr_t	entropy_probs_buf_dma;
 
+			void		*zero_buf;
+			dma_addr_t	zero_buf_dma;
 			void		*deblk_buf;
 			dma_addr_t	deblk_buf_dma;
 			ssize_t		deblk_buf_size;
@@ -453,5 +455,6 @@ bool cedrus_ctrl_in_request(struct cedrus_ctx *ctx, struct media_request *req,
 u32 cedrus_get_num_of_controls(struct cedrus_ctx *ctx, u32 id);
 
 extern int cedrus_mvcol_live;
+extern bool cedrus_vp8_nohdr;
 
 #endif
