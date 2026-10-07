@@ -481,6 +481,6 @@ bool cedrus_ctrl_in_request(struct cedrus_ctx *ctx, struct media_request *req,
 			    u32 id);
 u32 cedrus_get_num_of_controls(struct cedrus_ctx *ctx, u32 id);
 
-extern bool cedrus_vp8_nohdr;
+extern unsigned int cedrus_vp8_nohdr;
 
 #endif

@@ -711,7 +711,7 @@ int cedrus_queue_init(void *priv, struct vb2_queue *src_vq,
 
 	src_vq->type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
 	src_vq->io_modes = VB2_MMAP | VB2_DMABUF;
-	src_vq->dma_attrs = cedrus_vp8_nohdr ? 0 : DMA_ATTR_NO_KERNEL_MAPPING;
+	src_vq->dma_attrs = cedrus_vp8_nohdr == 1 ? 0 : DMA_ATTR_NO_KERNEL_MAPPING;
 	src_vq->drv_priv = ctx;
 	src_vq->buf_struct_size = sizeof(struct cedrus_buffer);
 	src_vq->ops = &cedrus_qops;
