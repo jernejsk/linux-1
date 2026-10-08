@@ -221,8 +221,22 @@ static irqreturn_t cedrus_irq(int irq, void *data)
 	if (status == CEDRUS_IRQ_NONE)
 		return IRQ_NONE;
 
-	ctx->current_codec->irq_disable(ctx);
-	ctx->current_codec->irq_clear(ctx);
+	/*
+	 * Codecs whose hardware decodes a picture in several runs, like the
+	 * video packets of MPEG-4, start the next run of the same job here.
+	 */
+	if (ctx->current_codec->trigger_next) {
+		ctx->current_codec->irq_clear(ctx);
+		if (ctx->current_codec->trigger_next(ctx, &status)) {
+			schedule_delayed_work(&dev->watchdog_work,
+					      msecs_to_jiffies(CEDRUS_WATCHDOG_TIMEOUT_MS));
+			return IRQ_HANDLED;
+		}
+		ctx->current_codec->irq_disable(ctx);
+	} else {
+		ctx->current_codec->irq_disable(ctx);
+		ctx->current_codec->irq_clear(ctx);
+	}
 
 	if (status == CEDRUS_IRQ_ERROR)
 		state = VB2_BUF_STATE_ERROR;

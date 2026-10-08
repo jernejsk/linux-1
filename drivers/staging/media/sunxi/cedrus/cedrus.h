@@ -227,9 +227,13 @@ struct cedrus_dec_ops {
 	void (*stop)(struct cedrus_ctx *ctx);
 	void (*buf_cleanup)(struct cedrus_ctx *ctx, struct cedrus_buffer *buf);
 	void (*trigger)(struct cedrus_ctx *ctx);
+	bool (*trigger_next)(struct cedrus_ctx *ctx,
+			     enum cedrus_irq_status *status);
 	unsigned int (*extra_cap_size)(struct cedrus_ctx *ctx,
 				       struct v4l2_pix_format *pix_fmt);
 };
+
+#define CEDRUS_WATCHDOG_TIMEOUT_MS	2000
 
 struct cedrus_variant {
 	unsigned int	capabilities;

@@ -137,7 +137,7 @@ void cedrus_device_run(void *priv)
 	if (!error) {
 		/* Start the watchdog timer. */
 		schedule_delayed_work(&dev->watchdog_work,
-				      msecs_to_jiffies(2000));
+				      msecs_to_jiffies(CEDRUS_WATCHDOG_TIMEOUT_MS));
 
 		ctx->current_codec->trigger(ctx);
 	} else {
