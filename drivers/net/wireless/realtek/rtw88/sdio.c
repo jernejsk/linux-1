@@ -1332,8 +1332,6 @@ static void rtw_sdio_rx_skb(struct rtw_dev *rtwdev, struct sk_buff *skb,
 			    u32 pkt_offset, struct rtw_rx_pkt_stat *pkt_stat,
 			    struct ieee80211_rx_status *rx_status)
 {
-	*IEEE80211_SKB_RXCB(skb) = *rx_status;
-
 	if (pkt_stat->is_c2h) {
 		skb_put(skb, pkt_stat->pkt_len + pkt_offset);
 		rtw_fw_c2h_cmd_rx_irqsafe(rtwdev, pkt_offset, skb);
@@ -1346,6 +1344,7 @@ static void rtw_sdio_rx_skb(struct rtw_dev *rtwdev, struct sk_buff *skb,
 	rtw_update_rx_freq_for_invalid(rtwdev, skb, rx_status, pkt_stat);
 	rtw_rx_stats(rtwdev, pkt_stat->vif, skb);
 
+	*IEEE80211_SKB_RXCB(skb) = *rx_status;
 	ieee80211_rx_irqsafe(rtwdev->hw, skb);
 }
 
