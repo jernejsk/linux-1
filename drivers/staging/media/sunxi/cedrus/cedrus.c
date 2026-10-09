@@ -189,6 +189,47 @@ static int cedrus_try_ctrl(struct v4l2_ctrl *ctrl)
 		if (pic->pqindex > 31)
 			/* PQINDEX is a 5-bit field */
 			return -EINVAL;
+	} else if (ctrl->id == V4L2_CID_STATELESS_MPEG4_VOL) {
+		const struct v4l2_ctrl_mpeg4_vol *vol = ctrl->p_new.p_mpeg4_vol;
+		struct cedrus_ctx *ctx = container_of(ctrl->handler,
+						      struct cedrus_ctx, hdl);
+
+		/* The engine has no data partitioning (nor RVLC) mode. */
+		if (vol->flags & V4L2_MPEG4_VOL_FLAG_DATA_PARTITIONED)
+			return -EINVAL;
+
+		if (vol->video_object_layer_width > CEDRUS_MPEG4_MAX_WIDTH ||
+		    cedrus_check_pic_size(ctx, vol->video_object_layer_width,
+					  vol->video_object_layer_height))
+			return -EINVAL;
+	} else if (ctrl->id == V4L2_CID_STATELESS_MPEG4_VOP) {
+		const struct v4l2_ctrl_mpeg4_vop *vop = ctrl->p_new.p_mpeg4_vop;
+
+		/* Widths of the temporal distance registers. */
+		if (vop->trd > 0xffff || vop->trd_field > 0xff ||
+		    vop->trb_field > 0xff)
+			return -EINVAL;
+	} else if (ctrl->id == V4L2_CID_STATELESS_H263_PICTURE) {
+		const struct v4l2_ctrl_h263_picture *pic =
+			ctrl->p_new.p_h263_picture;
+		struct cedrus_ctx *ctx = container_of(ctrl->handler,
+						      struct cedrus_ctx, hdl);
+
+		if (pic->flags & ~CEDRUS_H263_SUPPORTED_FLAGS)
+			return -EINVAL;
+
+		/* Only the motion vector coding of the H.263 version 1 UMV. */
+		if ((pic->flags & V4L2_H263_PICTURE_FLAG_PLUSPTYPE) &&
+		    (pic->flags & V4L2_H263_PICTURE_FLAG_UMV))
+			return -EINVAL;
+
+		if (pic->spk_version &&
+		    ctx->src_fmt.pixelformat != V4L2_PIX_FMT_SPK_SLICE)
+			return -EINVAL;
+
+		if (pic->width > CEDRUS_MPEG4_MAX_WIDTH ||
+		    cedrus_check_pic_size(ctx, pic->width, pic->height))
+			return -EINVAL;
 	}
 
 	return 0;
@@ -409,6 +450,63 @@ static const struct cedrus_control cedrus_controls[] = {
 			.def	= V4L2_MPEG_VIDEO_VC1_PROFILE_ADVANCED,
 		},
 		.capabilities	= CEDRUS_CAPABILITY_VC1_DEC,
+	},
+	{
+		.cfg = {
+			.id	= V4L2_CID_STATELESS_MPEG4_VOL,
+			.ops	= &cedrus_ctrl_ops,
+		},
+		.capabilities	= CEDRUS_CAPABILITY_MPEG4_DEC,
+	},
+	{
+		.cfg = {
+			.id	= V4L2_CID_STATELESS_MPEG4_VOP,
+			.ops	= &cedrus_ctrl_ops,
+		},
+		.capabilities	= CEDRUS_CAPABILITY_MPEG4_DEC,
+	},
+	{
+		.cfg = {
+			.id	= V4L2_CID_STATELESS_MPEG4_QUANTISATION,
+		},
+		.capabilities	= CEDRUS_CAPABILITY_MPEG4_DEC,
+	},
+	{
+		.cfg = {
+			.id	= V4L2_CID_STATELESS_MPEG4_SLICE_PARAMS,
+			.dims	= { CEDRUS_MPEG4_MAX_SLICES },
+		},
+		.capabilities	= CEDRUS_CAPABILITY_MPEG4_DEC,
+	},
+	{
+		.cfg = {
+			.id	= V4L2_CID_STATELESS_MPEG4_QUIRKS,
+			.max	= CEDRUS_MPEG4_SUPPORTED_QUIRKS,
+		},
+		.capabilities	= CEDRUS_CAPABILITY_MPEG4_DEC,
+	},
+	{
+		.cfg = {
+			.id	= V4L2_CID_MPEG_VIDEO_MPEG4_PROFILE,
+			.min	= V4L2_MPEG_VIDEO_MPEG4_PROFILE_SIMPLE,
+			.max	= V4L2_MPEG_VIDEO_MPEG4_PROFILE_ADVANCED_SIMPLE,
+			.def	= V4L2_MPEG_VIDEO_MPEG4_PROFILE_ADVANCED_SIMPLE,
+		},
+		.capabilities	= CEDRUS_CAPABILITY_MPEG4_DEC,
+	},
+	{
+		.cfg = {
+			.id	= V4L2_CID_STATELESS_H263_PICTURE,
+			.ops	= &cedrus_ctrl_ops,
+		},
+		.capabilities	= CEDRUS_CAPABILITY_MPEG4_DEC,
+	},
+	{
+		.cfg = {
+			.id	= V4L2_CID_STATELESS_H263_SLICE_PARAMS,
+			.dims	= { CEDRUS_MPEG4_MAX_SLICES },
+		},
+		.capabilities	= CEDRUS_CAPABILITY_MPEG4_DEC,
 	},
 };
 

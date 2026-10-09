@@ -115,6 +115,37 @@ void cedrus_device_run(void *priv)
 		}
 		break;
 
+	case V4L2_PIX_FMT_MPEG4_SLICE:
+		run.mpeg4.vol = cedrus_find_control_data(ctx,
+			V4L2_CID_STATELESS_MPEG4_VOL);
+		run.mpeg4.vop = cedrus_find_control_data(ctx,
+			V4L2_CID_STATELESS_MPEG4_VOP);
+		run.mpeg4.quantisation = cedrus_find_control_data(ctx,
+			V4L2_CID_STATELESS_MPEG4_QUANTISATION);
+		run.mpeg4.quirks = *(u32 *)cedrus_find_control_data(ctx,
+			V4L2_CID_STATELESS_MPEG4_QUIRKS);
+		if (cedrus_ctrl_in_request(ctx, src_req,
+					   V4L2_CID_STATELESS_MPEG4_SLICE_PARAMS)) {
+			run.mpeg4.slices = cedrus_find_control_data(ctx,
+				V4L2_CID_STATELESS_MPEG4_SLICE_PARAMS);
+			run.mpeg4.num_slices = cedrus_get_num_of_controls(ctx,
+				V4L2_CID_STATELESS_MPEG4_SLICE_PARAMS);
+		}
+		break;
+
+	case V4L2_PIX_FMT_H263_SLICE:
+	case V4L2_PIX_FMT_SPK_SLICE:
+		run.mpeg4.h263_picture = cedrus_find_control_data(ctx,
+			V4L2_CID_STATELESS_H263_PICTURE);
+		if (cedrus_ctrl_in_request(ctx, src_req,
+					   V4L2_CID_STATELESS_H263_SLICE_PARAMS)) {
+			run.mpeg4.h263_slices = cedrus_find_control_data(ctx,
+				V4L2_CID_STATELESS_H263_SLICE_PARAMS);
+			run.mpeg4.num_slices = cedrus_get_num_of_controls(ctx,
+				V4L2_CID_STATELESS_H263_SLICE_PARAMS);
+		}
+		break;
+
 	default:
 		break;
 	}

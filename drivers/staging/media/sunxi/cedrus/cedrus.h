@@ -36,8 +36,22 @@
 #define CEDRUS_CAPABILITY_H265_10_DEC	BIT(5)
 #define CEDRUS_CAPABILITY_VP9_DEC	BIT(6)
 #define CEDRUS_CAPABILITY_VC1_DEC	BIT(7)
+#define CEDRUS_CAPABILITY_MPEG4_DEC	BIT(8)
 
 #define CEDRUS_VC1_MIN_WIDTH		128
+
+/* The engine counts macroblock columns in 8 bits. */
+#define CEDRUS_MPEG4_MAX_WIDTH		4080
+/* One segment per macroblock of a 1080p picture, at worst. */
+#define CEDRUS_MPEG4_MAX_SLICES		8192
+#define CEDRUS_MPEG4_SUPPORTED_QUIRKS \
+	(V4L2_MPEG4_QUIRK_EDGE_EXACT_SIZE | V4L2_MPEG4_QUIRK_QPEL_CHROMA | \
+	 V4L2_MPEG4_QUIRK_QPEL_CHROMA2 | V4L2_MPEG4_QUIRK_FIELD_HPEL_CHROMA | \
+	 V4L2_MPEG4_QUIRK_GMC_UNSCALED_REF)
+#define CEDRUS_H263_SUPPORTED_FLAGS \
+	(V4L2_H263_PICTURE_FLAG_ROUNDING_TYPE | \
+	 V4L2_H263_PICTURE_FLAG_PLUSPTYPE | V4L2_H263_PICTURE_FLAG_UMV | \
+	 V4L2_H263_PICTURE_FLAG_SS)
 
 /*
  * The VP9 decoder takes its reconstruction addresses in 1 KiB units, so
@@ -107,6 +121,17 @@ struct cedrus_vc1_run {
 	unsigned int					num_slices;
 };
 
+struct cedrus_mpeg4_run {
+	const struct v4l2_ctrl_mpeg4_vol		*vol;
+	const struct v4l2_ctrl_mpeg4_vop		*vop;
+	const struct v4l2_ctrl_mpeg4_quantisation	*quantisation;
+	const struct v4l2_ctrl_mpeg4_slice_params	*slices;
+	const struct v4l2_ctrl_h263_picture		*h263_picture;
+	const struct v4l2_ctrl_h263_slice_params	*h263_slices;
+	unsigned int					num_slices;
+	u32						quirks;
+};
+
 struct cedrus_run {
 	struct vb2_v4l2_buffer	*src;
 	struct vb2_v4l2_buffer	*dst;
@@ -118,10 +143,12 @@ struct cedrus_run {
 		struct cedrus_vp8_run	vp8;
 		struct cedrus_vp9_run	vp9;
 		struct cedrus_vc1_run	vc1;
+		struct cedrus_mpeg4_run	mpeg4;
 	};
 };
 
 struct cedrus_vp9_ctx;
+struct cedrus_mpeg4_ctx;
 
 struct cedrus_buffer {
 	struct v4l2_m2m_buffer          m2m_buf;
@@ -144,6 +171,11 @@ struct cedrus_buffer {
 			u32		height;
 			u8		bit_depth;
 		} vp9;
+		struct {
+			void		*aux_buf;
+			dma_addr_t	aux_buf_dma;
+			size_t		aux_buf_size;
+		} mpeg4;
 	} codec;
 };
 
@@ -200,6 +232,7 @@ struct cedrus_ctx {
 			ssize_t		intra_pred_buf_size;
 		} vp8;
 		struct cedrus_vp9_ctx	*vp9;
+		struct cedrus_mpeg4_ctx	*mpeg4;
 		struct {
 			void		*aux_buf;
 			dma_addr_t	aux_buf_addr;
@@ -273,6 +306,7 @@ extern struct cedrus_dec_ops cedrus_dec_ops_h265;
 extern struct cedrus_dec_ops cedrus_dec_ops_vp8;
 extern struct cedrus_dec_ops cedrus_dec_ops_vp9;
 extern struct cedrus_dec_ops cedrus_dec_ops_vc1;
+extern struct cedrus_dec_ops cedrus_dec_ops_mpeg4;
 
 static inline void cedrus_write(struct cedrus_dev *dev, u32 reg, u32 val)
 {
