@@ -101,6 +101,29 @@ static const u8 mpeg2_intra_quant_matrix[64] = {
 	46, 46, 56, 56, 58, 69, 69, 83
 };
 
+/* Default MPEG-4 Part 2 quantisation matrices, in zigzag order */
+static const u8 mpeg4_intra_quant_matrix[64] = {
+	 8, 17, 17, 20, 18, 18, 19, 19,
+	21, 21, 22, 22, 22, 21, 21, 23,
+	23, 23, 23, 23, 23, 25, 24, 24,
+	24, 24, 25, 25, 27, 27, 26, 26,
+	26, 26, 26, 27, 28, 28, 28, 28,
+	28, 28, 28, 30, 30, 30, 30, 30,
+	30, 32, 32, 32, 32, 32, 35, 35,
+	35, 35, 38, 38, 38, 41, 41, 45,
+};
+
+static const u8 mpeg4_non_intra_quant_matrix[64] = {
+	16, 17, 17, 18, 18, 18, 19, 19,
+	19, 19, 20, 20, 20, 20, 20, 21,
+	21, 21, 21, 21, 21, 22, 22, 22,
+	22, 22, 22, 22, 23, 23, 23, 23,
+	23, 23, 23, 23, 24, 24, 24, 25,
+	24, 24, 24, 25, 26, 26, 26, 26,
+	25, 27, 27, 27, 27, 27, 28, 28,
+	28, 28, 30, 30, 30, 31, 31, 33,
+};
+
 static void std_init_compound(const struct v4l2_ctrl *ctrl, u32 idx,
 			      union v4l2_ctrl_ptr ptr)
 {
@@ -113,6 +136,12 @@ static void std_init_compound(const struct v4l2_ctrl *ctrl, u32 idx,
 	struct v4l2_ctrl_h264_scaling_matrix *p_h264_scaling_matrix;
 	struct v4l2_ctrl_av1_sequence *p_av1_sequence;
 	struct v4l2_ctrl_vc1_sequence *p_vc1_sequence;
+	struct v4l2_ctrl_mpeg4_vol *p_mpeg4_vol;
+	struct v4l2_ctrl_mpeg4_vop *p_mpeg4_vop;
+	struct v4l2_ctrl_mpeg4_slice_params *p_mpeg4_slice;
+	struct v4l2_ctrl_mpeg4_quantisation *p_mpeg4_quant;
+	struct v4l2_ctrl_h263_picture *p_h263_picture;
+	struct v4l2_ctrl_h263_slice_params *p_h263_slice;
 	void *p = ptr.p + idx * ctrl->elem_size;
 
 	if (ctrl->p_def.p_const)
@@ -174,6 +203,48 @@ static void std_init_compound(const struct v4l2_ctrl *ctrl, u32 idx,
 
 		/* 4:2:0 */
 		p_vc1_sequence->colordiff_format = 1;
+		break;
+	case V4L2_CTRL_TYPE_MPEG4_VOL:
+		p_mpeg4_vol = p;
+
+		/* QCIF, the smallest standard picture size */
+		p_mpeg4_vol->video_object_layer_width = 176;
+		p_mpeg4_vol->video_object_layer_height = 144;
+		p_mpeg4_vol->vop_time_increment_resolution = 30000;
+		break;
+	case V4L2_CTRL_TYPE_MPEG4_VOP:
+		p_mpeg4_vop = p;
+
+		p_mpeg4_vop->vop_quant = 1;
+		p_mpeg4_vop->vop_fcode_forward = 1;
+		p_mpeg4_vop->vop_fcode_backward = 1;
+		break;
+	case V4L2_CTRL_TYPE_MPEG4_QUANTISATION:
+		p_mpeg4_quant = p;
+
+		memcpy(p_mpeg4_quant->intra_quantiser_matrix,
+		       mpeg4_intra_quant_matrix,
+		       ARRAY_SIZE(mpeg4_intra_quant_matrix));
+		memcpy(p_mpeg4_quant->non_intra_quantiser_matrix,
+		       mpeg4_non_intra_quant_matrix,
+		       ARRAY_SIZE(mpeg4_non_intra_quant_matrix));
+		break;
+	case V4L2_CTRL_TYPE_MPEG4_SLICE_PARAMS:
+		p_mpeg4_slice = p;
+
+		p_mpeg4_slice->quant_scale = 1;
+		break;
+	case V4L2_CTRL_TYPE_H263_PICTURE:
+		p_h263_picture = p;
+
+		p_h263_picture->width = 176;
+		p_h263_picture->height = 144;
+		p_h263_picture->pquant = 1;
+		break;
+	case V4L2_CTRL_TYPE_H263_SLICE_PARAMS:
+		p_h263_slice = p;
+
+		p_h263_slice->quant_scale = 1;
 		break;
 	case V4L2_CTRL_TYPE_FWHT_PARAMS:
 		p_fwht_params = p;
@@ -469,6 +540,24 @@ void v4l2_ctrl_type_op_log(const struct v4l2_ctrl *ctrl)
 		break;
 	case V4L2_CTRL_TYPE_VC1_SLICE_PARAMS:
 		pr_cont("VC1_SLICE_PARAMS");
+		break;
+	case V4L2_CTRL_TYPE_MPEG4_VOL:
+		pr_cont("MPEG4_VOL");
+		break;
+	case V4L2_CTRL_TYPE_MPEG4_VOP:
+		pr_cont("MPEG4_VOP");
+		break;
+	case V4L2_CTRL_TYPE_MPEG4_QUANTISATION:
+		pr_cont("MPEG4_QUANTISATION");
+		break;
+	case V4L2_CTRL_TYPE_MPEG4_SLICE_PARAMS:
+		pr_cont("MPEG4_SLICE_PARAMS");
+		break;
+	case V4L2_CTRL_TYPE_H263_PICTURE:
+		pr_cont("H263_PICTURE");
+		break;
+	case V4L2_CTRL_TYPE_H263_SLICE_PARAMS:
+		pr_cont("H263_SLICE_PARAMS");
 		break;
 	case V4L2_CTRL_TYPE_RECT:
 		pr_cont("(%d,%d)/%ux%u",
@@ -1169,6 +1258,131 @@ validate_vc1_slice_params(struct v4l2_ctrl_vc1_slice_params *slice)
 	return 0;
 }
 
+static int validate_mpeg4_vol(struct v4l2_ctrl_mpeg4_vol *vol)
+{
+	if (vol->flags & ~(V4L2_MPEG4_VOL_FLAG_INTERLACED |
+			   V4L2_MPEG4_VOL_FLAG_QUANT_TYPE |
+			   V4L2_MPEG4_VOL_FLAG_QUARTER_SAMPLE |
+			   V4L2_MPEG4_VOL_FLAG_RESYNC_MARKER_DISABLE |
+			   V4L2_MPEG4_VOL_FLAG_DATA_PARTITIONED |
+			   V4L2_MPEG4_VOL_FLAG_REVERSIBLE_VLC))
+		return -EINVAL;
+
+	/* Reversible VLCs are only used with data partitioning. */
+	if ((vol->flags & V4L2_MPEG4_VOL_FLAG_REVERSIBLE_VLC) &&
+	    !(vol->flags & V4L2_MPEG4_VOL_FLAG_DATA_PARTITIONED))
+		return -EINVAL;
+
+	switch (vol->sprite_enable) {
+	case V4L2_MPEG4_SPRITE_ENABLE_NONE:
+		if (vol->no_of_sprite_warping_points ||
+		    vol->sprite_warping_accuracy)
+			return -EINVAL;
+		break;
+	case V4L2_MPEG4_SPRITE_ENABLE_GMC:
+		if (vol->no_of_sprite_warping_points >
+		    V4L2_MPEG4_MAX_GMC_WARPING_POINTS ||
+		    vol->sprite_warping_accuracy > 3)
+			return -EINVAL;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	if (!vol->video_object_layer_width || !vol->video_object_layer_height)
+		return -EINVAL;
+
+	zero_reserved(*vol);
+
+	return 0;
+}
+
+static int validate_mpeg4_vop(struct v4l2_ctrl_mpeg4_vop *vop)
+{
+	if (vop->vop_coding_type > V4L2_MPEG4_VOP_CODING_TYPE_S)
+		return -EINVAL;
+
+	if (vop->flags & ~(V4L2_MPEG4_VOP_FLAG_ROUNDING_TYPE |
+			   V4L2_MPEG4_VOP_FLAG_TOP_FIELD_FIRST |
+			   V4L2_MPEG4_VOP_FLAG_ALTERNATE_VERTICAL_SCAN))
+		return -EINVAL;
+
+	if (vop->vop_quant < 1 || vop->vop_quant > 31 ||
+	    vop->intra_dc_vlc_thr > 7 ||
+	    vop->vop_fcode_forward < 1 || vop->vop_fcode_forward > 7 ||
+	    vop->vop_fcode_backward < 1 || vop->vop_fcode_backward > 7)
+		return -EINVAL;
+
+	/* A B-VOP is never a reference. */
+	if (vop->backward_ref_vop_coding_type == V4L2_MPEG4_VOP_CODING_TYPE_B ||
+	    vop->backward_ref_vop_coding_type > V4L2_MPEG4_VOP_CODING_TYPE_S)
+		return -EINVAL;
+
+	if (vop->vop_coding_type == V4L2_MPEG4_VOP_CODING_TYPE_B &&
+	    (!vop->trd || vop->trb >= vop->trd))
+		return -EINVAL;
+
+	zero_reserved(*vop);
+
+	return 0;
+}
+
+static int validate_mpeg4_slice_params(struct v4l2_ctrl_mpeg4_slice_params *slice)
+{
+	if (slice->quant_scale < 1 || slice->quant_scale > 31)
+		return -EINVAL;
+
+	zero_reserved(*slice);
+
+	return 0;
+}
+
+static int validate_h263_picture(struct v4l2_ctrl_h263_picture *pic)
+{
+	if (pic->picture_coding_type > V4L2_H263_PICTURE_CODING_TYPE_P)
+		return -EINVAL;
+
+	if (pic->flags & ~(V4L2_H263_PICTURE_FLAG_ROUNDING_TYPE |
+			   V4L2_H263_PICTURE_FLAG_PLUSPTYPE |
+			   V4L2_H263_PICTURE_FLAG_UMV |
+			   V4L2_H263_PICTURE_FLAG_SAC |
+			   V4L2_H263_PICTURE_FLAG_AP |
+			   V4L2_H263_PICTURE_FLAG_AIC |
+			   V4L2_H263_PICTURE_FLAG_DF |
+			   V4L2_H263_PICTURE_FLAG_SS |
+			   V4L2_H263_PICTURE_FLAG_SS_RECTANGULAR |
+			   V4L2_H263_PICTURE_FLAG_SS_ARBITRARY |
+			   V4L2_H263_PICTURE_FLAG_ISD |
+			   V4L2_H263_PICTURE_FLAG_AIV |
+			   V4L2_H263_PICTURE_FLAG_MQ |
+			   V4L2_H263_PICTURE_FLAG_RRU))
+		return -EINVAL;
+
+	/* The slice structured submodes need Annex K. */
+	if ((pic->flags & (V4L2_H263_PICTURE_FLAG_SS_RECTANGULAR |
+			   V4L2_H263_PICTURE_FLAG_SS_ARBITRARY)) &&
+	    !(pic->flags & V4L2_H263_PICTURE_FLAG_SS))
+		return -EINVAL;
+
+	if (pic->pquant < 1 || pic->pquant > 31 || pic->spk_version > 1 ||
+	    !pic->width || !pic->height)
+		return -EINVAL;
+
+	zero_reserved(*pic);
+
+	return 0;
+}
+
+static int validate_h263_slice_params(struct v4l2_ctrl_h263_slice_params *slice)
+{
+	if (slice->quant_scale < 1 || slice->quant_scale > 31)
+		return -EINVAL;
+
+	zero_reserved(*slice);
+
+	return 0;
+}
+
 /*
  * Compound controls validation requires setting unused fields/flags to zero
  * in order to properly detect unchanged controls with v4l2_ctrl_type_op_equal's
@@ -1582,6 +1796,19 @@ static int std_validate_compound(const struct v4l2_ctrl *ctrl, u32 idx,
 		break;
 	case V4L2_CTRL_TYPE_VC1_SLICE_PARAMS:
 		return validate_vc1_slice_params(p);
+
+	case V4L2_CTRL_TYPE_MPEG4_VOL:
+		return validate_mpeg4_vol(p);
+	case V4L2_CTRL_TYPE_MPEG4_VOP:
+		return validate_mpeg4_vop(p);
+	case V4L2_CTRL_TYPE_MPEG4_QUANTISATION:
+		break;
+	case V4L2_CTRL_TYPE_MPEG4_SLICE_PARAMS:
+		return validate_mpeg4_slice_params(p);
+	case V4L2_CTRL_TYPE_H263_PICTURE:
+		return validate_h263_picture(p);
+	case V4L2_CTRL_TYPE_H263_SLICE_PARAMS:
+		return validate_h263_slice_params(p);
 
 	case V4L2_CTRL_TYPE_AREA:
 		area = p;
@@ -2320,6 +2547,24 @@ static struct v4l2_ctrl *v4l2_ctrl_new(struct v4l2_ctrl_handler *hdl,
 		break;
 	case V4L2_CTRL_TYPE_VC1_SLICE_PARAMS:
 		elem_size = sizeof(struct v4l2_ctrl_vc1_slice_params);
+		break;
+	case V4L2_CTRL_TYPE_MPEG4_VOL:
+		elem_size = sizeof(struct v4l2_ctrl_mpeg4_vol);
+		break;
+	case V4L2_CTRL_TYPE_MPEG4_VOP:
+		elem_size = sizeof(struct v4l2_ctrl_mpeg4_vop);
+		break;
+	case V4L2_CTRL_TYPE_MPEG4_QUANTISATION:
+		elem_size = sizeof(struct v4l2_ctrl_mpeg4_quantisation);
+		break;
+	case V4L2_CTRL_TYPE_MPEG4_SLICE_PARAMS:
+		elem_size = sizeof(struct v4l2_ctrl_mpeg4_slice_params);
+		break;
+	case V4L2_CTRL_TYPE_H263_PICTURE:
+		elem_size = sizeof(struct v4l2_ctrl_h263_picture);
+		break;
+	case V4L2_CTRL_TYPE_H263_SLICE_PARAMS:
+		elem_size = sizeof(struct v4l2_ctrl_h263_slice_params);
 		break;
 	case V4L2_CTRL_TYPE_AREA:
 		elem_size = sizeof(struct v4l2_area);

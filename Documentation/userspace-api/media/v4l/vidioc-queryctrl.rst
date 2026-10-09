@@ -609,6 +609,42 @@ See also the examples in :ref:`control`.
       - n/a
       - A struct :c:type:`v4l2_ctrl_vc1_slice_params`, containing VC-1
 	slice parameters for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_MPEG4_VOL``
+      - n/a
+      - n/a
+      - n/a
+      - A struct :c:type:`v4l2_ctrl_mpeg4_vol`, containing MPEG-4 Part 2
+	video object layer parameters for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_MPEG4_VOP``
+      - n/a
+      - n/a
+      - n/a
+      - A struct :c:type:`v4l2_ctrl_mpeg4_vop`, containing MPEG-4 Part 2
+	video object plane parameters for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_MPEG4_QUANTISATION``
+      - n/a
+      - n/a
+      - n/a
+      - A struct :c:type:`v4l2_ctrl_mpeg4_quantisation`, containing MPEG-4 Part 2
+	quantisation matrices for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_MPEG4_SLICE_PARAMS``
+      - n/a
+      - n/a
+      - n/a
+      - A struct :c:type:`v4l2_ctrl_mpeg4_slice_params`, containing MPEG-4 Part 2
+	video packet parameters for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_H263_PICTURE``
+      - n/a
+      - n/a
+      - n/a
+      - A struct :c:type:`v4l2_ctrl_h263_picture`, containing H.263 or
+	Sorenson Spark picture parameters for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_H263_SLICE_PARAMS``
+      - n/a
+      - n/a
+      - n/a
+      - A struct :c:type:`v4l2_ctrl_h263_slice_params`, containing H.263 or
+	Sorenson Spark GOB and slice parameters for stateless video decoders.
 
 .. raw:: latex
 

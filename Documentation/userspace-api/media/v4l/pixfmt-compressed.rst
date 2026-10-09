@@ -139,6 +139,56 @@ Compressed Formats
       - ``V4L2_PIX_FMT_XVID``
       - 'XVID'
       - Xvid video elementary stream.
+    * .. _V4L2-PIX-FMT-MPEG4-SLICE:
+
+      - ``V4L2_PIX_FMT_MPEG4_SLICE``
+      - 'MG4S'
+      - MPEG-4 Part 2 parsed VOP data, for the Simple and Advanced Simple
+	profiles of :ref:`mpeg4part2` (including the bitstreams of the DivX and
+	Xvid encoders). This format is adapted for stateless video decoders that
+	implement an MPEG-4 Part 2 pipeline with the :ref:`stateless_decoder`.
+	Metadata associated with the VOP to decode is required to be passed
+	through the ``V4L2_CID_STATELESS_MPEG4_VOL`` and
+	``V4L2_CID_STATELESS_MPEG4_VOP`` controls, and the quantisation matrices
+	through the ``V4L2_CID_STATELESS_MPEG4_QUANTISATION`` control when the
+	VOL uses them. Drivers may additionally require the location of the
+	video packets to be passed through the
+	``V4L2_CID_STATELESS_MPEG4_SLICE_PARAMS`` control, and may reproduce
+	encoder deviations selected by the ``V4L2_CID_STATELESS_MPEG4_QUIRKS``
+	control. See the :ref:`associated Codec Control IDs
+	<v4l2-codec-stateless-mpeg4>`. Exactly one output and one capture buffer
+	must be provided for use with this pixel format. The output buffer must
+	contain exactly one coded VOP, starting with its VOP start code and
+	including all its video packets, without the video object layer, group
+	of VOP or user data headers which may precede it. VOPs which are not
+	coded (``vop_coded`` equal to 0) are not queued. The several VOPs that
+	some encoders pack in one container frame are queued separately.
+    * .. _V4L2-PIX-FMT-H263-SLICE:
+
+      - ``V4L2_PIX_FMT_H263_SLICE``
+      - 'S263'
+      - H.263 parsed picture data, as extracted from the :ref:`h263`
+	bitstream. This format is adapted for stateless video decoders that
+	implement an H.263 pipeline with the :ref:`stateless_decoder`. Metadata
+	associated with the picture to decode is required to be passed through
+	the ``V4L2_CID_STATELESS_H263_PICTURE`` control. Drivers may additionally
+	require the location of the GOBs and slices to be passed through the
+	``V4L2_CID_STATELESS_H263_SLICE_PARAMS`` control. See the
+	:ref:`associated Codec Control IDs <v4l2-codec-stateless-h263>`. Exactly
+	one output and one capture buffer must be provided for use with this
+	pixel format. The output buffer must contain exactly one coded picture,
+	starting with its picture start code. MPEG-4 VOPs with a short video
+	header use this format.
+    * .. _V4L2-PIX-FMT-SPK-SLICE:
+
+      - ``V4L2_PIX_FMT_SPK_SLICE``
+      - 'SPKS'
+      - Sorenson Spark parsed picture data, the stateless counterpart of
+	``V4L2_PIX_FMT_SPK``. It follows the rules of
+	``V4L2_PIX_FMT_H263_SLICE``, with the picture header and the escape
+	coding of Sorenson Spark, whose version is given by the
+	``spk_version`` field of the ``V4L2_CID_STATELESS_H263_PICTURE``
+	control.
     * .. _V4L2-PIX-FMT-VC1-ANNEX-G:
 
       - ``V4L2_PIX_FMT_VC1_ANNEX_G``
