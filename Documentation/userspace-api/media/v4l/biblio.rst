@@ -66,6 +66,26 @@ ISO 13818-2
 
 :author:    International Telecommunication Union (http://www.itu.ch), International Organisation for Standardisation (http://www.iso.ch)
 
+.. _mpeg4part2:
+
+ISO/IEC 14496-2
+===============
+
+
+:title:     ISO/IEC 14496-2:2004 "Information technology --- Coding of audio-visual objects --- Part 2: Visual"
+
+:author:    International Organisation for Standardisation (http://www.iso.ch)
+
+.. _h263:
+
+ITU-T Rec. H.263
+================
+
+
+:title:     ITU-T Recommendation H.263 "Video coding for low bit rate communication"
+
+:author:    International Telecommunication Union (http://www.itu.ch)
+
 .. _vc1:
 
 SMPTE 421M
