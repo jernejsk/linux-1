@@ -38,7 +38,7 @@ static void rtw8822bs_efuse_parsing(struct rtw_efuse *efuse,
 	ether_addr_copy(efuse->addr, map->s.mac_addr);
 }
 
-static int rtw8822b_read_efuse(struct rtw_dev *rtwdev, u8 *log_map)
+static int rtw8822b_read_efuse(struct rtw_dev *rtwdev, u8 *log_map, u8 *phy_map)
 {
 	struct rtw_efuse *efuse = &rtwdev->efuse;
 	struct rtw8822b_efuse *map;

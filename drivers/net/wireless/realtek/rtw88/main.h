@@ -868,7 +868,7 @@ struct rtw_chip_ops {
 	int (*mac_postinit)(struct rtw_dev *rtwdev);
 	int (*dump_fw_crash)(struct rtw_dev *rtwdev);
 	void (*shutdown)(struct rtw_dev *rtwdev);
-	int (*read_efuse)(struct rtw_dev *rtwdev, u8 *map);
+	int (*read_efuse)(struct rtw_dev *rtwdev, u8 *log_map, u8 *phy_map);
 	void (*phy_set_param)(struct rtw_dev *rtwdev);
 	void (*set_channel)(struct rtw_dev *rtwdev, u8 channel,
 			    u8 bandwidth, u8 primary_chan_idx);

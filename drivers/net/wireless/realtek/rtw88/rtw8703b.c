@@ -563,12 +563,12 @@ static void try_mac_from_devicetree(struct rtw_dev *rtwdev)
 	}
 }
 
-static int rtw8703b_read_efuse(struct rtw_dev *rtwdev, u8 *log_map)
+static int rtw8703b_read_efuse(struct rtw_dev *rtwdev, u8 *log_map, u8 *phy_map)
 {
 	struct rtw_efuse *efuse = &rtwdev->efuse;
 	int ret;
 
-	ret = rtw8723x_read_efuse(rtwdev, log_map);
+	ret = rtw8723x_read_efuse(rtwdev, log_map, phy_map);
 	if (ret != 0)
 		return ret;
 

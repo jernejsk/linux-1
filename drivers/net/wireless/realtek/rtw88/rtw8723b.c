@@ -2349,12 +2349,12 @@ static void rtw8723b_fill_txdesc_checksum(struct rtw_dev *rtwdev,
 	fill_txdesc_checksum_common(txdesc, 16);
 }
 
-static int rtw8723b_read_efuse(struct rtw_dev *rtwdev, u8 *log_map)
+static int rtw8723b_read_efuse(struct rtw_dev *rtwdev, u8 *log_map, u8 *phy_map)
 {
 	struct rtw_efuse *efuse = &rtwdev->efuse;
 	int ret;
 
-	ret = rtw8723x_read_efuse(rtwdev, log_map);
+	ret = rtw8723x_read_efuse(rtwdev, log_map, phy_map);
 	if (ret)
 		return ret;
 
