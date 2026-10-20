@@ -2349,6 +2349,33 @@ static void rtw8723b_fill_txdesc_checksum(struct rtw_dev *rtwdev,
 	fill_txdesc_checksum_common(txdesc, 16);
 }
 
+static void rtw8723b_read_package_type(struct rtw_dev *rtwdev, u8 *phy_map)
+{
+	struct rtw_hal *hal = &rtwdev->hal;
+	u8 val_1fb, package;
+
+	val_1fb = phy_map[RTW8723B_EFUSE_PACKAGE_TYPE];
+	package = u8_get_bits(val_1fb, RTW8723B_PACKAGE_TYPE_MASK);
+
+	switch (package) {
+	case 0x4:
+		hal->pkg_type = RTW8723B_PACKAGE_TFBGA79;
+		break;
+	case 0x5:
+		hal->pkg_type = RTW8723B_PACKAGE_TFBGA90;
+		break;
+	case 0x6:
+		hal->pkg_type = RTW8723B_PACKAGE_QFN68;
+		break;
+	case 0x7:
+		hal->pkg_type = RTW8723B_PACKAGE_TFBGA80;
+		break;
+	default:
+		hal->pkg_type = RTW8723B_PACKAGE_DEFAULT;
+		break;
+	}
+}
+
 static int rtw8723b_read_efuse(struct rtw_dev *rtwdev, u8 *log_map, u8 *phy_map)
 {
 	struct rtw_efuse *efuse = &rtwdev->efuse;
@@ -2373,6 +2400,8 @@ static int rtw8723b_read_efuse(struct rtw_dev *rtwdev, u8 *log_map, u8 *phy_map)
 	efuse->hw_cap.ant_num = efuse->hw_cap.nss;
 	efuse->hw_cap.bw = BIT(RTW_CHANNEL_WIDTH_20) |
 			   BIT(RTW_CHANNEL_WIDTH_40);
+
+	rtw8723b_read_package_type(rtwdev, phy_map);
 
 	return 0;
 }
