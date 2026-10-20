@@ -2404,12 +2404,9 @@ static int rtw8723b_read_efuse(struct rtw_dev *rtwdev, u8 *log_map, u8 *phy_map)
 	if (efuse->power_track_type != 0)
 		rtw_warn(rtwdev, "unsupported power track type\n");
 
-	/*
-	 * No firmware hardware feature report exists, so fill the hardware
-	 * capability here; a zero stream count kills the HT MCS set.
-	 */
-	efuse->hw_cap.nss = max_t(u8, rtwdev->hal.rf_path_num, 1);
-	efuse->hw_cap.ant_num = efuse->hw_cap.nss;
+	/* No firmware hardware feature report exists, so fill it in here. */
+	efuse->hw_cap.nss = 1;
+	efuse->hw_cap.ant_num = 1;
 	efuse->hw_cap.bw = BIT(RTW_CHANNEL_WIDTH_20) |
 			   BIT(RTW_CHANNEL_WIDTH_40);
 
