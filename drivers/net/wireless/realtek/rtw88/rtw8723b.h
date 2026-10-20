@@ -19,6 +19,9 @@ enum rtw8723b_package_type {
 
 #define RTW8723B_EFUSE_PACKAGE_TYPE	0x1fb
 #define RTW8723B_PACKAGE_TYPE_MASK	GENMASK(2, 0)
+#define RTW8723B_VARIANT_MASK		GENMASK(5, 4)
+#define RTW8723B_VARIANT_8723BS		0x3
+#define RTW8723B_VARIANT_8703AS		0x2
 
 extern const struct rtw_chip_info rtw8723b_hw_spec;
 

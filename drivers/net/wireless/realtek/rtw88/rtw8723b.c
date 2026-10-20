@@ -2376,6 +2376,18 @@ static void rtw8723b_read_package_type(struct rtw_dev *rtwdev, u8 *phy_map)
 	}
 }
 
+static void rtw8723b_read_chip_variant(struct rtw_dev *rtwdev, u8 *phy_map)
+{
+	u8 val_1fb, variant;
+
+	val_1fb = phy_map[RTW8723B_EFUSE_PACKAGE_TYPE];
+	variant = u8_get_bits(val_1fb, RTW8723B_VARIANT_MASK);
+
+	if (rtw_hci_type(rtwdev) == RTW_HCI_TYPE_SDIO &&
+	    variant == RTW8723B_VARIANT_8703AS)
+		rtwdev->efuse.hw_cap.bw &= ~BIT(RTW_CHANNEL_WIDTH_40);
+}
+
 static int rtw8723b_read_efuse(struct rtw_dev *rtwdev, u8 *log_map, u8 *phy_map)
 {
 	struct rtw_efuse *efuse = &rtwdev->efuse;
@@ -2402,6 +2414,7 @@ static int rtw8723b_read_efuse(struct rtw_dev *rtwdev, u8 *log_map, u8 *phy_map)
 			   BIT(RTW_CHANNEL_WIDTH_40);
 
 	rtw8723b_read_package_type(rtwdev, phy_map);
+	rtw8723b_read_chip_variant(rtwdev, phy_map);
 
 	return 0;
 }
