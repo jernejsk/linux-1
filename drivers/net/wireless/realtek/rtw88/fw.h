@@ -810,6 +810,14 @@ static inline struct rtw_c2h_cmd *get_c2h_from_skb(struct sk_buff *skb)
 	return (struct rtw_c2h_cmd *)(skb->data + pkt_offset);
 }
 
+/* The C2H header has been validated by rtw_fw_c2h_cmd_rx_irqsafe(). */
+static inline u32 rtw_c2h_payload_len(struct sk_buff *skb)
+{
+	u32 pkt_offset = *((u32 *)skb->cb);
+
+	return skb->len - pkt_offset - sizeof(struct rtw_c2h_cmd);
+}
+
 static inline bool rtw_fw_feature_check(struct rtw_fw_state *fw,
 					enum rtw_fw_feature feature)
 {

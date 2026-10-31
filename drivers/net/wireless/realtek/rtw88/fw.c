@@ -96,6 +96,9 @@ static void rtw_fw_c2h_cmd_handle_ext(struct rtw_dev *rtwdev,
 	struct rtw_c2h_cmd *c2h;
 	u8 sub_cmd_id;
 
+	if (rtw_c2h_payload_len(skb) < 1)
+		return;
+
 	c2h = get_c2h_from_skb(skb);
 	sub_cmd_id = c2h->payload[0];
 
@@ -376,8 +379,10 @@ void rtw_fw_c2h_cmd_rx_irqsafe(struct rtw_dev *rtwdev, u32 pkt_offset,
 		dev_kfree_skb_any(skb);
 		break;
 	case C2H_SCAN_RESULT:
-		complete(&rtwdev->fw_scan_density);
-		rtw_fw_scan_result(rtwdev, c2h->payload, len);
+		if (len) {
+			complete(&rtwdev->fw_scan_density);
+			rtw_fw_scan_result(rtwdev, c2h->payload, len);
+		}
 		dev_kfree_skb_any(skb);
 		break;
 	default:
@@ -2381,6 +2386,9 @@ void rtw_hw_scan_status_report(struct rtw_dev *rtwdev, struct sk_buff *skb)
 	if (!test_bit(RTW_FLAG_SCANNING, rtwdev->flags))
 		return;
 
+	if (rtw_c2h_payload_len(skb) < 3)
+		return;
+
 	c2h = get_c2h_from_skb(skb);
 	rc = GET_SCAN_REPORT_RETURN_CODE(c2h->payload);
 	aborted = rc != RTW_SCAN_REPORT_SUCCESS;
@@ -2434,6 +2442,9 @@ void rtw_hw_scan_chan_switch(struct rtw_dev *rtwdev, struct sk_buff *skb)
 	u8 chan, band, status;
 
 	if (!test_bit(RTW_FLAG_SCANNING, rtwdev->flags))
+		return;
+
+	if (rtw_c2h_payload_len(skb) < 5)
 		return;
 
 	c2h = get_c2h_from_skb(skb);

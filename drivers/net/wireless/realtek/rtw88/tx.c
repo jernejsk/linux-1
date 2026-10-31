@@ -241,6 +241,9 @@ void rtw_tx_report_handle(struct rtw_dev *rtwdev, struct sk_buff *skb, int src)
 	u8 sn, st;
 	u8 *n;
 
+	if (rtw_c2h_payload_len(skb) < (src == C2H_CCX_TX_RPT ? 7 : 10))
+		return;
+
 	c2h = get_c2h_from_skb(skb);
 
 	if (src == C2H_CCX_TX_RPT) {
