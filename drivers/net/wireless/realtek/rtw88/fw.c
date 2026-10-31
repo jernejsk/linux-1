@@ -353,6 +353,13 @@ void rtw_fw_c2h_cmd_rx_irqsafe(struct rtw_dev *rtwdev, u32 pkt_offset,
 	struct rtw_c2h_cmd *c2h;
 	u8 len;
 
+	if (unlikely(skb->len < pkt_offset + sizeof(*c2h))) {
+		rtw_dbg(rtwdev, RTW_DBG_FW, "C2H too short: %u\n",
+			skb->len - pkt_offset);
+		dev_kfree_skb_any(skb);
+		return;
+	}
+
 	c2h = (struct rtw_c2h_cmd *)(skb->data + pkt_offset);
 	len = skb->len - pkt_offset - 2;
 	*((u32 *)skb->cb) = pkt_offset;
