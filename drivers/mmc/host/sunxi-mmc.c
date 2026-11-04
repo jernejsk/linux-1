@@ -1468,15 +1468,7 @@ static const struct sunxi_mmc_cfg sun50i_a64_emmc_cfg = {
 	.needs_new_timings = true,
 };
 
-static const struct sunxi_mmc_cfg sun50i_h616_cfg = {
-	.idma_des_size_bits = 16,
-	.idma_des_shift = 2,
-	.can_calibrate = true,
-	.mask_data0 = true,
-	.needs_new_timings = true,
-};
-
-static const struct sunxi_mmc_timing sun55i_a523_timings[SDXC_CLK_MODES] = {
+static const struct sunxi_mmc_timing sun50i_h616_timings[SDXC_CLK_MODES] = {
 	[SDXC_CLK_400K]		= { .cmd_drv_phase = 1 },
 	[SDXC_CLK_25M]		= { .cmd_drv_phase = 1 },
 	[SDXC_CLK_50M]		= { .cmd_drv_phase = 1, .dat_drv_phase = 1,
@@ -1488,13 +1480,22 @@ static const struct sunxi_mmc_timing sun55i_a523_timings[SDXC_CLK_MODES] = {
 	[SDXC_CLK_HIGH_SPEED]	= { .cmd_drv_phase = 1 },
 };
 
+static const struct sunxi_mmc_cfg sun50i_h616_cfg = {
+	.idma_des_size_bits = 16,
+	.idma_des_shift = 2,
+	.can_calibrate = true,
+	.mask_data0 = true,
+	.needs_new_timings = true,
+	.timings = sun50i_h616_timings,
+};
+
 static const struct sunxi_mmc_cfg sun55i_a523_cfg = {
 	.idma_des_size_bits = 13,
 	.idma_des_shift = 2,
 	.can_calibrate = true,
 	.mask_data0 = true,
 	.needs_new_timings = true,
-	.timings = sun55i_a523_timings,
+	.timings = sun50i_h616_timings,
 	.can_tune = true,
 };
 
@@ -1560,7 +1561,8 @@ static int sunxi_mmc_get_uhs_pins(struct sunxi_mmc_host *host)
 
 	mmc->caps |= MMC_CAP_UHS_SDR12 | MMC_CAP_UHS_SDR25 |
 		     MMC_CAP_UHS_SDR50 | MMC_CAP_UHS_DDR50;
-	if (host->cfg->can_tune)
+	/* SDR104 needs tuning or phases known to work at its clock rate. */
+	if (host->cfg->can_tune || host->cfg->timings)
 		mmc->caps |= MMC_CAP_UHS_SDR104;
 
 	return 0;
