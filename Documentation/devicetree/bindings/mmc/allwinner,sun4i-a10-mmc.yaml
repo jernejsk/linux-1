@@ -85,6 +85,19 @@ properties:
       - const: output
       - const: sample
 
+  pinctrl-names:
+    minItems: 1
+    items:
+      - const: default
+      - const: state_uhs
+    description:
+      The state_uhs pin state selects 1.8V signalling on SoCs switching
+      the supply of the card pins internally, and enables the UHS-I
+      modes.
+
+  pinctrl-0: true
+  pinctrl-1: true
+
   resets:
     maxItems: 1
 
