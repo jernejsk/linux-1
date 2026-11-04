@@ -91,6 +91,14 @@ patternProperties:
         $ref: /schemas/types.yaml#/definitions/uint32
         enum: [10, 20, 30, 40]
 
+      power-source:
+        $ref: /schemas/types.yaml#/definitions/uint32
+        enum: [1800, 3300]
+        description:
+          I/O voltage of the PF bank in millivolts, on SoCs generating
+          the PF bank supply internally. The setting applies to the
+          whole bank, not only to the listed pins.
+
       allwinner,pinmux:
         $ref: /schemas/types.yaml#/definitions/uint32-array
         description:
