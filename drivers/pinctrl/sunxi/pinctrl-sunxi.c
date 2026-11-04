@@ -15,6 +15,7 @@
 #include <linux/gpio/driver.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/iopoll.h>
 #include <linux/irqchip/chained_irq.h>
 #include <linux/irqdomain.h>
 #include <linux/of.h>
@@ -381,6 +382,8 @@ static unsigned long *sunxi_pctrl_build_pin_config(struct device_node *node,
 		configlen++;
 	if (sunxi_pctrl_has_bias_prop(node))
 		configlen++;
+	if (of_property_present(node, "power-source"))
+		configlen++;
 
 	/*
 	 * If we don't have any configuration, bail out
@@ -417,6 +420,16 @@ static unsigned long *sunxi_pctrl_build_pin_config(struct device_node *node,
 		pinconfig[idx++] = pinconf_to_config_packed(pull, arg);
 	}
 
+	if (of_property_present(node, "power-source")) {
+		u32 mV;
+
+		ret = of_property_read_u32(node, "power-source", &mV);
+		if (ret)
+			goto err_free;
+
+		pinconfig[idx++] = pinconf_to_config_packed(PIN_CONFIG_POWER_SOURCE,
+							    mV);
+	}
 
 	*len = configlen;
 	return pinconfig;
@@ -607,6 +620,70 @@ write_ctl:
 	}
 }
 
+#define SUNXI_PF_BANK	('F' - 'A')
+
+static bool sunxi_pinctrl_has_pf_switch(struct sunxi_pinctrl *pctl,
+					unsigned short bank)
+{
+	return pctl->desc->pf_power_switch && bank == SUNXI_PF_BANK;
+}
+
+static int sunxi_pinctrl_get_pf_supply(struct sunxi_pinctrl *pctl)
+{
+	u32 val = readl(pctl->membase + pctl->pow_mod_sel_offset +
+			PIO_POW_CTL_OFS);
+
+	return val & 1 ? 3300 : 1800;
+}
+
+/*
+ * Some SoCs generate the PF bank supply internally and can switch it
+ * between 1.8V and 3.3V at runtime, which SD card UHS-I signalling
+ * needs. The withstand voltage must never be below the actual bank
+ * voltage, so raise it before switching up and lower it only once the
+ * bank voltage has dropped.
+ */
+static int sunxi_pinctrl_set_pf_supply(struct sunxi_pinctrl *pctl, u32 mV)
+{
+	void __iomem *base = pctl->membase + pctl->pow_mod_sel_offset;
+	/* The power value register flags a 1.8V bank with a set bit. */
+	u32 goal = mV == 1800 ? BIT(SUNXI_PF_BANK) : 0;
+	unsigned long flags;
+	u32 val;
+	int ret;
+
+	if (mV != 1800 && mV != 3300)
+		return -EINVAL;
+
+	if (sunxi_pinctrl_get_pf_supply(pctl) == mV)
+		return 0;
+
+	if (mV == 3300) {
+		ret = sunxi_pinctrl_set_bank_bias(pctl, SUNXI_PF_BANK,
+						  3300000);
+		if (ret)
+			return ret;
+	}
+
+	raw_spin_lock_irqsave(&pctl->lock, flags);
+	writel(mV == 3300, base + PIO_POW_CTL_OFS);
+	raw_spin_unlock_irqrestore(&pctl->lock, flags);
+
+	ret = readl_poll_timeout(base + PIO_POW_VAL_OFS, val,
+				 (val & BIT(SUNXI_PF_BANK)) == goal,
+				 100, 10000);
+	if (ret) {
+		dev_err(pctl->dev, "PF bank supply did not reach %umV\n", mV);
+		return ret;
+	}
+
+	if (mV == 1800)
+		return sunxi_pinctrl_set_bank_bias(pctl, SUNXI_PF_BANK,
+						   1800000);
+
+	return 0;
+}
+
 static int sunxi_pconf_reg(const struct sunxi_pinctrl *pctl,
 			   u32 pin, enum pin_config_param param,
 			   u32 *reg, u32 *shift, u32 *mask)
@@ -639,6 +716,15 @@ static int sunxi_pconf_get(struct pinctrl_dev *pctldev, unsigned pin,
 	int ret;
 
 	pin -= pctl->desc->pin_base;
+
+	if (param == PIN_CONFIG_POWER_SOURCE) {
+		if (!sunxi_pinctrl_has_pf_switch(pctl, pin / PINS_PER_BANK))
+			return -ENOTSUPP;
+
+		arg = sunxi_pinctrl_get_pf_supply(pctl);
+		*config = pinconf_to_config_packed(param, arg);
+		return 0;
+	}
 
 	ret = sunxi_pconf_reg(pctl, pin, param, &reg, &shift, &mask);
 	if (ret < 0)
@@ -707,6 +793,18 @@ static int sunxi_pconf_set(struct pinctrl_dev *pctldev, unsigned pin,
 
 		param = pinconf_to_config_param(configs[i]);
 		arg = pinconf_to_config_argument(configs[i]);
+
+		if (param == PIN_CONFIG_POWER_SOURCE) {
+			if (!sunxi_pinctrl_has_pf_switch(pctl,
+							 pin / PINS_PER_BANK))
+				return -ENOTSUPP;
+
+			ret = sunxi_pinctrl_set_pf_supply(pctl, arg);
+			if (ret)
+				return ret;
+
+			continue;
+		}
 
 		ret = sunxi_pconf_reg(pctl, pin, param, &reg, &shift, &mask);
 		if (ret < 0)
@@ -782,6 +880,14 @@ static int sunxi_pinctrl_set_io_bias_cfg(struct sunxi_pinctrl *pctl,
 	if (!pctl->desc->io_bias_cfg_variant)
 		return 0;
 
+	pin -= pctl->desc->pin_base;
+	bank = pin / PINS_PER_BANK;
+
+	/* The bank supply only feeds the 3.3V side of the PF switch. */
+	if (sunxi_pinctrl_has_pf_switch(pctl, bank))
+		return sunxi_pinctrl_set_bank_bias(pctl, bank,
+				sunxi_pinctrl_get_pf_supply(pctl) * 1000);
+
 	uV = regulator_get_voltage(supply);
 	if (uV < 0)
 		return uV;
@@ -789,9 +895,6 @@ static int sunxi_pinctrl_set_io_bias_cfg(struct sunxi_pinctrl *pctl,
 	/* Might be dummy regulator with no voltage set */
 	if (uV == 0)
 		return 0;
-
-	pin -= pctl->desc->pin_base;
-	bank = pin / PINS_PER_BANK;
 
 	if (pctl->desc->io_bias_cfg_variant == BIAS_VOLTAGE_GRP_CONFIG) {
 		/*
