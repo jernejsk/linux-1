@@ -30,6 +30,7 @@
 #include <linux/module.h>
 #include <linux/of_address.h>
 #include <linux/of_platform.h>
+#include <linux/pinctrl/consumer.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/regulator/consumer.h>
@@ -332,6 +333,11 @@ struct sunxi_mmc_host {
 
 	/* vqmmc */
 	bool		vqmmc_enabled;
+
+	/* pin states selecting the signal voltage */
+	struct pinctrl		*pinctrl;
+	struct pinctrl_state	*pins_default;
+	struct pinctrl_state	*pins_uhs;
 
 	u32		sample_delay;
 	bool		tuning;
@@ -1139,13 +1145,35 @@ static void sunxi_mmc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 
 static int sunxi_mmc_volt_switch(struct mmc_host *mmc, struct mmc_ios *ios)
 {
+	struct sunxi_mmc_host *host = mmc_priv(mmc);
+	struct pinctrl_state *state;
 	int ret;
 
 	/* vqmmc regulator is available */
 	if (!IS_ERR(mmc->supply.vqmmc)) {
 		ret = mmc_regulator_set_vqmmc(mmc, ios);
-		return ret < 0 ? ret : 0;
+		if (ret < 0)
+			return ret;
 	}
+
+	/* The pin states select the voltage of SoC-internal pad supplies. */
+	if (host->pins_uhs) {
+		switch (ios->signal_voltage) {
+		case MMC_SIGNAL_VOLTAGE_330:
+			state = host->pins_default;
+			break;
+		case MMC_SIGNAL_VOLTAGE_180:
+			state = host->pins_uhs;
+			break;
+		default:
+			return -EINVAL;
+		}
+
+		return pinctrl_select_state(host->pinctrl, state);
+	}
+
+	if (!IS_ERR(mmc->supply.vqmmc))
+		return 0;
 
 	/* no vqmmc regulator, assume fixed regulator at 3/3.3V */
 	if (mmc->ios.signal_voltage == MMC_SIGNAL_VOLTAGE_330)
@@ -1495,6 +1523,49 @@ static const struct of_device_id sunxi_mmc_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, sunxi_mmc_of_match);
 
+/*
+ * On some SoCs the signalling voltage of the SD card pins is switched
+ * inside the SoC, through a "state_uhs" pin state. Enable the UHS modes
+ * then, as only such a device tree can switch the voltage. Keeping the
+ * modes out of the device tree lets older kernels, which don't know the
+ * pin state, use the card at 3.3V as before.
+ */
+static int sunxi_mmc_get_uhs_pins(struct sunxi_mmc_host *host)
+{
+	struct mmc_host *mmc = host->mmc;
+	struct pinctrl_state *state;
+
+	host->pinctrl = devm_pinctrl_get(host->dev);
+	if (IS_ERR(host->pinctrl)) {
+		if (PTR_ERR(host->pinctrl) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+		host->pinctrl = NULL;
+		return 0;
+	}
+
+	state = pinctrl_lookup_state(host->pinctrl, "state_uhs");
+	if (IS_ERR(state))
+		return 0;
+
+	host->pins_default = pinctrl_lookup_state(host->pinctrl,
+						  PINCTRL_STATE_DEFAULT);
+	if (IS_ERR(host->pins_default))
+		return dev_err_probe(host->dev, PTR_ERR(host->pins_default),
+				     "UHS pin state without default state\n");
+
+	host->pins_uhs = state;
+
+	if (!host->use_new_timings)
+		return 0;
+
+	mmc->caps |= MMC_CAP_UHS_SDR12 | MMC_CAP_UHS_SDR25 |
+		     MMC_CAP_UHS_SDR50 | MMC_CAP_UHS_DDR50;
+	if (host->cfg->can_tune)
+		mmc->caps |= MMC_CAP_UHS_SDR104;
+
+	return 0;
+}
+
 static int sunxi_mmc_enable(struct sunxi_mmc_host *host)
 {
 	int ret;
@@ -1724,6 +1795,10 @@ static int sunxi_mmc_probe(struct platform_device *pdev)
 		mmc->caps      |= MMC_CAP_1_8V_DDR | MMC_CAP_3_3V_DDR;
 
 	ret = mmc_of_parse(mmc);
+	if (ret)
+		goto error_free_dma;
+
+	ret = sunxi_mmc_get_uhs_pins(host);
 	if (ret)
 		goto error_free_dma;
 
