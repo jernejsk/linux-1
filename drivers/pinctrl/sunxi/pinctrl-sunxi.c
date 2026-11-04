@@ -558,6 +558,46 @@ static const struct pinctrl_ops sunxi_pctrl_ops = {
 	.get_group_pins		= sunxi_pctrl_get_group_pins,
 };
 
+static int sunxi_pinctrl_set_bank_bias(struct sunxi_pinctrl *pctl,
+				       unsigned short bank, int uV)
+{
+	unsigned long flags;
+	bool inverted = false;
+	u32 val, reg;
+
+	switch (pctl->desc->io_bias_cfg_variant) {
+	case BIAS_VOLTAGE_PIO_POW_MODE_CTL_INV:
+		inverted = true;
+		fallthrough;
+	case BIAS_VOLTAGE_PIO_POW_MODE_CTL:
+		val = uV > 1800000 && uV <= 2500000 ? BIT(bank) : 0;
+
+		raw_spin_lock_irqsave(&pctl->lock, flags);
+		reg = readl(pctl->membase + pctl->pow_mod_sel_offset +
+			    PIO_POW_MOD_CTL_OFS);
+		reg &= ~BIT(bank);
+		writel(reg | val, pctl->membase + pctl->pow_mod_sel_offset +
+		       PIO_POW_MOD_CTL_OFS);
+		raw_spin_unlock_irqrestore(&pctl->lock, flags);
+
+		fallthrough;
+	case BIAS_VOLTAGE_PIO_POW_MODE_SEL:
+		val = uV <= 1800000 ? 1 : 0;
+		if (inverted)
+			val = !val;
+
+		raw_spin_lock_irqsave(&pctl->lock, flags);
+		reg = readl(pctl->membase + pctl->pow_mod_sel_offset);
+		reg &= ~(1 << bank);
+		writel(reg | val << bank,
+		       pctl->membase + pctl->pow_mod_sel_offset);
+		raw_spin_unlock_irqrestore(&pctl->lock, flags);
+		return 0;
+	default:
+		return -EINVAL;
+	}
+}
+
 static int sunxi_pconf_reg(const struct sunxi_pinctrl *pctl,
 			   u32 pin, enum pin_config_param param,
 			   u32 *reg, u32 *shift, u32 *mask)
@@ -727,8 +767,6 @@ static int sunxi_pinctrl_set_io_bias_cfg(struct sunxi_pinctrl *pctl,
 					 struct regulator *supply)
 {
 	unsigned short bank;
-	unsigned long flags;
-	bool inverted = false;
 	u32 val, reg;
 	int uV;
 
@@ -746,8 +784,7 @@ static int sunxi_pinctrl_set_io_bias_cfg(struct sunxi_pinctrl *pctl,
 	pin -= pctl->desc->pin_base;
 	bank = pin / PINS_PER_BANK;
 
-	switch (pctl->desc->io_bias_cfg_variant) {
-	case BIAS_VOLTAGE_GRP_CONFIG:
+	if (pctl->desc->io_bias_cfg_variant == BIAS_VOLTAGE_GRP_CONFIG) {
 		/*
 		 * Configured value must be equal or greater to actual
 		 * voltage.
@@ -768,36 +805,9 @@ static int sunxi_pinctrl_set_io_bias_cfg(struct sunxi_pinctrl *pctl,
 		writel(reg | val, pctl->membase +
 		       sunxi_grp_config_reg(pctl, pin));
 		return 0;
-	case BIAS_VOLTAGE_PIO_POW_MODE_CTL_INV:
-		inverted = true;
-		fallthrough;
-	case BIAS_VOLTAGE_PIO_POW_MODE_CTL:
-		val = uV > 1800000 && uV <= 2500000 ? BIT(bank) : 0;
-
-		raw_spin_lock_irqsave(&pctl->lock, flags);
-		reg = readl(pctl->membase + pctl->pow_mod_sel_offset +
-			    PIO_POW_MOD_CTL_OFS);
-		reg &= ~BIT(bank);
-		writel(reg | val, pctl->membase + pctl->pow_mod_sel_offset +
-		       PIO_POW_MOD_CTL_OFS);
-		raw_spin_unlock_irqrestore(&pctl->lock, flags);
-
-		fallthrough;
-	case BIAS_VOLTAGE_PIO_POW_MODE_SEL:
-		val = uV <= 1800000 ? 1 : 0;
-		if (inverted)
-			val = !val;
-
-		raw_spin_lock_irqsave(&pctl->lock, flags);
-		reg = readl(pctl->membase + pctl->pow_mod_sel_offset);
-		reg &= ~(1 << bank);
-		writel(reg | val << bank,
-		       pctl->membase + pctl->pow_mod_sel_offset);
-		raw_spin_unlock_irqrestore(&pctl->lock, flags);
-		return 0;
-	default:
-		return -EINVAL;
 	}
+
+	return sunxi_pinctrl_set_bank_bias(pctl, bank, uV);
 }
 
 static int sunxi_pmx_get_funcs_cnt(struct pinctrl_dev *pctldev)
