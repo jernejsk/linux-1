@@ -1621,6 +1621,15 @@ static const struct sunxi_mmc_cfg sun50i_a100_emmc_cfg = {
 	.needs_new_timings = true,
 };
 
+static const struct sunxi_mmc_cfg sun50i_h616_emmc_cfg = {
+	.idma_des_size_bits = 13,
+	.idma_des_shift = 2,
+	.can_calibrate = true,
+	.needs_new_timings = true,
+	.has_hs400 = true,
+	.hs400_max_rate = 100000000,
+};
+
 static const struct of_device_id sunxi_mmc_of_match[] = {
 	{ .compatible = "allwinner,sun4i-a10-mmc", .data = &sun4i_a10_cfg },
 	{ .compatible = "allwinner,sun5i-a13-mmc", .data = &sun5i_a13_cfg },
@@ -1633,6 +1642,7 @@ static const struct of_device_id sunxi_mmc_of_match[] = {
 	{ .compatible = "allwinner,sun50i-a100-mmc", .data = &sun20i_d1_cfg },
 	{ .compatible = "allwinner,sun50i-a100-emmc", .data = &sun50i_a100_emmc_cfg },
 	{ .compatible = "allwinner,sun50i-h616-mmc", .data = &sun50i_h616_cfg },
+	{ .compatible = "allwinner,sun50i-h616-emmc", .data = &sun50i_h616_emmc_cfg },
 	{ .compatible = "allwinner,sun55i-a523-mmc", .data = &sun55i_a523_cfg },
 	{ /* sentinel */ }
 };
