@@ -72,10 +72,12 @@
 /* New registers introduced in A64 */
 #define SDXC_REG_A12A		0x058 /* SMC Auto Command 12 Register */
 #define SDXC_REG_SD_NTSR	0x05C /* SMC New Timing Set Register */
+#define SDXC_REG_CSDC		0x054 /* SMC CRC status detect control */
 #define SDXC_REG_THLD		0x100 /* SMC card threshold control */
 #define SDXC_REG_DRV_DL		0x140 /* Drive Delay Control Register */
 #define SDXC_REG_SAMP_DL_REG	0x144 /* SMC sample delay control */
 #define SDXC_REG_DS_DL_REG	0x148 /* SMC data strobe delay control */
+#define SDXC_REG_EDSD		0x10C /* SMC eMMC DDR start bit detection */
 
 #define mmc_readl(host, reg) \
 	readl((host)->reg_base + SDXC_##reg)
@@ -232,7 +234,21 @@
 
 /* SDXC_REG_THLD bits */
 #define SDXC_CARD_RD_THLD	GENMASK(27, 16)
+#define SDXC_CARD_WR_THLD_ENB	BIT(2)
 #define SDXC_CARD_RD_THLD_ENB	BIT(0)
+
+/* SDXC_REG_CSDC bits */
+#define SDXC_CRC_DET_PARA	GENMASK(3, 0)
+#define SDXC_CRC_DET_PARA_HS400	6
+#define SDXC_CRC_DET_PARA_OTHER	3
+
+/* SDXC_REG_EDSD bits */
+#define SDXC_HS400_MD_EN	BIT(31)
+
+/* SDXC_REG_DS_DL_REG bits */
+#define SDXC_DS_DL_SW		GENMASK(5, 0)
+#define SDXC_DS_DL_SW_EN	BIT(7)
+#define SUNXI_MMC_DS_DELAYS	64
 
 /* SDXC_REG_SAMP_DL bits */
 #define SDXC_SAMP_DL_SW		GENMASK(5, 0)
@@ -282,6 +298,11 @@ struct sunxi_mmc_cfg {
 
 	const struct sunxi_mmc_timing *timings;
 	bool can_tune;
+
+	/* eMMC controller with a data strobe input */
+	bool has_hs400;
+	/* highest card clock rate rated for HS400 */
+	u32 hs400_max_rate;
 
 	/* does the IP block support autocalibration? */
 	bool can_calibrate;
@@ -340,6 +361,7 @@ struct sunxi_mmc_host {
 	struct pinctrl_state	*pins_uhs;
 
 	u32		sample_delay;
+	u32		ds_delay;
 	bool		tuning;
 
 	/* timings */
@@ -906,7 +928,8 @@ static bool sunxi_mmc_timing_needs_threshold(struct mmc_ios *ios)
 {
 	return ios->timing == MMC_TIMING_UHS_SDR50 ||
 	       ios->timing == MMC_TIMING_UHS_SDR104 ||
-	       ios->timing == MMC_TIMING_MMC_HS200;
+	       ios->timing == MMC_TIMING_MMC_HS200 ||
+	       ios->timing == MMC_TIMING_MMC_HS400;
 }
 
 static void sunxi_mmc_set_read_threshold(struct sunxi_mmc_host *host,
@@ -914,18 +937,24 @@ static void sunxi_mmc_set_read_threshold(struct sunxi_mmc_host *host,
 {
 	u32 rval;
 
-	if (!host->cfg->can_tune)
+	if (!host->cfg->can_tune && !host->cfg->has_hs400)
 		return;
 
 	rval = mmc_readl(host, REG_THLD);
 
-	rval &= ~(SDXC_CARD_RD_THLD | SDXC_CARD_RD_THLD_ENB);
+	rval &= ~(SDXC_CARD_RD_THLD | SDXC_CARD_RD_THLD_ENB |
+		  SDXC_CARD_WR_THLD_ENB);
 
-	if ((data->flags & MMC_DATA_READ) &&
-	    sunxi_mmc_timing_needs_threshold(&host->mmc->ios) &&
-	    data->blksz + SUNXI_MMC_FIFO_RX_TRIGGER <= SUNXI_MMC_FIFO_BYTES)
-		rval |= FIELD_PREP(SDXC_CARD_RD_THLD, data->blksz) |
-			SDXC_CARD_RD_THLD_ENB;
+	if (sunxi_mmc_timing_needs_threshold(&host->mmc->ios) &&
+	    data->blksz + SUNXI_MMC_FIFO_RX_TRIGGER <= SUNXI_MMC_FIFO_BYTES) {
+		if (data->flags & MMC_DATA_READ)
+			rval |= FIELD_PREP(SDXC_CARD_RD_THLD, data->blksz) |
+				SDXC_CARD_RD_THLD_ENB;
+		/* Start HS400 writes only with a whole block in the FIFO. */
+		else if (host->mmc->ios.timing == MMC_TIMING_MMC_HS400)
+			rval |= FIELD_PREP(SDXC_CARD_RD_THLD, data->blksz) |
+				SDXC_CARD_WR_THLD_ENB;
+	}
 
 	mmc_writel(host, REG_THLD, rval);
 }
@@ -937,6 +966,40 @@ static void sunxi_mmc_set_sample_delay(struct sunxi_mmc_host *host, u32 delay)
 	rval &= ~SDXC_SAMP_DL_SW;
 	rval |= FIELD_PREP(SDXC_SAMP_DL_SW, delay) | SDXC_SAMP_DL_SW_EN;
 	mmc_writel(host, REG_SAMP_DL_REG, rval);
+}
+
+static void sunxi_mmc_set_ds_delay(struct sunxi_mmc_host *host, u32 delay)
+{
+	u32 rval = mmc_readl(host, REG_DS_DL_REG);
+
+	rval &= ~SDXC_DS_DL_SW;
+	rval |= FIELD_PREP(SDXC_DS_DL_SW, delay) | SDXC_DS_DL_SW_EN;
+	mmc_writel(host, REG_DS_DL_REG, rval);
+}
+
+static void sunxi_mmc_set_hs400(struct sunxi_mmc_host *host,
+				struct mmc_ios *ios)
+{
+	bool hs400 = ios->timing == MMC_TIMING_MMC_HS400;
+	u32 rval;
+
+	if (!host->cfg->has_hs400)
+		return;
+
+	rval = mmc_readl(host, REG_EDSD);
+	if (hs400)
+		rval |= SDXC_HS400_MD_EN;
+	else
+		rval &= ~SDXC_HS400_MD_EN;
+	mmc_writel(host, REG_EDSD, rval);
+
+	rval = mmc_readl(host, REG_CSDC);
+	rval &= ~SDXC_CRC_DET_PARA;
+	rval |= hs400 ? SDXC_CRC_DET_PARA_HS400 : SDXC_CRC_DET_PARA_OTHER;
+	mmc_writel(host, REG_CSDC, rval);
+
+	if (hs400)
+		sunxi_mmc_set_ds_delay(host, host->ds_delay);
 }
 
 static int sunxi_mmc_clk_set_rate(struct sunxi_mmc_host *host,
@@ -956,6 +1019,9 @@ static int sunxi_mmc_clk_set_rate(struct sunxi_mmc_host *host,
 
 	if (!ios->clock)
 		return 0;
+
+	if (ios->timing == MMC_TIMING_MMC_HS400 && host->cfg->hs400_max_rate)
+		clock = min(clock, host->cfg->hs400_max_rate);
 
 	/*
 	 * Under the old timing mode, 8 bit DDR requires the module
@@ -1037,13 +1103,7 @@ static int sunxi_mmc_clk_set_rate(struct sunxi_mmc_host *host,
 			return ret;
 	}
 
-	/*
-	 * FIXME:
-	 *
-	 * In HS400 we'll also need to calibrate the data strobe
-	 * signal. This should only happen on the MMC2 controller (at
-	 * least on the A64).
-	 */
+	sunxi_mmc_set_hs400(host, ios);
 
 	ret = sunxi_mmc_oclk_onoff(host, 1);
 	if (ret)
@@ -1374,6 +1434,58 @@ static int sunxi_mmc_execute_tuning(struct mmc_host *mmc, u32 opcode)
 	return 0;
 }
 
+/*
+ * In HS400 the read data is sampled with the data strobe from the card,
+ * delayed by the DS delay chain. Scan the delay with EXT_CSD reads, as
+ * CMD21 tuning isn't available in HS400, and use the middle of the
+ * widest working window.
+ */
+static int sunxi_mmc_execute_hs400_tuning(struct mmc_host *mmc,
+					  struct mmc_card *card)
+{
+	struct sunxi_mmc_host *host = mmc_priv(mmc);
+	unsigned int delay, start = 0, len = 0, best_start = 0, best_len = 0;
+	u8 *ext_csd;
+
+	host->tuning = true;
+
+	for (delay = 0; delay < SUNXI_MMC_DS_DELAYS; delay++) {
+		sunxi_mmc_set_ds_delay(host, delay);
+
+		if (!mmc_get_ext_csd(card, &ext_csd)) {
+			kfree(ext_csd);
+			if (!len)
+				start = delay;
+			len++;
+			if (len > best_len) {
+				best_len = len;
+				best_start = start;
+			}
+		} else {
+			len = 0;
+		}
+	}
+
+	host->tuning = false;
+
+	/* Clear the illegal command status of stops sent after failures. */
+	mmc_send_status(card, NULL);
+
+	if (!best_len) {
+		sunxi_mmc_set_ds_delay(host, host->ds_delay);
+		dev_err(mmc_dev(mmc), "no working data strobe delay at %u Hz\n",
+			mmc->actual_clock);
+		return -EIO;
+	}
+
+	host->ds_delay = best_start + best_len / 2;
+	dev_dbg(mmc_dev(mmc), "data strobe delay %u, window %u wide\n",
+		host->ds_delay, best_len);
+	sunxi_mmc_set_ds_delay(host, host->ds_delay);
+
+	return 0;
+}
+
 static const struct mmc_host_ops sunxi_mmc_ops = {
 	.request	 = sunxi_mmc_request,
 	.set_ios	 = sunxi_mmc_set_ios,
@@ -1383,6 +1495,7 @@ static const struct mmc_host_ops sunxi_mmc_ops = {
 	.start_signal_voltage_switch = sunxi_mmc_volt_switch,
 	.card_hw_reset	 = sunxi_mmc_hw_reset,
 	.card_busy	 = sunxi_mmc_card_busy,
+	.execute_hs400_tuning = sunxi_mmc_execute_hs400_tuning,
 };
 
 static const struct mmc_host_ops sunxi_mmc_tuning_ops = {
@@ -1395,6 +1508,7 @@ static const struct mmc_host_ops sunxi_mmc_tuning_ops = {
 	.card_hw_reset	 = sunxi_mmc_hw_reset,
 	.card_busy	 = sunxi_mmc_card_busy,
 	.execute_tuning	 = sunxi_mmc_execute_tuning,
+	.execute_hs400_tuning = sunxi_mmc_execute_hs400_tuning,
 };
 
 static const struct sunxi_mmc_clk_delay sunxi_mmc_clk_delays[] = {
@@ -1816,8 +1930,8 @@ static int sunxi_mmc_probe(struct platform_device *pdev)
 		mmc->caps2 &= ~MMC_CAP2_HS200;
 	}
 
-	/* TODO: This driver doesn't support HS400 mode yet */
-	mmc->caps2 &= ~MMC_CAP2_HS400;
+	if (!host->cfg->has_hs400)
+		mmc->caps2 &= ~MMC_CAP2_HS400;
 
 	ret = sunxi_mmc_init_host(host);
 	if (ret)
