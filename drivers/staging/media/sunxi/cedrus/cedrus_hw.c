@@ -80,6 +80,12 @@ int cedrus_engine_enable(struct cedrus_ctx *ctx)
 	if (ctx->src_fmt.width > 2048)
 		reg |= VE_MODE_PIC_WIDTH_MORE_2048;
 
+	/* AFBC reconstruction, with the options of the vendor library. */
+	if (cedrus_dst_afbc_recon(ctx))
+		reg |= VE_MODE_COMPRESS_EN | VE_MODE_MIN_VAL_WRAP_EN |
+		       VE_MODE_RGB_DEF_COLOR_EN | VE_MODE_BODYBUF_1K_ALIGNED |
+		       VE_MODE_COMPRESS_MODE_AFBC;
+
 	cedrus_write(ctx->dev, VE_MODE, reg);
 
 	return 0;
@@ -170,9 +176,9 @@ void cedrus_dst_format_set(struct cedrus_dev *dev,
 
 /*
  * Program the secondary ("scale-down/rotate") output engine to convert
- * the 8-bit NV12 reconstruction into the userspace-visible P010 surface
- * at the start of the capture buffer.  The caller must already have
- * configured the primary output (which writes the hidden NV12
+ * the reconstruction into the userspace-visible P010 surface at the start
+ * of the capture buffer.  The caller must already have configured the
+ * primary output (which writes the hidden NV12 or AFBC
  * reconstruction/reference surface after the P010 data) and must still
  * set the per-codec 10-bit configuration and the second-output enable
  * bit in the function control register.  Shared by the VP9 and H.265

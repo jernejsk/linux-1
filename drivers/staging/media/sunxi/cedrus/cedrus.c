@@ -730,7 +730,8 @@ static const struct cedrus_variant sun50i_h6_cedrus_variant = {
 			  CEDRUS_CAPABILITY_H265_DEC |
 			  CEDRUS_CAPABILITY_H265_10_DEC |
 			  CEDRUS_CAPABILITY_VP8_DEC |
-			  CEDRUS_CAPABILITY_P010,
+			  CEDRUS_CAPABILITY_P010 |
+			  CEDRUS_CAPABILITY_AFBC,
 	.mod_rate	= 600000000,
 };
 
@@ -742,7 +743,8 @@ static const struct cedrus_variant sun50i_h616_cedrus_variant = {
 			  CEDRUS_CAPABILITY_H265_10_DEC |
 			  CEDRUS_CAPABILITY_VP8_DEC |
 			  CEDRUS_CAPABILITY_VP9_DEC |
-			  CEDRUS_CAPABILITY_P010,
+			  CEDRUS_CAPABILITY_P010 |
+			  CEDRUS_CAPABILITY_AFBC,
 	.mod_rate	= 600000000,
 	.ve_mode_ddr	= VE_MODE_DDR_MODE_BW_256,
 };
