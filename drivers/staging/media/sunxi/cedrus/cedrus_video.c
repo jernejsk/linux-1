@@ -91,6 +91,9 @@ static bool cedrus_check_format(struct cedrus_ctx *ctx,
 	    !(fmt->directions & directions))
 		return false;
 
+	if (fmt->depth && fmt->depth != ctx->bit_depth)
+		return false;
+
 	/*
 	 * The VP9 decoder derives the location of the plane of the two low
 	 * bits of 10-bit frames from the frame height, which can put it inside
@@ -361,6 +364,48 @@ void cedrus_reset_cap_format(struct cedrus_ctx *ctx)
 	cedrus_try_fmt_vid_cap_p(ctx, &ctx->dst_fmt);
 }
 
+/*
+ * Bit depth of the stream in the current value of the stream control of a
+ * coded format, the one the next job without that control in its request
+ * decodes with.
+ */
+static unsigned int cedrus_ctrl_bit_depth(struct cedrus_ctx *ctx,
+					  u32 pixelformat)
+{
+	unsigned int bit_depth = 8;
+	struct v4l2_ctrl *ctrl;
+
+	/* The initial format is set before the controls exist. */
+	if (!ctx->ctrls)
+		return bit_depth;
+
+	switch (pixelformat) {
+	case V4L2_PIX_FMT_HEVC_SLICE:
+		ctrl = v4l2_ctrl_find(&ctx->hdl, V4L2_CID_STATELESS_HEVC_SPS);
+		if (!ctrl)
+			break;
+
+		v4l2_ctrl_lock(ctrl);
+		bit_depth += max(ctrl->p_cur.p_hevc_sps->bit_depth_luma_minus8,
+				 ctrl->p_cur.p_hevc_sps->bit_depth_chroma_minus8);
+		v4l2_ctrl_unlock(ctrl);
+		break;
+
+	case V4L2_PIX_FMT_VP9_FRAME:
+		ctrl = v4l2_ctrl_find(&ctx->hdl, V4L2_CID_STATELESS_VP9_FRAME);
+		if (!ctrl)
+			break;
+
+		v4l2_ctrl_lock(ctrl);
+		bit_depth = max_t(unsigned int, bit_depth,
+				  ctrl->p_cur.p_vp9_frame->bit_depth);
+		v4l2_ctrl_unlock(ctrl);
+		break;
+	}
+
+	return bit_depth;
+}
+
 static int cedrus_s_fmt_vid_out_p(struct cedrus_ctx *ctx,
 				  struct v4l2_pix_format *pix_fmt)
 {
@@ -370,6 +415,14 @@ static int cedrus_s_fmt_vid_out_p(struct cedrus_ctx *ctx,
 	ret = cedrus_try_fmt_vid_out_p(ctx, pix_fmt);
 	if (ret)
 		return ret;
+
+	/*
+	 * The bit depth belongs to the stream of the previous codec. Take it
+	 * from the control of the new one, so that it always matches the
+	 * frames the capture buffers are sized for.
+	 */
+	if (pix_fmt->pixelformat != ctx->src_fmt.pixelformat)
+		ctx->bit_depth = cedrus_ctrl_bit_depth(ctx, pix_fmt->pixelformat);
 
 	ctx->src_fmt = *pix_fmt;
 
