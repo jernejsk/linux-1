@@ -861,7 +861,7 @@ static int cedrus_vp9_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	struct v4l2_pix_format recon, out;
 	dma_addr_t src_dma, src_end, luma, chroma;
 	u32 src_len, hdr_off, cur_w, cur_h, mi_cols, mi_rows;
-	u32 hdr_syn, fc, reg;
+	u32 hdr_syn, fc, reg, offset;
 	bool intra_only, p010, resolution_change, use_temporal_mv;
 	int ret;
 
@@ -1155,30 +1155,29 @@ static int cedrus_vp9_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	}
 
 	/*
-	 * 10-bit output: lower-2-bit plane offset and stride. Cleared for
-	 * 8-bit frames, so nothing is left from the job of another context.
+	 * 10-bit output: lower-2-bit plane offset and stride. An AFBC
+	 * reconstruction carries the full samples and has no such plane.
+	 * Also written for 8-bit frames, so nothing is left from the job of
+	 * another context.
 	 */
-	if (dec->bit_depth > 8) {
+	offset = 0;
+	reg = 0;
+	if (dec->bit_depth > 8 && !cedrus_dst_afbc_recon(ctx)) {
 		/*
 		 * The hardware expects the 2-bit plane right after the chroma
 		 * rows of the frame, rounded up to whole 8x8 blocks, and not
 		 * after the chroma plane of the buffer, also when it reads
 		 * the references.
 		 */
-		reg = (chroma - luma) +
-		      recon.bytesperline * (ALIGN(cur_h, 8) / 2);
-		cedrus_write(dev, VE_DEC_VP9_FIRST_OUT_OFFSET,
-			     reg & GENMASK(27, 0));
-
+		offset = (chroma - luma) +
+			 recon.bytesperline * (ALIGN(cur_h, 8) / 2);
 		reg = VE_DEC_VP9_10BIT_CFG_STRIDE(cedrus_dst_2bit_stride(recon.width));
-		if (p010)
-			reg |= VE_DEC_10BIT_CFG_P010;
-		cedrus_write(dev, VE_DEC_VP9_10BIT_CFG, reg);
-	} else {
-		cedrus_write(dev, VE_DEC_VP9_FIRST_OUT_OFFSET, 0);
-		cedrus_write(dev, VE_DEC_VP9_10BIT_CFG,
-			     p010 ? VE_DEC_10BIT_CFG_P010 : 0);
 	}
+	if (p010)
+		reg |= VE_DEC_10BIT_CFG_P010;
+
+	cedrus_write(dev, VE_DEC_VP9_FIRST_OUT_OFFSET, offset & GENMASK(27, 0));
+	cedrus_write(dev, VE_DEC_VP9_10BIT_CFG, reg);
 
 	/* Side buffers and segment feature register. */
 	cedrus_write(dev, VE_DEC_VP9_NEIGHBOR_INFO_ADDR,
@@ -1440,7 +1439,7 @@ static unsigned int cedrus_vp9_extra_cap_size(struct cedrus_ctx *ctx,
 	unsigned int extra = cedrus_dst_10bit_extra_size(ctx, pix_fmt);
 	u32 stride = cedrus_dst_2bit_stride(pix_fmt->width);
 
-	if (ctx->bit_depth > 8)
+	if (ctx->bit_depth > 8 && !cedrus_afbc_recon(ctx, pix_fmt))
 		extra += stride * ((ALIGN(pix_fmt->height, 16) -
 				    pix_fmt->height) * 3 / 2 +
 				   CEDRUS_VP9_2BIT_TAIL_ROWS);

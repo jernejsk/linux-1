@@ -851,7 +851,10 @@ static int cedrus_h265_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 		 * which is taller than half of the luma plane for the tiled
 		 * format.
 		 */
-		if (cedrus_dst_is_p010(ctx))
+		if (cedrus_dst_afbc_recon(ctx))
+			reg = cedrus_afbc_recon_2bit(ctx) ?
+			      cedrus_afbc_10bit_size(recon.width, recon.height) : 0;
+		else if (cedrus_dst_is_p010(ctx))
 			reg = recon.bytesperline * recon.height * 3 / 2;
 		else
 			reg = ctx->dst_fmt.sizeimage -
@@ -859,16 +862,22 @@ static int cedrus_h265_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 						   ctx->dst_fmt.height);
 		cedrus_write(dev, VE_DEC_H265_OFFSET_ADDR_FIRST_OUT, reg);
 
-		reg = VE_DEC_H265_10BIT_CONFIGURE_FIRST_2BIT_STRIDE(stride);
+		/*
+		 * An AFBC reconstruction has no plane of the two low bits,
+		 * unless the engine insists on it.
+		 */
+		reg = 0;
+		if (!cedrus_dst_afbc_recon(ctx) || cedrus_afbc_recon_2bit(ctx))
+			reg = VE_DEC_H265_10BIT_CONFIGURE_FIRST_2BIT_STRIDE(stride);
 		if (cedrus_dst_is_p010(ctx))
 			reg |= cedrus_h265_10bit_cfg_p010(dev);
 		cedrus_write(dev, VE_DEC_H265_10BIT_CONFIGURE, reg);
 	}
 
 	/*
-	 * P010 capture: the primary output holds the hidden 8-bit NV12
-	 * reconstruction surface, the secondary output converts it to the
-	 * visible P010 surface.
+	 * P010 capture: the primary output holds the hidden 8-bit NV12 or
+	 * AFBC reconstruction surface, the secondary output converts it to
+	 * the visible P010 surface.
 	 */
 	if (cedrus_dst_is_p010(ctx)) {
 		struct v4l2_pix_format recon = cedrus_dst_frame_fmt(ctx);

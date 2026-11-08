@@ -36,6 +36,7 @@
 #define CEDRUS_CAPABILITY_H265_10_DEC	BIT(5)
 #define CEDRUS_CAPABILITY_VP9_DEC	BIT(6)
 #define CEDRUS_CAPABILITY_P010		BIT(7)
+#define CEDRUS_CAPABILITY_AFBC		BIT(8)
 
 /*
  * The 10-bit configuration register of the H.265 engine selects P010 for
@@ -43,6 +44,13 @@
  * P010 bit of later engines.
  */
 #define CEDRUS_QUIRK_P010_OUT_FMT_FIELD	BIT(0)
+/*
+ * The H.265 decoder needs the plane of the two low bits also when it writes
+ * an AFBC reconstruction, and stalls without it. It also stalls on an AFBC
+ * reconstruction of a picture whose width is not a multiple of 32, that is,
+ * with an odd number of superblock columns.
+ */
+#define CEDRUS_QUIRK_AFBC_2BIT_PLANE	BIT(1)
 
 /*
  * The VP9 decoder needs 1 KiB aligned reconstruction addresses, so the
@@ -356,6 +364,54 @@ static inline bool cedrus_dst_is_p010(struct cedrus_ctx *ctx)
 }
 
 /*
+ * For P010 output on engines with AFBC, the hidden reconstruction surface
+ * is a 10-bit AFBC frame instead of the 8-bit NV12 planes and the plane of
+ * the two low bits. The secondary output still writes the P010 surface.
+ *
+ * The engines which need the plane of the two low bits next to the AFBC frame
+ * only decode pictures with an even number of superblock columns that way.
+ * The others get the NV12 reconstruction. (The vendor library only uses AFBC
+ * for pictures of 3840x2160 and more on these engines.)
+ */
+static inline bool cedrus_afbc_recon(struct cedrus_ctx *ctx,
+				     const struct v4l2_pix_format *fmt)
+{
+	if (fmt->pixelformat != V4L2_PIX_FMT_P010 ||
+	    !(ctx->dev->capabilities & CEDRUS_CAPABILITY_AFBC))
+		return false;
+
+	if ((ctx->dev->quirks & CEDRUS_QUIRK_AFBC_2BIT_PLANE) &&
+	    !IS_ALIGNED(fmt->width, 32))
+		return false;
+
+	return true;
+}
+
+static inline bool cedrus_dst_afbc_recon(struct cedrus_ctx *ctx)
+{
+	return cedrus_afbc_recon(ctx, &ctx->dst_fmt);
+}
+
+/* Whether the plane of the two low bits follows the AFBC reconstruction. */
+static inline bool cedrus_afbc_recon_2bit(struct cedrus_ctx *ctx)
+{
+	return ctx->dev->quirks & CEDRUS_QUIRK_AFBC_2BIT_PLANE;
+}
+
+/*
+ * Size of a 10-bit AFBC frame with 16x16 superblocks: a 16 byte header and
+ * a 512 byte body per superblock, plus room for the 1 KiB alignment of the
+ * body. It is the size the vendor library allocates, including its extra
+ * superblock row.
+ */
+static inline u32 cedrus_afbc_10bit_size(unsigned int width,
+					 unsigned int height)
+{
+	return DIV_ROUND_UP(width, 16) * DIV_ROUND_UP(height + 4, 16) *
+	       (512 + 16) + 32 + SZ_1K;
+}
+
+/*
  * Offset of the hidden reconstruction surface, which follows the
  * userspace-visible P010 surface at the start of the buffer.
  */
@@ -367,8 +423,9 @@ static inline u32 cedrus_p010_recon_offset(const struct v4l2_pix_format *fmt)
 /*
  * Format describing the 8-bit NV12 reconstruction/reference surface.
  * For P010 output this is a hidden surface (NV12 planes plus an appended
- * 2-bit plane) that follows the visible P010 data; otherwise it is the
- * capture format itself.
+ * 2-bit plane, or an AFBC frame on engines that support it) that follows
+ * the visible P010 data; otherwise it is the capture format itself. The
+ * line stride of the NV12 format is also programmed for an AFBC frame.
  */
 static inline struct v4l2_pix_format cedrus_dst_frame_fmt(struct cedrus_ctx *ctx)
 {
@@ -385,7 +442,7 @@ static inline struct v4l2_pix_format cedrus_dst_frame_fmt(struct cedrus_ctx *ctx
 /*
  * Address of a plane of the reconstruction/reference surface.  Identical
  * to cedrus_dst_buf_addr() for non-P010 output; for P010 it points past
- * the visible P010 data to the hidden NV12 surface.
+ * the visible P010 data to the hidden NV12 surface or AFBC frame.
  */
 static inline dma_addr_t cedrus_dst_frame_addr(struct cedrus_ctx *ctx,
 					       struct vb2_buffer *buf,
@@ -401,14 +458,19 @@ static inline dma_addr_t cedrus_dst_frame_addr(struct cedrus_ctx *ctx,
 	if (cedrus_dst_is_p010(ctx))
 		addr += cedrus_p010_recon_offset(&ctx->dst_fmt);
 
+	/* An AFBC frame is a single surface. */
+	if (cedrus_dst_afbc_recon(ctx))
+		return addr;
+
 	return addr + (dma_addr_t)fmt.bytesperline * fmt.height * plane;
 }
 
 /*
  * Extra capture-buffer space needed for 10-bit decoding beyond the
  * visible plane: the appended low-2-bit reconstruction plane, plus (for
- * P010) the hidden 8-bit NV12 reconstruction surface.  Shared by the
- * VP9 and H.265 decoders.
+ * P010) the hidden 8-bit NV12 reconstruction surface, or for P010 with
+ * AFBC the hidden AFBC frame, which the low-2-bit plane only follows on
+ * engines that need it.  Shared by the VP9 and H.265 decoders.
  */
 static inline unsigned int
 cedrus_dst_10bit_extra_size(struct cedrus_ctx *ctx,
@@ -418,6 +480,17 @@ cedrus_dst_10bit_extra_size(struct cedrus_ctx *ctx,
 
 	if (ctx->bit_depth <= 8)
 		return 0;
+
+	if (cedrus_afbc_recon(ctx, pix_fmt)) {
+		extra = cedrus_p010_recon_offset(pix_fmt) -
+			pix_fmt->bytesperline * pix_fmt->height * 3 / 2 +
+			cedrus_afbc_10bit_size(pix_fmt->width, pix_fmt->height);
+		if (cedrus_afbc_recon_2bit(ctx))
+			extra += cedrus_dst_2bit_size(pix_fmt->width,
+						      pix_fmt->height);
+
+		return extra;
+	}
 
 	extra = cedrus_dst_2bit_size(pix_fmt->width, pix_fmt->height);
 
