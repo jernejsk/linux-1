@@ -551,6 +551,49 @@ static void cedrus_h264_irq_disable(struct cedrus_ctx *ctx)
 		     reg & ~VE_H264_CTRL_INT_MASK);
 }
 
+/*
+ * The engine decodes the slices of a picture in raster order only, and the
+ * picture has to start with its first macroblock. With anything else, e.g.
+ * arbitrary slice order or a picture which lost its first slice, the engine
+ * reads from addresses outside of the buffers of the context and doesn't
+ * finish the slice. Slice groups are not supported either.
+ */
+static int cedrus_h264_check_slice(struct cedrus_ctx *ctx,
+				   struct cedrus_run *run)
+{
+	const struct v4l2_ctrl_h264_decode_params *decode = run->h264.decode_params;
+	const struct v4l2_ctrl_h264_slice_params *slice = run->h264.slice_params;
+	u32 fields = decode->flags & (V4L2_H264_DECODE_PARAM_FLAG_FIELD_PIC |
+				      V4L2_H264_DECODE_PARAM_FLAG_BOTTOM_FIELD);
+	bool same_pic;
+
+	if (run->h264.pps->num_slice_groups_minus1)
+		return -EINVAL;
+
+	same_pic = ctx->codec.h264.pic_valid &&
+		   ctx->codec.h264.pic_timestamp == run->dst->vb2_buf.timestamp &&
+		   ctx->codec.h264.pic_fields == fields &&
+		   ctx->codec.h264.pic_order_cnt[0] == decode->top_field_order_cnt &&
+		   ctx->codec.h264.pic_order_cnt[1] == decode->bottom_field_order_cnt;
+
+	if (same_pic) {
+		if (slice->first_mb_in_slice <= ctx->codec.h264.pic_last_mb)
+			return -EINVAL;
+	} else if (slice->first_mb_in_slice) {
+		ctx->codec.h264.pic_valid = false;
+		return -EINVAL;
+	}
+
+	ctx->codec.h264.pic_valid = true;
+	ctx->codec.h264.pic_timestamp = run->dst->vb2_buf.timestamp;
+	ctx->codec.h264.pic_fields = fields;
+	ctx->codec.h264.pic_order_cnt[0] = decode->top_field_order_cnt;
+	ctx->codec.h264.pic_order_cnt[1] = decode->bottom_field_order_cnt;
+	ctx->codec.h264.pic_last_mb = slice->first_mb_in_slice;
+
+	return 0;
+}
+
 static int cedrus_h264_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 {
 	const struct v4l2_ctrl_h264_sps *sps = run->h264.sps;
@@ -559,6 +602,10 @@ static int cedrus_h264_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 
 	ret = cedrus_check_pic_size(ctx, cedrus_h264_sps_width(sps),
 				    cedrus_h264_sps_height(sps));
+	if (ret)
+		return ret;
+
+	ret = cedrus_h264_check_slice(ctx, run);
 	if (ret)
 		return ret;
 
@@ -591,6 +638,7 @@ static int cedrus_h264_start(struct cedrus_ctx *ctx)
 	 */
 	ctx->codec.h264.deblk_buf_size = 0;
 	ctx->codec.h264.intra_pred_buf_size = 0;
+	ctx->codec.h264.pic_valid = false;
 
 	/*
 	 * NOTE: All buffers allocated here are only used by HW, so we

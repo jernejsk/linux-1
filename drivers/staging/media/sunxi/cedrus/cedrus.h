@@ -137,6 +137,13 @@ struct cedrus_ctx {
 			void		*intra_pred_buf;
 			dma_addr_t	intra_pred_buf_dma;
 			ssize_t		intra_pred_buf_size;
+
+			/* The picture of the last slice */
+			bool		pic_valid;
+			u64		pic_timestamp;
+			u32		pic_fields;
+			s32		pic_order_cnt[2];
+			u32		pic_last_mb;
 		} h264;
 		struct {
 			void		*neighbor_info_buf;
