@@ -201,6 +201,9 @@ void cedrus_job_done(struct cedrus_ctx *ctx, enum vb2_buffer_state state)
 		dev->pic_ctx = NULL;
 		spin_unlock_irqrestore(&dev->pic_lock, flags);
 
+		/* Nothing is decoded until the next job selects an engine. */
+		cedrus_engine_disable(dev);
+
 		v4l2_m2m_buf_done_and_job_finish(dev->m2m_dev,
 						 ctx->fh.m2m_ctx, state);
 		return;
