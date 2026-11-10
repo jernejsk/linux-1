@@ -346,7 +346,7 @@ static void cedrus_write_pred_weight_table(struct cedrus_ctx *ctx,
  * rare cases frame is not decoded correctly. However, setting offset to 0 and
  * skipping appropriate amount of bits with flush bits trigger always works.
  */
-static void cedrus_skip_bits(struct cedrus_dev *dev, int num)
+static int cedrus_skip_bits(struct cedrus_dev *dev, int num)
 {
 	int count = 0;
 
@@ -356,15 +356,21 @@ static void cedrus_skip_bits(struct cedrus_dev *dev, int num)
 		cedrus_write(dev, VE_H264_TRIGGER_TYPE,
 			     VE_H264_TRIGGER_TYPE_FLUSH_BITS |
 			     VE_H264_TRIGGER_TYPE_N_BITS(tmp));
-		while (cedrus_read(dev, VE_H264_STATUS) & VE_H264_STATUS_VLD_BUSY)
-			udelay(1);
+		if (cedrus_wait_for(dev, VE_H264_STATUS,
+				    VE_H264_STATUS_VLD_BUSY)) {
+			dev_err_ratelimited(dev->dev,
+					    "timed out waiting to skip bits\n");
+			return -ETIMEDOUT;
+		}
 
 		count += tmp;
 	}
+
+	return 0;
 }
 
-static void cedrus_set_params(struct cedrus_ctx *ctx,
-			      struct cedrus_run *run)
+static int cedrus_set_params(struct cedrus_ctx *ctx,
+			     struct cedrus_run *run)
 {
 	const struct v4l2_ctrl_h264_decode_params *decode = run->h264.decode_params;
 	const struct v4l2_ctrl_h264_slice_params *slice = run->h264.slice_params;
@@ -377,6 +383,7 @@ static void cedrus_set_params(struct cedrus_ctx *ctx,
 	unsigned int pic_width_in_mbs;
 	bool mbaff_pic;
 	u32 reg;
+	int ret;
 
 	cedrus_write(dev, VE_H264_VLD_LEN, slice_bytes * 8);
 	cedrus_write(dev, VE_H264_VLD_OFFSET, 0);
@@ -411,7 +418,9 @@ static void cedrus_set_params(struct cedrus_ctx *ctx,
 	cedrus_write(dev, VE_H264_TRIGGER_TYPE,
 		     VE_H264_TRIGGER_TYPE_INIT_SWDEC);
 
-	cedrus_skip_bits(dev, slice->header_bit_size);
+	ret = cedrus_skip_bits(dev, slice->header_bit_size);
+	if (ret)
+		return ret;
 
 	if (V4L2_H264_CTRL_PRED_WEIGHTS_REQUIRED(pps, slice))
 		cedrus_write_pred_weight_table(ctx, run);
@@ -503,6 +512,8 @@ static void cedrus_set_params(struct cedrus_ctx *ctx,
 		     VE_H264_CTRL_SLICE_DECODE_INT |
 		     VE_H264_CTRL_DECODE_ERR_INT |
 		     VE_H264_CTRL_VLD_DATA_REQ_INT);
+
+	return 0;
 }
 
 static enum cedrus_irq_status
@@ -562,9 +573,7 @@ static int cedrus_h264_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	if (ret)
 		return ret;
 
-	cedrus_set_params(ctx, run);
-
-	return 0;
+	return cedrus_set_params(ctx, run);
 }
 
 static int cedrus_h264_start(struct cedrus_ctx *ctx)
