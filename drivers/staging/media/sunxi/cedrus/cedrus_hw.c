@@ -28,6 +28,7 @@
 #include <media/v4l2-mem2mem.h>
 
 #include "cedrus.h"
+#include "cedrus_dec.h"
 #include "cedrus_hw.h"
 #include "cedrus_regs.h"
 
@@ -188,8 +189,7 @@ static irqreturn_t cedrus_irq(int irq, void *data)
 	else
 		state = VB2_BUF_STATE_DONE;
 
-	v4l2_m2m_buf_done_and_job_finish(ctx->dev->m2m_dev, ctx->fh.m2m_ctx,
-					 state);
+	cedrus_job_done(ctx, state);
 
 	return IRQ_HANDLED;
 }
@@ -208,8 +208,7 @@ void cedrus_watchdog(struct work_struct *work)
 
 	v4l2_err(&dev->v4l2_dev, "frame processing timed out!\n");
 	reset_control_reset(dev->rstc);
-	v4l2_m2m_buf_done_and_job_finish(ctx->dev->m2m_dev, ctx->fh.m2m_ctx,
-					 VB2_BUF_STATE_ERROR);
+	cedrus_job_done(ctx, VB2_BUF_STATE_ERROR);
 }
 
 int cedrus_hw_suspend(struct device *device)

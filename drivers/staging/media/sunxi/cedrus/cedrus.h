@@ -120,6 +120,7 @@ struct cedrus_ctx {
 	struct v4l2_pix_format		src_fmt;
 	struct v4l2_pix_format		dst_fmt;
 	struct cedrus_dec_ops		*current_codec;
+	bool				job_aborted;
 	unsigned int			bit_depth;
 
 	struct v4l2_ctrl_handler	hdl;
@@ -224,6 +225,18 @@ struct cedrus_dev {
 	u32			ve_mode_ddr;
 
 	struct delayed_work	watchdog_work;
+
+	/*
+	 * Picture which is decoded slice by slice. Its context keeps the
+	 * job until the last slice is done, pic_wait is set while the next
+	 * slice is awaited. Protected by pic_lock.
+	 */
+	spinlock_t		pic_lock;
+	struct cedrus_ctx	*pic_ctx;
+	bool			pic_wait;
+	enum vb2_buffer_state	pic_src_state;
+	struct work_struct	pic_work;
+	struct delayed_work	pic_guard_work;
 };
 
 extern struct cedrus_dec_ops cedrus_dec_ops_mpeg2;

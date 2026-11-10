@@ -17,5 +17,11 @@
 #define _CEDRUS_DEC_H_
 
 void cedrus_device_run(void *priv);
+void cedrus_job_abort(void *priv);
+void cedrus_job_done(struct cedrus_ctx *ctx, enum vb2_buffer_state state);
+void cedrus_pic_work(struct work_struct *work);
+void cedrus_pic_guard(struct work_struct *work);
+void cedrus_pic_flush(struct cedrus_ctx *ctx);
+void cedrus_pic_slice_queued(struct cedrus_ctx *ctx);
 
 #endif
