@@ -6,7 +6,6 @@
  * Copyright (c) 2018 Bootlin
  */
 
-#include <linux/delay.h>
 #include <linux/types.h>
 
 #include <media/videobuf2-dma-contig.h>
@@ -342,29 +341,38 @@ static void cedrus_write_pred_weight_table(struct cedrus_ctx *ctx,
 }
 
 /*
- * It turns out that using VE_H264_VLD_OFFSET to skip bits is not reliable. In
- * rare cases frame is not decoded correctly. However, setting offset to 0 and
- * skipping appropriate amount of bits with flush bits trigger always works.
+ * The size of the slice header is given in the bits which the parser reads,
+ * so without the emulation prevention bytes. The engine counts the offset of
+ * the slice data in the bits of the buffer. Add the emulation prevention
+ * bytes of the slice header.
  */
-static int cedrus_skip_bits(struct cedrus_dev *dev, int num)
+static int cedrus_h264_slice_data_offset(struct vb2_buffer *src_buf,
+					 u32 header_bits, u32 *offset)
 {
-	int count = 0;
+	size_t len = vb2_get_plane_payload(src_buf, 0);
+	const u8 *data = vb2_plane_vaddr(src_buf, 0);
+	unsigned int bytes = 0, zeros = 0, epb = 0;
+	size_t i;
 
-	while (count < num) {
-		int tmp = min(num - count, 32);
+	if (!data)
+		return -ENOMEM;
 
-		cedrus_write(dev, VE_H264_TRIGGER_TYPE,
-			     VE_H264_TRIGGER_TYPE_FLUSH_BITS |
-			     VE_H264_TRIGGER_TYPE_N_BITS(tmp));
-		if (cedrus_wait_for(dev, VE_H264_STATUS,
-				    VE_H264_STATUS_VLD_BUSY)) {
-			dev_err_ratelimited(dev->dev,
-					    "timed out waiting to skip bits\n");
-			return -ETIMEDOUT;
+	/* Go up to the byte in which the slice data starts. */
+	for (i = 0; i < len && bytes <= header_bits / 8; i++) {
+		if (zeros >= 2 && data[i] == 0x03) {
+			zeros = 0;
+			epb++;
+			continue;
 		}
 
-		count += tmp;
+		zeros = data[i] ? 0 : zeros + 1;
+		bytes++;
 	}
+
+	if (bytes <= header_bits / 8)
+		return -EINVAL;
+
+	*offset = header_bits + epb * 8;
 
 	return 0;
 }
@@ -382,11 +390,17 @@ static int cedrus_set_params(struct cedrus_ctx *ctx,
 	size_t slice_bytes = vb2_get_plane_payload(src_buf, 0);
 	unsigned int pic_width_in_mbs;
 	bool mbaff_pic;
+	u32 offset;
 	u32 reg;
 	int ret;
 
-	cedrus_write(dev, VE_H264_VLD_LEN, slice_bytes * 8);
-	cedrus_write(dev, VE_H264_VLD_OFFSET, 0);
+	ret = cedrus_h264_slice_data_offset(src_buf, slice->header_bit_size,
+					    &offset);
+	if (ret)
+		return ret;
+
+	cedrus_write(dev, VE_H264_VLD_LEN, slice_bytes * 8 - offset);
+	cedrus_write(dev, VE_H264_VLD_OFFSET, offset);
 
 	src_buf_addr = vb2_dma_contig_plane_dma_addr(src_buf, 0);
 	cedrus_write(dev, VE_H264_VLD_END, src_buf_addr + slice_bytes);
@@ -417,10 +431,6 @@ static int cedrus_set_params(struct cedrus_ctx *ctx,
 	 */
 	cedrus_write(dev, VE_H264_TRIGGER_TYPE,
 		     VE_H264_TRIGGER_TYPE_INIT_SWDEC);
-
-	ret = cedrus_skip_bits(dev, slice->header_bit_size);
-	if (ret)
-		return ret;
 
 	if (V4L2_H264_CTRL_PRED_WEIGHTS_REQUIRED(pps, slice))
 		cedrus_write_pred_weight_table(ctx, run);
