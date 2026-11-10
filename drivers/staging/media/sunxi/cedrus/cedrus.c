@@ -732,6 +732,7 @@ static const struct cedrus_variant sun50i_h6_cedrus_variant = {
 			  CEDRUS_CAPABILITY_VP8_DEC |
 			  CEDRUS_CAPABILITY_P010 |
 			  CEDRUS_CAPABILITY_AFBC,
+	.quirks		= CEDRUS_QUIRK_P010_OUT_FMT_FIELD,
 	.mod_rate	= 600000000,
 };
 

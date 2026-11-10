@@ -401,6 +401,15 @@ static void cedrus_h265_write_tiles(struct cedrus_ctx *ctx,
 	}
 }
 
+/* The P010 select of the secondary output moved between engine generations. */
+static u32 cedrus_h265_10bit_cfg_p010(struct cedrus_dev *dev)
+{
+	if (dev->quirks & CEDRUS_QUIRK_P010_OUT_FMT_FIELD)
+		return VE_DEC_H265_10BIT_CONFIGURE_SECOND_OUT_FMT(VE_DEC_H265_SECOND_OUT_FMT_P010);
+
+	return VE_DEC_10BIT_CFG_P010;
+}
+
 static int cedrus_h265_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 {
 	struct cedrus_dev *dev = ctx->dev;
@@ -829,7 +838,7 @@ static int cedrus_h265_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 		if (!cedrus_dst_afbc_recon(ctx))
 			reg = VE_DEC_H265_10BIT_CONFIGURE_FIRST_2BIT_STRIDE(stride);
 		if (cedrus_dst_is_p010(ctx))
-			reg |= VE_DEC_10BIT_CFG_P010;
+			reg |= cedrus_h265_10bit_cfg_p010(dev);
 		cedrus_write(dev, VE_DEC_H265_10BIT_CONFIGURE, reg);
 	}
 

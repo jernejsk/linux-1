@@ -39,6 +39,13 @@
 #define CEDRUS_CAPABILITY_AFBC		BIT(8)
 
 /*
+ * The 10-bit configuration register of the H.265 engine selects P010 for
+ * the secondary output with its second output format field instead of the
+ * P010 bit of later engines.
+ */
+#define CEDRUS_QUIRK_P010_OUT_FMT_FIELD	BIT(0)
+
+/*
  * The VP9 decoder needs 1 KiB aligned reconstruction addresses, so the
  * chroma plane, at bytesperline * height, must be 1 KiB aligned. A
  * 64 byte aligned line stride guarantees it for any 16 line aligned
@@ -235,6 +242,7 @@ struct cedrus_dec_ops {
 
 struct cedrus_variant {
 	unsigned int	capabilities;
+	unsigned int	quirks;
 	unsigned int	mod_rate;
 	u32		ve_mode_ddr;
 };
@@ -260,6 +268,7 @@ struct cedrus_dev {
 	struct reset_control	*rstc;
 
 	unsigned int		capabilities;
+	unsigned int		quirks;
 	u32			ve_mode_ddr;
 
 	struct delayed_work	watchdog_work;
