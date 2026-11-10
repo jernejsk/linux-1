@@ -277,9 +277,6 @@ struct cedrus_dev {
 	u32			ve_mode_ddr;
 
 	struct delayed_work	watchdog_work;
-
-	/* Codec of the last job, to reset the decoder on codec switches */
-	struct cedrus_dec_ops	*last_codec;
 };
 
 extern struct cedrus_dec_ops cedrus_dec_ops_mpeg2;

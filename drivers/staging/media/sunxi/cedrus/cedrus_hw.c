@@ -96,32 +96,6 @@ void cedrus_engine_disable(struct cedrus_dev *dev)
 	cedrus_write(dev, VE_MODE, VE_MODE_DISABLED);
 }
 
-/*
- * Reset the decoder core through the video engine's own reset register,
- * after waiting for outstanding memory accesses, like the vendor library
- * does on some SoCs when it sets up a decoder.
- *
- * Decoding state survives the bus reset line and some of it is shared
- * between codecs: after a VP8 frame, for example, the next H.264 stream
- * decodes corrupted until the next IDR frame.
- */
-void cedrus_engine_reset(struct cedrus_dev *dev)
-{
-	u32 reg;
-
-	/* Reset the decoder even if the engine doesn't become idle. */
-	readl_poll_timeout_atomic(dev->base + VE_RESET, reg,
-				  reg & VE_RESET_SYNC_IDLE, 1, 1000);
-
-	reg = cedrus_read(dev, VE_RESET);
-	cedrus_write(dev, VE_RESET,
-		     reg | VE_RESET_DEC | VE_RESET_DEC_REQ_MASK);
-	/* Read back to make sure the reset is asserted for a few cycles. */
-	cedrus_read(dev, VE_RESET);
-	cedrus_write(dev, VE_RESET,
-		     reg & ~(VE_RESET_DEC | VE_RESET_DEC_REQ_MASK));
-}
-
 void cedrus_dst_format_set(struct cedrus_dev *dev,
 			   struct v4l2_pix_format *fmt)
 {
@@ -260,8 +234,6 @@ void cedrus_watchdog(struct work_struct *work)
 
 	v4l2_err(&dev->v4l2_dev, "frame processing timed out!\n");
 	reset_control_reset(dev->rstc);
-	cedrus_engine_reset(dev);
-	dev->last_codec = NULL;
 	v4l2_m2m_buf_done_and_job_finish(ctx->dev->m2m_dev, ctx->fh.m2m_ctx,
 					 VB2_BUF_STATE_ERROR);
 }
