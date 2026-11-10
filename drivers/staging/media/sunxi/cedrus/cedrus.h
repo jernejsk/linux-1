@@ -84,6 +84,7 @@ struct cedrus_vp8_run {
 struct cedrus_run {
 	struct vb2_v4l2_buffer	*src;
 	struct vb2_v4l2_buffer	*dst;
+	bool			first_slice;
 
 	union {
 		struct cedrus_h264_run	h264;

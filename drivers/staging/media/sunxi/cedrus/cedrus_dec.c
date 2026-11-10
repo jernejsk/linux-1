@@ -39,6 +39,9 @@ void cedrus_device_run(void *priv)
 	if (src_req)
 		v4l2_ctrl_request_setup(src_req, &ctx->hdl);
 
+	/* The slice based codecs tell below when a picture continues. */
+	run.first_slice = true;
+
 	switch (ctx->src_fmt.pixelformat) {
 	case V4L2_PIX_FMT_MPEG2_SLICE:
 		run.mpeg2.sequence = cedrus_find_control_data(ctx,
@@ -62,6 +65,7 @@ void cedrus_device_run(void *priv)
 			V4L2_CID_STATELESS_H264_SPS);
 		run.h264.pred_weights = cedrus_find_control_data(ctx,
 			V4L2_CID_STATELESS_H264_PRED_WEIGHTS);
+		run.first_slice = !run.h264.slice_params->first_mb_in_slice;
 		break;
 
 	case V4L2_PIX_FMT_HEVC_SLICE:
@@ -79,6 +83,7 @@ void cedrus_device_run(void *priv)
 			V4L2_CID_STATELESS_HEVC_ENTRY_POINT_OFFSETS);
 		run.h265.entry_points_count = cedrus_get_num_of_controls(ctx,
 			V4L2_CID_STATELESS_HEVC_ENTRY_POINT_OFFSETS);
+		run.first_slice = !run.h265.slice_params->slice_segment_addr;
 		break;
 
 	case V4L2_PIX_FMT_VP8_FRAME:
@@ -93,6 +98,15 @@ void cedrus_device_run(void *priv)
 	v4l2_m2m_buf_copy_metadata(run.src, run.dst);
 
 	cedrus_dst_format_set(dev, &ctx->dst_fmt);
+
+	/*
+	 * The engine keeps state of what it decoded last, which is not all in
+	 * registers and which the next picture, of whatever codec and
+	 * context, is not always decoded correctly with. Start every picture
+	 * with the decoder core in its reset state.
+	 */
+	if (run.first_slice)
+		cedrus_engine_reset(dev);
 
 	error = ctx->current_codec->setup(ctx, &run);
 	if (error)

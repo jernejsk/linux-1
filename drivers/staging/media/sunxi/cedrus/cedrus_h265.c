@@ -541,7 +541,7 @@ static int cedrus_h265_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	}
 
 	/* Clear the number of correctly-decoded coding tree blocks. */
-	if (ctx->fh.m2m_ctx->new_frame)
+	if (run->first_slice)
 		cedrus_write(dev, VE_DEC_H265_DEC_CTB_NUM, 0);
 
 	/* Initialize bitstream access. */
@@ -735,7 +735,7 @@ static int cedrus_h265_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 				V4L2_HEVC_SLICE_PARAMS_FLAG_DEPENDENT_SLICE_SEGMENT,
 				slice_params->flags);
 
-	if (ctx->fh.m2m_ctx->new_frame)
+	if (run->first_slice)
 		reg |= VE_DEC_H265_DEC_SLICE_HDR_INFO0_FLAG_FIRST_SLICE_SEGMENT_IN_PIC;
 
 	cedrus_write(dev, VE_DEC_H265_DEC_SLICE_HDR_INFO0, reg);

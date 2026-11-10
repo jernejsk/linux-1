@@ -81,6 +81,28 @@ void cedrus_engine_disable(struct cedrus_dev *dev)
 	cedrus_write(dev, VE_MODE, VE_MODE_DISABLED);
 }
 
+/*
+ * Reset the decoder core through the video engine's own reset register,
+ * after waiting for outstanding memory accesses, like the vendor library
+ * does when it sets up a decoder.
+ */
+void cedrus_engine_reset(struct cedrus_dev *dev)
+{
+	u32 reg;
+
+	/* Reset the decoder even if the engine doesn't become idle. */
+	readl_poll_timeout_atomic(dev->base + VE_RESET, reg,
+				  reg & VE_RESET_SYNC_IDLE, 1, 1000);
+
+	reg = cedrus_read(dev, VE_RESET);
+	cedrus_write(dev, VE_RESET,
+		     reg | VE_RESET_DEC | VE_RESET_DEC_REQ_MASK);
+	/* Read back to make sure the reset is asserted for a few cycles. */
+	cedrus_read(dev, VE_RESET);
+	cedrus_write(dev, VE_RESET,
+		     reg & ~(VE_RESET_DEC | VE_RESET_DEC_REQ_MASK));
+}
+
 void cedrus_dst_format_set(struct cedrus_dev *dev,
 			   struct v4l2_pix_format *fmt)
 {

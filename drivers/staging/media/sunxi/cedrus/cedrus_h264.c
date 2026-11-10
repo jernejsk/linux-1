@@ -479,7 +479,7 @@ static int cedrus_set_params(struct cedrus_ctx *ctx,
 	reg |= decode->nal_ref_idc ? BIT(12) : 0;
 	reg |= (slice->slice_type & 0xf) << 8;
 	reg |= slice->cabac_init_idc & 0x3;
-	if (ctx->fh.m2m_ctx->new_frame)
+	if (run->first_slice)
 		reg |= VE_H264_SHS_FIRST_SLICE_IN_PIC;
 	if (decode->flags & V4L2_H264_DECODE_PARAM_FLAG_FIELD_PIC)
 		reg |= VE_H264_SHS_FIELD_PIC;
