@@ -551,6 +551,13 @@ static int cedrus_h264_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 
 	cedrus_engine_enable(ctx);
 
+	/*
+	 * The VP8 job of another context leaves the engine in VP8 mode. The
+	 * control register is only written when the decoding is triggered,
+	 * so leave that mode before the engine is set up.
+	 */
+	cedrus_write(dev, VE_H264_CTRL, 0);
+
 	cedrus_write(dev, VE_H264_SDROT_CTRL, 0);
 	cedrus_write(dev, VE_H264_EXTRA_BUFFER1,
 		     ctx->codec.h264.pic_info_buf_dma);
