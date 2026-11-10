@@ -530,6 +530,21 @@ static int cedrus_s_fmt_vid_out(struct file *file, void *priv,
 	return cedrus_s_fmt_vid_out_p(cedrus_file2ctx(file), &f->fmt.pix);
 }
 
+static int cedrus_decoder_cmd(struct file *file, void *priv,
+			      struct v4l2_decoder_cmd *dc)
+{
+	int ret;
+
+	ret = v4l2_m2m_ioctl_stateless_decoder_cmd(file, priv, dc);
+	if (ret)
+		return ret;
+
+	/* The picture ends with the slice which is kept, if there is one. */
+	cedrus_pic_flush(cedrus_file2ctx(file));
+
+	return 0;
+}
+
 const struct v4l2_ioctl_ops cedrus_ioctl_ops = {
 	.vidioc_querycap		= cedrus_querycap,
 
@@ -555,7 +570,7 @@ const struct v4l2_ioctl_ops cedrus_ioctl_ops = {
 	.vidioc_streamoff		= v4l2_m2m_ioctl_streamoff,
 
 	.vidioc_try_decoder_cmd		= v4l2_m2m_ioctl_stateless_try_decoder_cmd,
-	.vidioc_decoder_cmd		= v4l2_m2m_ioctl_stateless_decoder_cmd,
+	.vidioc_decoder_cmd		= cedrus_decoder_cmd,
 
 	.vidioc_subscribe_event		= v4l2_ctrl_subscribe_event,
 	.vidioc_unsubscribe_event	= v4l2_event_unsubscribe,
@@ -695,6 +710,9 @@ static void cedrus_buf_queue(struct vb2_buffer *vb)
 	struct cedrus_ctx *ctx = vb2_get_drv_priv(vb->vb2_queue);
 
 	v4l2_m2m_buf_queue(ctx->fh.m2m_ctx, vbuf);
+
+	if (V4L2_TYPE_IS_OUTPUT(vb->vb2_queue->type))
+		cedrus_pic_slice_queued(ctx);
 }
 
 static void cedrus_buf_request_complete(struct vb2_buffer *vb)

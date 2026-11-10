@@ -523,6 +523,7 @@ static const struct video_device cedrus_video_device = {
 
 static const struct v4l2_m2m_ops cedrus_m2m_ops = {
 	.device_run	= cedrus_device_run,
+	.job_abort	= cedrus_job_abort,
 };
 
 static const struct media_device_ops cedrus_m2m_media_ops = {
@@ -555,6 +556,9 @@ static int cedrus_probe(struct platform_device *pdev)
 	mutex_init(&dev->dev_mutex);
 
 	INIT_DELAYED_WORK(&dev->watchdog_work, cedrus_watchdog);
+	spin_lock_init(&dev->pic_lock);
+	INIT_WORK(&dev->pic_work, cedrus_pic_work);
+	INIT_DELAYED_WORK(&dev->pic_guard_work, cedrus_pic_guard);
 
 	ret = v4l2_device_register(&pdev->dev, &dev->v4l2_dev);
 	if (ret) {
@@ -632,6 +636,8 @@ static void cedrus_remove(struct platform_device *pdev)
 	struct cedrus_dev *dev = platform_get_drvdata(pdev);
 
 	cancel_delayed_work_sync(&dev->watchdog_work);
+	cancel_delayed_work_sync(&dev->pic_guard_work);
+	cancel_work_sync(&dev->pic_work);
 	if (media_devnode_is_registered(dev->mdev.devnode)) {
 		media_device_unregister(&dev->mdev);
 		v4l2_m2m_unregister_media_controller(dev->m2m_dev);
