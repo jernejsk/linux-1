@@ -44,6 +44,11 @@
  * P010 bit of later engines.
  */
 #define CEDRUS_QUIRK_P010_OUT_FMT_FIELD	BIT(0)
+/*
+ * The H.265 decoder needs the plane of the two low bits also when it writes
+ * an AFBC reconstruction, and stalls without it.
+ */
+#define CEDRUS_QUIRK_AFBC_2BIT_PLANE	BIT(1)
 
 /*
  * The VP9 decoder needs 1 KiB aligned reconstruction addresses, so the
@@ -353,6 +358,12 @@ static inline bool cedrus_dst_afbc_recon(struct cedrus_ctx *ctx)
 	return cedrus_afbc_recon(ctx, ctx->dst_fmt.pixelformat);
 }
 
+/* Whether the plane of the two low bits follows the AFBC reconstruction. */
+static inline bool cedrus_afbc_recon_2bit(struct cedrus_ctx *ctx)
+{
+	return ctx->dev->quirks & CEDRUS_QUIRK_AFBC_2BIT_PLANE;
+}
+
 /*
  * Size of a 10-bit AFBC frame with 16x16 superblocks: a 16 byte header and
  * a 512 byte body per superblock, plus room for the 1 KiB alignment of the
@@ -424,7 +435,8 @@ static inline dma_addr_t cedrus_dst_frame_addr(struct cedrus_ctx *ctx,
  * Extra capture-buffer space needed for 10-bit decoding beyond the
  * visible plane: the appended low-2-bit reconstruction plane, plus (for
  * P010) the hidden 8-bit NV12 reconstruction surface, or for P010 with
- * AFBC only the hidden AFBC frame.  Shared by the VP9 and H.265 decoders.
+ * AFBC the hidden AFBC frame, which the low-2-bit plane only follows on
+ * engines that need it.  Shared by the VP9 and H.265 decoders.
  */
 static inline unsigned int
 cedrus_dst_10bit_extra_size(struct cedrus_ctx *ctx,
@@ -435,10 +447,16 @@ cedrus_dst_10bit_extra_size(struct cedrus_ctx *ctx,
 	if (ctx->bit_depth <= 8)
 		return 0;
 
-	if (cedrus_afbc_recon(ctx, pix_fmt->pixelformat))
-		return cedrus_p010_recon_offset(pix_fmt) -
-		       pix_fmt->bytesperline * pix_fmt->height * 3 / 2 +
-		       cedrus_afbc_10bit_size(pix_fmt->width, pix_fmt->height);
+	if (cedrus_afbc_recon(ctx, pix_fmt->pixelformat)) {
+		extra = cedrus_p010_recon_offset(pix_fmt) -
+			pix_fmt->bytesperline * pix_fmt->height * 3 / 2 +
+			cedrus_afbc_10bit_size(pix_fmt->width, pix_fmt->height);
+		if (cedrus_afbc_recon_2bit(ctx))
+			extra += cedrus_dst_2bit_size(pix_fmt->width,
+						      pix_fmt->height);
+
+		return extra;
+	}
 
 	extra = cedrus_dst_2bit_size(pix_fmt->width, pix_fmt->height);
 

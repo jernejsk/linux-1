@@ -824,7 +824,8 @@ static int cedrus_h265_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 		 * format.
 		 */
 		if (cedrus_dst_afbc_recon(ctx))
-			reg = 0;
+			reg = cedrus_afbc_recon_2bit(ctx) ?
+			      cedrus_afbc_10bit_size(recon.width, recon.height) : 0;
 		else if (cedrus_dst_is_p010(ctx))
 			reg = recon.bytesperline * recon.height * 3 / 2;
 		else
@@ -833,9 +834,12 @@ static int cedrus_h265_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 						   ctx->dst_fmt.height);
 		cedrus_write(dev, VE_DEC_H265_OFFSET_ADDR_FIRST_OUT, reg);
 
-		/* An AFBC reconstruction has no plane of the two low bits. */
+		/*
+		 * An AFBC reconstruction has no plane of the two low bits,
+		 * unless the engine insists on it.
+		 */
 		reg = 0;
-		if (!cedrus_dst_afbc_recon(ctx))
+		if (!cedrus_dst_afbc_recon(ctx) || cedrus_afbc_recon_2bit(ctx))
 			reg = VE_DEC_H265_10BIT_CONFIGURE_FIRST_2BIT_STRIDE(stride);
 		if (cedrus_dst_is_p010(ctx))
 			reg |= cedrus_h265_10bit_cfg_p010(dev);
