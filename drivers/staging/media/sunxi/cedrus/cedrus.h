@@ -153,6 +153,7 @@ struct cedrus_ctx {
 			unsigned int	last_frame_p_type;
 			unsigned int	last_filter_type;
 			unsigned int	last_sharpness_level;
+			bool		read_error;
 
 			u8		*entropy_probs_buf;
 			dma_addr_t	entropy_probs_buf_dma;

@@ -433,87 +433,96 @@ static const u8 k_mv_entropy_update_probs[2][V4L2_VP8_MV_PROB_CNT] = {
 	  254, 254, 254, 254, 254, 251, 251, 254, 254, 254 }
 };
 
-static uint8_t read_bits(struct cedrus_dev *dev, unsigned int bits_count,
+static uint8_t read_bits(struct cedrus_ctx *ctx, unsigned int bits_count,
 			 unsigned int probability)
 {
+	struct cedrus_dev *dev = ctx->dev;
+
+	/* Don't wait again and again for an engine which doesn't answer. */
+	if (ctx->codec.vp8.read_error)
+		return 0;
+
 	cedrus_write(dev, VE_H264_TRIGGER_TYPE,
 		     VE_H264_TRIGGER_TYPE_VP8_GET_BITS |
 		     VE_H264_TRIGGER_TYPE_BIN_LENS(bits_count) |
 		     VE_H264_TRIGGER_TYPE_PROBABILITY(probability));
 
-	cedrus_wait_for(dev, VE_H264_STATUS, VE_H264_STATUS_VLD_BUSY);
+	if (cedrus_wait_for(dev, VE_H264_STATUS, VE_H264_STATUS_VLD_BUSY)) {
+		ctx->codec.vp8.read_error = true;
+		return 0;
+	}
 
 	return cedrus_read(dev, VE_H264_BASIC_BITS);
 }
 
-static void get_delta_q(struct cedrus_dev *dev)
+static void get_delta_q(struct cedrus_ctx *ctx)
 {
-	if (read_bits(dev, 1, VP8_PROB_HALF)) {
-		read_bits(dev, 4, VP8_PROB_HALF);
-		read_bits(dev, 1, VP8_PROB_HALF);
+	if (read_bits(ctx, 1, VP8_PROB_HALF)) {
+		read_bits(ctx, 4, VP8_PROB_HALF);
+		read_bits(ctx, 1, VP8_PROB_HALF);
 	}
 }
 
-static void process_segmentation_info(struct cedrus_dev *dev)
+static void process_segmentation_info(struct cedrus_ctx *ctx)
 {
 	int update, i;
 
-	update = read_bits(dev, 1, VP8_PROB_HALF);
+	update = read_bits(ctx, 1, VP8_PROB_HALF);
 
-	if (read_bits(dev, 1, VP8_PROB_HALF)) {
-		read_bits(dev, 1, VP8_PROB_HALF);
+	if (read_bits(ctx, 1, VP8_PROB_HALF)) {
+		read_bits(ctx, 1, VP8_PROB_HALF);
 
 		for (i = 0; i < 4; i++)
-			if (read_bits(dev, 1, VP8_PROB_HALF)) {
-				read_bits(dev, 7, VP8_PROB_HALF);
-				read_bits(dev, 1, VP8_PROB_HALF);
+			if (read_bits(ctx, 1, VP8_PROB_HALF)) {
+				read_bits(ctx, 7, VP8_PROB_HALF);
+				read_bits(ctx, 1, VP8_PROB_HALF);
 			}
 
 		for (i = 0; i < 4; i++)
-			if (read_bits(dev, 1, VP8_PROB_HALF)) {
-				read_bits(dev, 6, VP8_PROB_HALF);
-				read_bits(dev, 1, VP8_PROB_HALF);
+			if (read_bits(ctx, 1, VP8_PROB_HALF)) {
+				read_bits(ctx, 6, VP8_PROB_HALF);
+				read_bits(ctx, 1, VP8_PROB_HALF);
 			}
 	}
 
 	if (update)
 		for (i = 0; i < 3; i++)
-			if (read_bits(dev, 1, VP8_PROB_HALF))
-				read_bits(dev, 8, VP8_PROB_HALF);
+			if (read_bits(ctx, 1, VP8_PROB_HALF))
+				read_bits(ctx, 8, VP8_PROB_HALF);
 }
 
-static void process_ref_lf_delta_info(struct cedrus_dev *dev)
+static void process_ref_lf_delta_info(struct cedrus_ctx *ctx)
 {
-	if (read_bits(dev, 1, VP8_PROB_HALF)) {
+	if (read_bits(ctx, 1, VP8_PROB_HALF)) {
 		int i;
 
 		for (i = 0; i < 4; i++)
-			if (read_bits(dev, 1, VP8_PROB_HALF)) {
-				read_bits(dev, 6, VP8_PROB_HALF);
-				read_bits(dev, 1, VP8_PROB_HALF);
+			if (read_bits(ctx, 1, VP8_PROB_HALF)) {
+				read_bits(ctx, 6, VP8_PROB_HALF);
+				read_bits(ctx, 1, VP8_PROB_HALF);
 			}
 
 		for (i = 0; i < 4; i++)
-			if (read_bits(dev, 1, VP8_PROB_HALF)) {
-				read_bits(dev, 6, VP8_PROB_HALF);
-				read_bits(dev, 1, VP8_PROB_HALF);
+			if (read_bits(ctx, 1, VP8_PROB_HALF)) {
+				read_bits(ctx, 6, VP8_PROB_HALF);
+				read_bits(ctx, 1, VP8_PROB_HALF);
 			}
 	}
 }
 
-static void process_ref_frame_info(struct cedrus_dev *dev)
+static void process_ref_frame_info(struct cedrus_ctx *ctx)
 {
-	u8 refresh_golden_frame = read_bits(dev, 1, VP8_PROB_HALF);
-	u8 refresh_alt_ref_frame = read_bits(dev, 1, VP8_PROB_HALF);
+	u8 refresh_golden_frame = read_bits(ctx, 1, VP8_PROB_HALF);
+	u8 refresh_alt_ref_frame = read_bits(ctx, 1, VP8_PROB_HALF);
 
 	if (!refresh_golden_frame)
-		read_bits(dev, 2, VP8_PROB_HALF);
+		read_bits(ctx, 2, VP8_PROB_HALF);
 
 	if (!refresh_alt_ref_frame)
-		read_bits(dev, 2, VP8_PROB_HALF);
+		read_bits(ctx, 2, VP8_PROB_HALF);
 
-	read_bits(dev, 1, VP8_PROB_HALF);
-	read_bits(dev, 1, VP8_PROB_HALF);
+	read_bits(ctx, 1, VP8_PROB_HALF);
+	read_bits(ctx, 1, VP8_PROB_HALF);
 }
 
 static void cedrus_irq_clear(struct cedrus_dev *dev)
@@ -522,73 +531,89 @@ static void cedrus_irq_clear(struct cedrus_dev *dev)
 		     VE_H264_STATUS_INT_MASK);
 }
 
-static void cedrus_read_header(struct cedrus_dev *dev,
-			       const struct v4l2_ctrl_vp8_frame *slice)
+static int cedrus_read_header(struct cedrus_ctx *ctx,
+			      const struct v4l2_ctrl_vp8_frame *slice)
 {
+	struct cedrus_dev *dev = ctx->dev;
 	int i, j;
 
+	ctx->codec.vp8.read_error = false;
+
 	if (V4L2_VP8_FRAME_IS_KEY_FRAME(slice)) {
-		read_bits(dev, 1, VP8_PROB_HALF);
-		read_bits(dev, 1, VP8_PROB_HALF);
+		read_bits(ctx, 1, VP8_PROB_HALF);
+		read_bits(ctx, 1, VP8_PROB_HALF);
 	}
 
-	if (read_bits(dev, 1, VP8_PROB_HALF))
-		process_segmentation_info(dev);
+	if (read_bits(ctx, 1, VP8_PROB_HALF))
+		process_segmentation_info(ctx);
 
-	read_bits(dev, 1, VP8_PROB_HALF);
-	read_bits(dev, 6, VP8_PROB_HALF);
-	read_bits(dev, 3, VP8_PROB_HALF);
+	read_bits(ctx, 1, VP8_PROB_HALF);
+	read_bits(ctx, 6, VP8_PROB_HALF);
+	read_bits(ctx, 3, VP8_PROB_HALF);
 
-	if (read_bits(dev, 1, VP8_PROB_HALF))
-		process_ref_lf_delta_info(dev);
+	if (read_bits(ctx, 1, VP8_PROB_HALF))
+		process_ref_lf_delta_info(ctx);
 
-	read_bits(dev, 2, VP8_PROB_HALF);
+	read_bits(ctx, 2, VP8_PROB_HALF);
 
 	/* y_ac_qi */
-	read_bits(dev, 7, VP8_PROB_HALF);
+	read_bits(ctx, 7, VP8_PROB_HALF);
 
 	/* Parses y_dc_delta, y2_dc_delta, etc. */
 	for (i = 0; i < QUANT_DELTA_COUNT; i++)
-		get_delta_q(dev);
+		get_delta_q(ctx);
 
 	if (!V4L2_VP8_FRAME_IS_KEY_FRAME(slice))
-		process_ref_frame_info(dev);
+		process_ref_frame_info(ctx);
 
-	read_bits(dev, 1, VP8_PROB_HALF);
+	read_bits(ctx, 1, VP8_PROB_HALF);
 
 	if (!V4L2_VP8_FRAME_IS_KEY_FRAME(slice))
-		read_bits(dev, 1, VP8_PROB_HALF);
+		read_bits(ctx, 1, VP8_PROB_HALF);
 
-	cedrus_write(dev, VE_H264_TRIGGER_TYPE, VE_H264_TRIGGER_TYPE_VP8_UPDATE_COEF);
-	cedrus_wait_for(dev, VE_H264_STATUS, VE_H264_STATUS_VP8_UPPROB_BUSY);
-	cedrus_irq_clear(dev);
+	if (!ctx->codec.vp8.read_error) {
+		cedrus_write(dev, VE_H264_TRIGGER_TYPE,
+			     VE_H264_TRIGGER_TYPE_VP8_UPDATE_COEF);
+		if (cedrus_wait_for(dev, VE_H264_STATUS,
+				    VE_H264_STATUS_VP8_UPPROB_BUSY))
+			ctx->codec.vp8.read_error = true;
+		cedrus_irq_clear(dev);
+	}
 
-	if (read_bits(dev, 1, VP8_PROB_HALF))
-		read_bits(dev, 8, VP8_PROB_HALF);
+	if (read_bits(ctx, 1, VP8_PROB_HALF))
+		read_bits(ctx, 8, VP8_PROB_HALF);
 
 	if (!V4L2_VP8_FRAME_IS_KEY_FRAME(slice)) {
-		read_bits(dev, 8, VP8_PROB_HALF);
-		read_bits(dev, 8, VP8_PROB_HALF);
-		read_bits(dev, 8, VP8_PROB_HALF);
+		read_bits(ctx, 8, VP8_PROB_HALF);
+		read_bits(ctx, 8, VP8_PROB_HALF);
+		read_bits(ctx, 8, VP8_PROB_HALF);
 
-		if (read_bits(dev, 1, VP8_PROB_HALF)) {
-			read_bits(dev, 8, VP8_PROB_HALF);
-			read_bits(dev, 8, VP8_PROB_HALF);
-			read_bits(dev, 8, VP8_PROB_HALF);
-			read_bits(dev, 8, VP8_PROB_HALF);
+		if (read_bits(ctx, 1, VP8_PROB_HALF)) {
+			read_bits(ctx, 8, VP8_PROB_HALF);
+			read_bits(ctx, 8, VP8_PROB_HALF);
+			read_bits(ctx, 8, VP8_PROB_HALF);
+			read_bits(ctx, 8, VP8_PROB_HALF);
 		}
 
-		if (read_bits(dev, 1, VP8_PROB_HALF)) {
-			read_bits(dev, 8, VP8_PROB_HALF);
-			read_bits(dev, 8, VP8_PROB_HALF);
-			read_bits(dev, 8, VP8_PROB_HALF);
+		if (read_bits(ctx, 1, VP8_PROB_HALF)) {
+			read_bits(ctx, 8, VP8_PROB_HALF);
+			read_bits(ctx, 8, VP8_PROB_HALF);
+			read_bits(ctx, 8, VP8_PROB_HALF);
 		}
 
 		for (i = 0; i < 2; i++)
 			for (j = 0; j < V4L2_VP8_MV_PROB_CNT; j++)
-				if (read_bits(dev, 1, k_mv_entropy_update_probs[i][j]))
-					read_bits(dev, 7, VP8_PROB_HALF);
+				if (read_bits(ctx, 1, k_mv_entropy_update_probs[i][j]))
+					read_bits(ctx, 7, VP8_PROB_HALF);
 	}
+
+	if (ctx->codec.vp8.read_error) {
+		dev_err_ratelimited(dev->dev,
+				    "timed out waiting to read the frame header\n");
+		return -ETIMEDOUT;
+	}
+
+	return 0;
 }
 
 static void cedrus_vp8_update_probs(const struct v4l2_ctrl_vp8_frame *slice,
@@ -661,6 +686,7 @@ static int cedrus_vp8_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	dma_addr_t src_buf_addr;
 	int header_size;
 	u32 reg;
+	int ret;
 
 	if (cedrus_check_pic_size(ctx, slice->width, slice->height))
 		return -EINVAL;
@@ -766,7 +792,9 @@ static int cedrus_vp8_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 		reg |= VE_VP8_PPS_PIC_TYPE_P_FRAME;
 	cedrus_write(dev, VE_VP8_PPS, reg);
 
-	cedrus_read_header(dev, slice);
+	ret = cedrus_read_header(ctx, slice);
+	if (ret)
+		return ret;
 
 	/* reset registers changed by HW */
 	cedrus_write(dev, VE_H264_CUR_MB_NUM, 0);
