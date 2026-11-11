@@ -548,9 +548,16 @@ static int cedrus_h265_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	cedrus_write(dev, VE_DEC_H265_TRIGGER, VE_DEC_H265_TRIGGER_INIT_SWDEC);
 
 	/*
-	 * Cedrus expects that bitstream pointer is actually at the end of the slice header
-	 * instead of start of slice data. Padding is 8 bits at most (one bit set to 1 and
-	 * at most seven bits set to 0), so we have to inspect only one byte before slice data.
+	 * The engine has to start at the end of the slice header, which is the
+	 * alignment bit in the byte before the slice data: a set bit which is
+	 * followed by up to seven clear ones. It doesn't decode the slice when
+	 * it starts at the slice data or at the last bit of that byte.
+	 *
+	 * The offset of the slice data is given in the bytes which the parser
+	 * read, so without the emulation prevention bytes, while the offset
+	 * register counts the bits of the buffer. So start at the beginning of
+	 * the slice and let the engine skip the header, it leaves these bytes
+	 * out as it goes, then look for the alignment bit in the last byte.
 	 */
 
 	if (slice_params->data_byte_offset == 0)

@@ -410,10 +410,12 @@ static int cedrus_set_params(struct cedrus_ctx *ctx,
 	}
 
 	/*
-	 * FIXME: Since the bitstream parsing is done in software, and
-	 * in userspace, this shouldn't be needed anymore. But it
-	 * turns out that removing it breaks the decoding process,
-	 * without any clear indication why.
+	 * The size of the slice header is given in the bits which the parser
+	 * read, so without the emulation prevention bytes, while the offset
+	 * register counts the bits of the buffer. The two differ when the
+	 * slice header contains such bytes. So start at the beginning of the
+	 * slice and let the engine skip the header: it leaves the emulation
+	 * prevention bytes out as it goes.
 	 */
 	cedrus_write(dev, VE_H264_TRIGGER_TYPE,
 		     VE_H264_TRIGGER_TYPE_INIT_SWDEC);

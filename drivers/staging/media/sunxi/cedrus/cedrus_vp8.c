@@ -723,11 +723,12 @@ static int cedrus_vp8_setup(struct cedrus_ctx *ctx, struct cedrus_run *run)
 	cedrus_write(dev, VE_H264_VLD_LEN, reg);
 
 	/*
-	 * FIXME: There is a problem if frame header is skipped (adding
-	 * first_part_header_bits to offset). It seems that functions
-	 * for parsing bitstreams change internal state of VPU in some
-	 * way that can't be otherwise set. Maybe this can be bypassed
-	 * by somehow fixing probability table buffer?
+	 * Userspace has parsed the frame header already, but the engine has to
+	 * do it again, from the start of the first partition. It has no
+	 * registers for the state of the bool decoder, which begins with a
+	 * range of 255 wherever the bitstream access is started, and it only
+	 * takes the coefficient probabilities over from the table when it
+	 * parses their updates.
 	 */
 	reg = header_size * 8;
 	cedrus_write(dev, VE_H264_VLD_OFFSET, reg);
