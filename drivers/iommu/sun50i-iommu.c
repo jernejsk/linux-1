@@ -122,6 +122,9 @@ struct sun50i_iommu_domain {
 	u32 *dt;
 	dma_addr_t dt_dma;
 
+	/* L1 entries whose page table walk cache entry is still to be invalidated */
+	DECLARE_BITMAP(new_dte, NUM_DT_ENTRIES);
+
 	struct sun50i_iommu *iommu;
 };
 
@@ -298,14 +301,15 @@ static void sun50i_table_flush(struct sun50i_iommu_domain *sun50i_domain,
 	dma_sync_single_for_device(iommu->dev, dma, size, DMA_TO_DEVICE);
 }
 
+/* Invalidate the TLB entries of a block of 2^order bytes at an aligned address */
 static void sun50i_iommu_zap_iova(struct sun50i_iommu *iommu,
-				  unsigned long iova)
+				  unsigned long iova, unsigned int order)
 {
 	u32 reg;
 	int ret;
 
 	iommu_write(iommu, IOMMU_TLB_IVLD_ADDR_REG, iova);
-	iommu_write(iommu, IOMMU_TLB_IVLD_ADDR_MASK_REG, GENMASK(31, 12));
+	iommu_write(iommu, IOMMU_TLB_IVLD_ADDR_MASK_REG, GENMASK(31, order));
 	iommu_write(iommu, IOMMU_TLB_IVLD_ENABLE_REG,
 		    IOMMU_TLB_IVLD_ENABLE_ENABLE);
 
@@ -331,25 +335,72 @@ static void sun50i_iommu_zap_ptw_cache(struct sun50i_iommu *iommu,
 		dev_warn(iommu->dev, "PTW cache invalidation timed out!\n");
 }
 
+/*
+ * Invalidate the TLB entries of all the pages of a range. The invalidation
+ * takes an address and a mask, so the range is covered with as few aligned
+ * power of two blocks as possible.
+ */
+static void sun50i_iommu_zap_tlb_range(struct sun50i_iommu *iommu,
+				       unsigned long iova, size_t size)
+{
+	u64 end = ALIGN((u64)iova + size, SPAGE_SIZE);
+	u64 addr = ALIGN_DOWN(iova, SPAGE_SIZE);
+
+	while (addr < end) {
+		unsigned int order = min(fls64(end - addr) - 1, 31);
+
+		if (addr)
+			order = min_t(unsigned int, order, __ffs64(addr));
+
+		sun50i_iommu_zap_iova(iommu, addr, order);
+		addr += BIT_ULL(order);
+	}
+}
+
 static void sun50i_iommu_zap_range(struct sun50i_iommu *iommu,
 				   unsigned long iova, size_t size)
 {
+	u64 end = (u64)iova + size;
+	u64 addr;
+
 	assert_spin_locked(&iommu->iommu_lock);
 
 	iommu_write(iommu, IOMMU_AUTO_GATING_REG, 0);
 
-	sun50i_iommu_zap_iova(iommu, iova);
-	sun50i_iommu_zap_iova(iommu, iova + SPAGE_SIZE);
-	if (size > SPAGE_SIZE) {
-		sun50i_iommu_zap_iova(iommu, iova + size);
-		sun50i_iommu_zap_iova(iommu, iova + size + SPAGE_SIZE);
-	}
-	sun50i_iommu_zap_ptw_cache(iommu, iova);
-	sun50i_iommu_zap_ptw_cache(iommu, iova + SZ_1M);
-	if (size > SZ_1M) {
-		sun50i_iommu_zap_ptw_cache(iommu, iova + size);
-		sun50i_iommu_zap_ptw_cache(iommu, iova + size + SZ_1M);
-	}
+	sun50i_iommu_zap_tlb_range(iommu, iova, size);
+
+	for (addr = ALIGN_DOWN(iova, SZ_1M); addr < end; addr += SZ_1M)
+		sun50i_iommu_zap_ptw_cache(iommu, addr);
+
+	iommu_write(iommu, IOMMU_AUTO_GATING_REG, IOMMU_AUTO_GATING_ENABLE);
+}
+
+/*
+ * The IOMMU also caches what is not mapped: an invalidation makes it read the
+ * entry again, whatever it is, and a prefetch may fetch an invalid one. A
+ * new mapping therefore has to invalidate the TLB entries of all its pages,
+ * or the first access to such a page faults. The same goes for the page
+ * table walk cache, which holds first level entries: those only change when
+ * a page table is installed, so only then is the cache entry invalidated.
+ * The others may be in use by a master at this moment.
+ */
+static void sun50i_iommu_zap_mapped(struct sun50i_iommu_domain *sun50i_domain,
+				    unsigned long iova, size_t size)
+{
+	struct sun50i_iommu *iommu = sun50i_domain->iommu;
+	u64 end = (u64)iova + size;
+	u64 addr;
+
+	assert_spin_locked(&iommu->iommu_lock);
+
+	iommu_write(iommu, IOMMU_AUTO_GATING_REG, 0);
+
+	sun50i_iommu_zap_tlb_range(iommu, iova, size);
+
+	for (addr = ALIGN_DOWN(iova, SZ_1M); addr < end; addr += SZ_1M)
+		if (test_and_clear_bit(sun50i_iova_get_dte_index(addr),
+				       sun50i_domain->new_dte))
+			sun50i_iommu_zap_ptw_cache(iommu, addr);
 
 	iommu_write(iommu, IOMMU_AUTO_GATING_REG, IOMMU_AUTO_GATING_ENABLE);
 }
@@ -411,7 +462,7 @@ static int sun50i_iommu_iotlb_sync_map(struct iommu_domain *domain,
 	unsigned long flags;
 
 	spin_lock_irqsave(&iommu->iommu_lock, flags);
-	sun50i_iommu_zap_range(iommu, iova, size);
+	sun50i_iommu_zap_mapped(sun50i_domain, iova, size);
 	spin_unlock_irqrestore(&iommu->iommu_lock, flags);
 
 	return 0;
@@ -584,6 +635,9 @@ static u32 *sun50i_dte_get_page_table(struct sun50i_iommu_domain *sun50i_domain,
 		page_table = installed_pt;
 		dte = old_dte;
 		sun50i_iommu_free_page_table(iommu, drop_pt);
+	} else {
+		/* .iotlb_sync_map invalidates the page table walk cache entry */
+		set_bit(sun50i_iova_get_dte_index(iova), sun50i_domain->new_dte);
 	}
 
 	sun50i_table_flush(sun50i_domain, page_table, NUM_PT_ENTRIES);
