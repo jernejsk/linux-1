@@ -471,7 +471,26 @@ static int sun50i_iommu_iotlb_sync_map(struct iommu_domain *domain,
 static void sun50i_iommu_iotlb_sync(struct iommu_domain *domain,
 				    struct iommu_iotlb_gather *gather)
 {
-	sun50i_iommu_flush_iotlb_all(domain);
+	struct sun50i_iommu_domain *sun50i_domain = to_sun50i_domain(domain);
+	struct sun50i_iommu *iommu = sun50i_domain->iommu;
+	unsigned long flags;
+
+	if (!iommu || gather->start > gather->end)
+		return;
+
+	/*
+	 * Only the TLB entries of the pages which were unmapped: a flush of
+	 * all the TLBs disturbs the masters which are at work. The page
+	 * table walk cache holds first level entries, which did not change.
+	 */
+	spin_lock_irqsave(&iommu->iommu_lock, flags);
+
+	iommu_write(iommu, IOMMU_AUTO_GATING_REG, 0);
+	sun50i_iommu_zap_tlb_range(iommu, gather->start,
+				   gather->end - gather->start + 1);
+	iommu_write(iommu, IOMMU_AUTO_GATING_REG, IOMMU_AUTO_GATING_ENABLE);
+
+	spin_unlock_irqrestore(&iommu->iommu_lock, flags);
 }
 
 static int sun50i_iommu_enable(struct sun50i_iommu *iommu)
@@ -709,6 +728,8 @@ static size_t sun50i_iommu_unmap(struct iommu_domain *domain, unsigned long iova
 
 	memset(pte_addr, 0, sizeof(*pte_addr));
 	sun50i_table_flush(sun50i_domain, pte_addr, 1);
+
+	iommu_iotlb_gather_add_page(domain, gather, iova, SZ_4K);
 
 	return SZ_4K;
 }
