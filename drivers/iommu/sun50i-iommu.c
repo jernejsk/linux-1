@@ -34,6 +34,9 @@
 #define IOMMU_ENABLE_ENABLE			BIT(0)
 
 #define IOMMU_BYPASS_REG		0x030
+#define IOMMU_BYPASS_MASTER(m)			BIT(m)
+/* H6 has masters 0-5, H616 adds master 6; the bit is reserved on H6 */
+#define IOMMU_BYPASS_ALL			GENMASK(6, 0)
 #define IOMMU_AUTO_GATING_REG		0x040
 #define IOMMU_AUTO_GATING_ENABLE		BIT(0)
 
@@ -110,6 +113,9 @@ struct sun50i_iommu {
 
 	struct iommu_domain *domain;
 	struct kmem_cache *pt_pool;
+
+	/* Masters which are not attached to the paging domain */
+	u32 bypass;
 };
 
 struct sun50i_iommu_domain {
@@ -452,7 +458,7 @@ static int sun50i_iommu_enable(struct sun50i_iommu *iommu)
 		    IOMMU_TLB_PREFETCH_MASTER_ENABLE(3) |
 		    IOMMU_TLB_PREFETCH_MASTER_ENABLE(4) |
 		    IOMMU_TLB_PREFETCH_MASTER_ENABLE(5));
-	iommu_write(iommu, IOMMU_BYPASS_REG, 0);
+	iommu_write(iommu, IOMMU_BYPASS_REG, iommu->bypass);
 	iommu_write(iommu, IOMMU_INT_ENABLE_REG, IOMMU_INT_MASK);
 	iommu_write(iommu, IOMMU_DM_AUT_CTRL_REG(SUN50I_IOMMU_ACI_NONE),
 		    IOMMU_DM_AUT_CTRL_RD_UNAVAIL(SUN50I_IOMMU_ACI_NONE, 0) |
@@ -770,6 +776,31 @@ static void sun50i_iommu_detach_domain(struct sun50i_iommu *iommu,
 	iommu->domain = NULL;
 }
 
+static void sun50i_iommu_set_bypass(struct sun50i_iommu *iommu,
+				    struct device *dev, bool bypass)
+{
+	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
+	unsigned long flags;
+	unsigned int i;
+	u32 masters = 0;
+
+	for (i = 0; i < fwspec->num_ids; i++)
+		masters |= IOMMU_BYPASS_MASTER(fwspec->ids[i]);
+
+	spin_lock_irqsave(&iommu->iommu_lock, flags);
+
+	if (bypass)
+		iommu->bypass |= masters;
+	else
+		iommu->bypass &= ~masters;
+
+	/* The IOMMU is powered only while a paging domain is attached. */
+	if (iommu->domain && iommu->domain->type != IOMMU_DOMAIN_IDENTITY)
+		iommu_write(iommu, IOMMU_BYPASS_REG, iommu->bypass);
+
+	spin_unlock_irqrestore(&iommu->iommu_lock, flags);
+}
+
 static int sun50i_iommu_identity_attach(struct iommu_domain *identity_domain,
 					struct device *dev,
 					struct iommu_domain *old)
@@ -781,6 +812,8 @@ static int sun50i_iommu_identity_attach(struct iommu_domain *identity_domain,
 
 	if (iommu->domain == identity_domain)
 		return 0;
+
+	sun50i_iommu_set_bypass(iommu, dev, true);
 
 	sun50i_domain = to_sun50i_domain(iommu->domain);
 	if (refcount_dec_and_test(&sun50i_domain->refcnt))
@@ -812,12 +845,13 @@ static int sun50i_iommu_attach_device(struct iommu_domain *domain,
 
 	refcount_inc(&sun50i_domain->refcnt);
 
-	if (iommu->domain == domain)
-		return 0;
+	if (iommu->domain != domain) {
+		sun50i_iommu_identity_attach(&sun50i_iommu_identity_domain,
+					     dev, old);
+		sun50i_iommu_attach_domain(iommu, sun50i_domain);
+	}
 
-	sun50i_iommu_identity_attach(&sun50i_iommu_identity_domain, dev, old);
-
-	sun50i_iommu_attach_domain(iommu, sun50i_domain);
+	sun50i_iommu_set_bypass(iommu, dev, false);
 
 	return 0;
 }
@@ -1006,6 +1040,7 @@ static int sun50i_iommu_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	spin_lock_init(&iommu->iommu_lock);
 	iommu->domain = &sun50i_iommu_identity_domain;
+	iommu->bypass = IOMMU_BYPASS_ALL;
 	platform_set_drvdata(pdev, iommu);
 	iommu->dev = &pdev->dev;
 
