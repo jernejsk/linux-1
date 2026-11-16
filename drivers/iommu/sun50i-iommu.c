@@ -28,6 +28,40 @@
 
 #include "iommu-pages.h"
 
+/* DEBUG */
+static int dbg_legacy_flush;
+module_param(dbg_legacy_flush, int, 0644);
+static int dbg_prefetch = -1;
+static struct sun50i_iommu *dbg_iommu;
+static int dbg_set_prefetch(const char *val, const struct kernel_param *kp);
+static const struct kernel_param_ops dbg_prefetch_ops = {
+	.set = dbg_set_prefetch, .get = param_get_int,
+};
+module_param_cb(dbg_prefetch, &dbg_prefetch_ops, &dbg_prefetch, 0644);
+static unsigned long dbg_faults;
+static void __iomem *dbg_planes, *dbg_mixer;
+static void dbg_dump_de(struct device *dev)
+{
+	static const unsigned int chs[] = { 0, 6, 7 };
+	int i;
+
+	if (!dbg_planes || !dbg_mixer)
+		return;
+	for (i = 0; i < ARRAY_SIZE(chs); i++) {
+		void __iomem *b = dbg_planes + 0x1000 + chs[i] * 0x20000;
+
+		dev_info(dev, "DBG ch%u attr %08x size %08x coord %08x pitch %08x laddr %08x %08x hadd %08x ovlsz %08x\n",
+			 chs[i], readl(b), readl(b + 4), readl(b + 8), readl(b + 0xc),
+			 readl(b + (chs[i] < 6 ? 0x18 : 0x10)), readl(b + (chs[i] < 6 ? 0x1c : 0x14)),
+			 readl(b + (chs[i] < 6 ? 0xd0 : 0x80)), readl(b + (chs[i] < 6 ? 0xe8 : 0x88)));
+	}
+	dev_info(dev, "DBG bld pipe %08x route %08x attr0 %08x %08x attr1 %08x %08x\n",
+		 readl(dbg_mixer + 0x1000), readl(dbg_mixer + 0x1080),
+		 readl(dbg_mixer + 0x1004 + 4), readl(dbg_mixer + 0x1004 + 8),
+		 readl(dbg_mixer + 0x1014 + 4), readl(dbg_mixer + 0x1014 + 8));
+}
+module_param(dbg_faults, ulong, 0444);
+
 #define IOMMU_RESET_REG			0x010
 #define IOMMU_RESET_RELEASE_ALL			0xffffffff
 #define IOMMU_ENABLE_REG		0x020
@@ -478,6 +512,11 @@ static void sun50i_iommu_iotlb_sync(struct iommu_domain *domain,
 	if (!iommu || gather->start > gather->end)
 		return;
 
+	if (dbg_legacy_flush) {
+		sun50i_iommu_flush_iotlb_all(domain);
+		return;
+	}
+
 	/*
 	 * Only the TLB entries of the pages which were unmapped: a flush of
 	 * all the TLBs disturbs the masters which are at work. The page
@@ -515,7 +554,8 @@ static int sun50i_iommu_enable(struct sun50i_iommu *iommu)
 	spin_lock_irqsave(&iommu->iommu_lock, flags);
 
 	iommu_write(iommu, IOMMU_TTB_REG, sun50i_domain->dt_dma);
-	iommu_write(iommu, IOMMU_TLB_PREFETCH_REG,
+	dbg_iommu = iommu;
+	iommu_write(iommu, IOMMU_TLB_PREFETCH_REG, dbg_prefetch >= 0 ? dbg_prefetch :
 		    IOMMU_TLB_PREFETCH_MASTER_ENABLE(0) |
 		    IOMMU_TLB_PREFETCH_MASTER_ENABLE(1) |
 		    IOMMU_TLB_PREFETCH_MASTER_ENABLE(2) |
@@ -1048,6 +1088,13 @@ static irqreturn_t sun50i_iommu_irq(int irq, void *dev_id)
 
 	l1_status = iommu_read(iommu, IOMMU_L1PG_INT_REG);
 	l2_status = iommu_read(iommu, IOMMU_L2PG_INT_REG);
+	dbg_faults++;
+	dev_info_ratelimited(iommu->dev, "DBG irq sta %#x l1 %#x l2 %#x l1addr %#x l2addr %#x\n",
+		 status, l1_status, l2_status,
+		 iommu_read(iommu, IOMMU_INT_ERR_ADDR_L1_REG),
+		 iommu_read(iommu, IOMMU_INT_ERR_ADDR_L2_REG));
+	if ((l1_status | l2_status) & 1)
+		dbg_dump_de(iommu->dev);
 
 	if (status & IOMMU_INT_INVALID_L2PG)
 		sun50i_iommu_handle_pt_irq(iommu,
@@ -1083,6 +1130,8 @@ static int sun50i_iommu_probe(struct platform_device *pdev)
 	iommu->domain = &sun50i_iommu_identity_domain;
 	platform_set_drvdata(pdev, iommu);
 	iommu->dev = &pdev->dev;
+	dbg_planes = ioremap(0x1100000, 0x180000);
+	dbg_mixer = ioremap(0x1280000, 0x20000);
 
 	iommu->pt_pool = kmem_cache_create(dev_name(&pdev->dev),
 					   PT_SIZE, PT_SIZE,
@@ -1164,3 +1213,16 @@ builtin_platform_driver_probe(sun50i_iommu_driver, sun50i_iommu_probe);
 MODULE_DESCRIPTION("Allwinner H6 IOMMU driver");
 MODULE_AUTHOR("Maxime Ripard <maxime@cerno.tech>");
 MODULE_AUTHOR("zhuxianbin <zhuxianbin@allwinnertech.com>");
+
+static int dbg_set_prefetch(const char *val, const struct kernel_param *kp)
+{
+	int ret = param_set_int(val, kp);
+	unsigned long flags;
+
+	if (ret || !dbg_iommu || dbg_prefetch < 0)
+		return ret;
+	spin_lock_irqsave(&dbg_iommu->iommu_lock, flags);
+	iommu_write(dbg_iommu, IOMMU_TLB_PREFETCH_REG, dbg_prefetch);
+	spin_unlock_irqrestore(&dbg_iommu->iommu_lock, flags);
+	return 0;
+}
