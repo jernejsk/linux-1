@@ -210,6 +210,8 @@ static void sun8i_ui_layer_atomic_update(struct drm_plane *plane,
 	struct sun8i_layer *layer = plane_to_sun8i_layer(plane);
 
 	if (!new_state->crtc || !new_state->visible) {
+		if (sun8i_dbg_late_disable && layer->cfg->de_type == SUN8I_MIXER_DE33)
+			return;
 		sun8i_ui_layer_disable(layer);
 		return;
 	}

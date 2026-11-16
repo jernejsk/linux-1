@@ -253,6 +253,9 @@ int sun8i_mixer_drm_format_to_hw(u32 format, u32 *hw_format)
 	return -EINVAL;
 }
 
+int sun8i_dbg_late_disable;
+module_param_named(dbg_late_disable, sun8i_dbg_late_disable, int, 0644);
+
 static void sun8i_mixer_commit(struct sunxi_engine *engine,
 			       struct drm_crtc *crtc,
 			       struct drm_atomic_commit *state)
@@ -310,6 +313,28 @@ static void sun8i_mixer_commit(struct sunxi_engine *engine,
 	if (mixer->cfg->de_type != SUN8I_MIXER_DE33)
 		regmap_write(engine->regs, SUN8I_MIXER_GLOBAL_DBUFF,
 			     SUN8I_MIXER_GLOBAL_DBUFF_ENABLE);
+
+	if (!sun8i_dbg_late_disable || mixer->cfg->de_type != SUN8I_MIXER_DE33)
+		return;
+
+	drm_for_each_plane(plane, state->dev) {
+		struct sun8i_layer *layer = plane_to_sun8i_layer(plane);
+		u32 ch_base = sun8i_channel_base(layer);
+
+		if (!(plane->possible_crtcs & drm_crtc_mask(crtc)))
+			continue;
+		plane_state = drm_atomic_get_new_plane_state(state, plane);
+		if (!plane_state)
+			plane_state = plane->state;
+		if (plane_state->crtc && plane_state->visible)
+			continue;
+		if (layer->type == SUN8I_LAYER_TYPE_VI)
+			regmap_write(layer->regs,
+				     SUN8I_MIXER_CHAN_VI_LAYER_ATTR(ch_base, layer->overlay), 0);
+		else
+			regmap_write(layer->regs,
+				     SUN8I_MIXER_CHAN_UI_LAYER_ATTR(ch_base, layer->overlay), 0);
+	}
 }
 
 static struct drm_plane **sun8i_layers_init(struct drm_device *drm,

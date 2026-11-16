@@ -222,6 +222,8 @@ enum {
 	SUN8I_LAYER_TYPE_VI,
 };
 
+extern int sun8i_dbg_late_disable;
+
 struct sun8i_layer {
 	struct drm_plane		plane;
 	int				type;
