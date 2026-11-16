@@ -194,6 +194,7 @@
 				clock-names = "bus", "mod";
 				resets = <&display_clocks RST_MIXER0>;
 				allwinner,planes = <&planes>;
+				iommus = <&iommu 0>;
 
 				ports {
 					#address-cells = <1>;
@@ -220,6 +221,7 @@
 				clock-names = "bus", "mod";
 				resets = <&display_clocks RST_MIXER1>;
 				allwinner,planes = <&planes>;
+				iommus = <&iommu 0>;
 
 				ports {
 					#address-cells = <1>;
