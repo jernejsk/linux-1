@@ -242,6 +242,7 @@ config SUN50I_IOMMU
 	bool "Allwinner H6 IOMMU Support"
 	depends on HAS_DMA
 	depends on ARCH_SUNXI || COMPILE_TEST
+	depends on ARCH_KEEP_MEMBLOCK
 	select ARM_DMA_USE_IOMMU
 	select IOMMU_API
 	help
