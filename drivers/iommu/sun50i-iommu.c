@@ -15,6 +15,7 @@
 #include <linux/iopoll.h>
 #include <linux/ioport.h>
 #include <linux/log2.h>
+#include <linux/memblock.h>
 #include <linux/module.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
@@ -267,9 +268,21 @@ enum sun50i_iommu_aci {
 #define SUN50I_PTE_ACI_MASK		GENMASK(7, 4)
 #define SUN50I_PTE_PAGE_VALID		BIT(1)
 
+/*
+ * The IOMMU outputs 32-bit addresses, but DRAM doesn't start at 0, so on
+ * SoCs with 4 GiB of DRAM the top of DRAM lies above the 32-bit boundary.
+ * The memory bus wraps addresses around at 4 GiB, so the top of DRAM is
+ * reached through the addresses below the start of DRAM, and the low 32
+ * bits of an address identify any DRAM page uniquely.
+ */
 static phys_addr_t sun50i_pte_get_page_address(u32 pte)
 {
-	return (phys_addr_t)pte & SUN50I_PTE_PAGE_ADDRESS_MASK;
+	u64 page = pte & SUN50I_PTE_PAGE_ADDRESS_MASK;
+
+	if (page < memblock_start_of_DRAM())
+		page += SZ_4G;
+
+	return page;
 }
 
 static enum sun50i_iommu_aci sun50i_get_pte_aci(u32 pte)
@@ -685,11 +698,13 @@ static int sun50i_iommu_map(struct iommu_domain *domain, unsigned long iova,
 	u32 *page_table, *pte_addr;
 	int ret = 0;
 
-	/* the IOMMU can only handle 32-bit addresses, both input and output */
-	if ((uint64_t)paddr >> 32) {
+	/* The IOMMU outputs DRAM addresses only, see above */
+	if (paddr < memblock_start_of_DRAM() ||
+	    (u64)paddr >= (u64)memblock_start_of_DRAM() + SZ_4G) {
 		ret = -EINVAL;
 		dev_warn_once(iommu->dev,
-			      "attempt to map address beyond 4GB\n");
+			      "attempt to map %pa, which is not in DRAM\n",
+			      &paddr);
 		goto out;
 	}
 
