@@ -212,6 +212,8 @@ void dw_hdmi_phy_gen1_reset(struct dw_hdmi *hdmi);
 void dw_hdmi_phy_gen2_pddq(struct dw_hdmi *hdmi, u8 enable);
 void dw_hdmi_phy_gen2_txpwron(struct dw_hdmi *hdmi, u8 enable);
 void dw_hdmi_phy_gen2_reset(struct dw_hdmi *hdmi);
+int dw_hdmi_phy_3d_tx_configure(struct dw_hdmi *hdmi,
+				unsigned long mpixelclock);
 
 enum drm_connector_status dw_hdmi_phy_read_hpd(struct dw_hdmi *hdmi,
 					       void *data);
