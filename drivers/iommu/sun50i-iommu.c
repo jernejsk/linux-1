@@ -275,6 +275,9 @@ enum sun50i_iommu_aci {
  * reached through the addresses below the start of DRAM, and the low 32
  * bits of an address identify any DRAM page uniquely.
  */
+static int dbg_high_maps;
+module_param(dbg_high_maps, int, 0444);
+
 static phys_addr_t sun50i_pte_get_page_address(u32 pte)
 {
 	u64 page = pte & SUN50I_PTE_PAGE_ADDRESS_MASK;
@@ -697,6 +700,9 @@ static int sun50i_iommu_map(struct iommu_domain *domain, unsigned long iova,
 	u32 pte_index;
 	u32 *page_table, *pte_addr;
 	int ret = 0;
+
+	if ((u64)paddr >= SZ_4G)
+		dbg_high_maps++;
 
 	/* The IOMMU outputs DRAM addresses only, see above */
 	if (paddr < memblock_start_of_DRAM() ||
