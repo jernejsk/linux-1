@@ -37,6 +37,7 @@
 #define IOMMU_BYPASS_MASTER(m)			BIT(m)
 /* H6 has masters 0-5, H616 adds master 6; the bit is reserved on H6 */
 #define IOMMU_BYPASS_ALL			GENMASK(6, 0)
+#define IOMMU_NUM_MASTERS			7
 #define IOMMU_AUTO_GATING_REG		0x040
 #define IOMMU_AUTO_GATING_ENABLE		BIT(0)
 
@@ -116,6 +117,9 @@ struct sun50i_iommu {
 
 	/* Masters which are not attached to the paging domain */
 	u32 bypass;
+
+	/* For each master, all the masters of the device it belongs to */
+	u32 sibling_masters[IOMMU_NUM_MASTERS];
 };
 
 struct sun50i_iommu_domain {
@@ -858,11 +862,19 @@ static int sun50i_iommu_attach_device(struct iommu_domain *domain,
 
 static struct iommu_device *sun50i_iommu_probe_device(struct device *dev)
 {
+	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
 	struct sun50i_iommu *iommu;
+	unsigned int i;
+	u32 masters = 0;
 
 	iommu = sun50i_iommu_from_dev(dev);
 	if (!iommu)
 		return ERR_PTR(-ENODEV);
+
+	for (i = 0; i < fwspec->num_ids; i++)
+		masters |= BIT(fwspec->ids[i]);
+	for (i = 0; i < fwspec->num_ids; i++)
+		iommu->sibling_masters[fwspec->ids[i]] |= masters;
 
 	return &iommu->iommu;
 }
@@ -872,6 +884,11 @@ static int sun50i_iommu_of_xlate(struct device *dev,
 {
 	struct platform_device *iommu_pdev = of_find_device_by_node(args->np);
 	unsigned id = args->args[0];
+
+	if (id >= IOMMU_NUM_MASTERS) {
+		put_device(&iommu_pdev->dev);
+		return -EINVAL;
+	}
 
 	dev_iommu_priv_set(dev, platform_get_drvdata(iommu_pdev));
 
@@ -994,8 +1011,9 @@ static phys_addr_t sun50i_iommu_handle_perm_irq(struct sun50i_iommu *iommu)
 
 static irqreturn_t sun50i_iommu_irq(int irq, void *dev_id)
 {
-	u32 status, l1_status, l2_status, resets;
+	u32 status, l1_status, l2_status, faulted, resets;
 	struct sun50i_iommu *iommu = dev_id;
+	unsigned int m;
 
 	spin_lock(&iommu->iommu_lock);
 
@@ -1021,7 +1039,18 @@ static irqreturn_t sun50i_iommu_irq(int irq, void *dev_id)
 
 	iommu_write(iommu, IOMMU_INT_CLR_REG, status);
 
-	resets = (status | l1_status | l2_status) & IOMMU_INT_MASTER_MASK;
+	/*
+	 * Reset the faulting masters together with the other masters of the
+	 * same device. A device which keeps running after a fault, like the
+	 * video engine with its two masters, otherwise leaves its other
+	 * master stalled, and the device can't do any DMA until reboot.
+	 */
+	faulted = (status | l1_status | l2_status) & IOMMU_INT_MASTER_MASK;
+	resets = faulted;
+	for (m = 0; m < IOMMU_NUM_MASTERS; m++)
+		if (faulted & BIT(m))
+			resets |= iommu->sibling_masters[m];
+	resets &= IOMMU_INT_MASTER_MASK;
 	iommu_write(iommu, IOMMU_RESET_REG, ~resets);
 	iommu_write(iommu, IOMMU_RESET_REG, IOMMU_RESET_RELEASE_ALL);
 
