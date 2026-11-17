@@ -1634,6 +1634,26 @@ static int hdmi_phy_configure_dwc_hdmi_3d_tx(struct dw_hdmi *hdmi,
 	return 0;
 }
 
+/**
+ * dw_hdmi_phy_3d_tx_configure() - configure 3D TX PHY from platform tables
+ * @hdmi: DW HDMI instance
+ * @mpixelclock: pixel clock in Hz
+ *
+ * Programs the PHY from the mpll_cfg, cur_ctr and phy_config tables of the
+ * platform data, like the core does when no configure_phy callback is
+ * provided. Platform configure_phy callbacks can use it and then apply
+ * additional PHY settings.
+ *
+ * Return: 0 on success, -EINVAL if the clock is not covered by the tables.
+ */
+int dw_hdmi_phy_3d_tx_configure(struct dw_hdmi *hdmi,
+				unsigned long mpixelclock)
+{
+	return hdmi_phy_configure_dwc_hdmi_3d_tx(hdmi, hdmi->plat_data,
+						 mpixelclock);
+}
+EXPORT_SYMBOL_GPL(dw_hdmi_phy_3d_tx_configure);
+
 static int hdmi_phy_configure(struct dw_hdmi *hdmi,
 			      const struct drm_display_info *display)
 {
