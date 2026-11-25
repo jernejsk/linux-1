@@ -36,6 +36,7 @@ properties:
       - const: allwinner,sun9i-a80-tcon-tv
       - const: allwinner,sun20i-d1-tcon-lcd
       - const: allwinner,sun20i-d1-tcon-tv
+      - const: allwinner,sun50i-h616-tcon-tv
 
       - items:
           - enum:
@@ -58,6 +59,11 @@ properties:
           - enum:
               - allwinner,sun50i-h6-tcon-tv
           - const: allwinner,sun8i-r40-tcon-tv
+
+      - items:
+          - enum:
+              - allwinner,sun50i-h616-tcon-lcd
+          - const: allwinner,sun8i-r40-tcon-lcd
 
   reg:
     maxItems: 1
@@ -256,6 +262,7 @@ allOf:
               - allwinner,sun8i-r40-tcon-tv
               - allwinner,sun9i-a80-tcon-tv
               - allwinner,sun20i-d1-tcon-tv
+              - allwinner,sun50i-h616-tcon-tv
 
     then:
       properties:
