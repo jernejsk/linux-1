@@ -61,6 +61,8 @@ static void sun8i_ui_layer_update_coord(struct sun8i_layer *layer,
 	u32 src_w, src_h, dst_w, dst_h;
 	u32 outsize, insize;
 	u32 hphase, vphase;
+	u32 hn = 0, hm = 0;
+	u32 vn = 0, vm = 0;
 
 	DRM_DEBUG_DRIVER("Updating UI channel %d overlay %d\n",
 			 layer->channel, layer->overlay);
@@ -94,7 +96,22 @@ static void sun8i_ui_layer_update_coord(struct sun8i_layer *layer,
 		vscale = state->src_h / state->crtc_h;
 
 		if (layer->cfg->de_type == SUN8I_MIXER_DE33) {
-			sun8i_vi_scaler_setup(layer, src_w, src_h, dst_w, dst_h,
+			u32 cs_w = src_w, cs_h = src_h;
+
+			sun8i_vi_scaler_coarse(layer, state, false,
+					       &cs_w, &cs_h, dst_w, dst_h);
+			if (cs_w != src_w) {
+				hm = src_w;
+				hn = cs_w;
+				hscale = (cs_w << 16) / dst_w;
+			}
+			if (cs_h != src_h) {
+				vm = src_h;
+				vn = cs_h;
+				vscale = (cs_h << 16) / dst_h;
+			}
+
+			sun8i_vi_scaler_setup(layer, cs_w, cs_h, dst_w, dst_h,
 					      hscale, vscale, hphase, vphase,
 					      state->fb->format);
 			sun8i_vi_scaler_enable(layer, true);
@@ -109,6 +126,15 @@ static void sun8i_ui_layer_update_coord(struct sun8i_layer *layer,
 			sun8i_vi_scaler_enable(layer, false);
 		else
 			sun8i_ui_scaler_enable(layer, false);
+	}
+
+	if (layer->cfg->de_type == SUN8I_MIXER_DE33) {
+		sun8i_rdma_write(layer->layer_rdma, SUN50I_MIXER_CHAN_UI_HDS,
+				 SUN50I_MIXER_CHAN_UI_DS_N(hn) |
+				 SUN50I_MIXER_CHAN_UI_DS_M(hm));
+		sun8i_rdma_write(layer->layer_rdma, SUN50I_MIXER_CHAN_UI_VDS,
+				 SUN50I_MIXER_CHAN_UI_DS_N(vn) |
+				 SUN50I_MIXER_CHAN_UI_DS_M(vm));
 	}
 }
 
@@ -257,6 +283,13 @@ static const struct reg_region ui_regions[] = {
 	{ }
 };
 
+static const struct reg_region de33_ui_regions[] = {
+	{SUN8I_MIXER_CHAN_UI_LAYER_ATTR(0), 8},
+	{SUN8I_MIXER_CHAN_UI_OVL_SIZE, 1},
+	{SUN50I_MIXER_CHAN_UI_HDS, 3},
+	{ }
+};
+
 struct sun8i_layer *sun8i_ui_layer_init_one(struct drm_device *drm,
 					    enum drm_plane_type type,
 					    int index, int phy_index,
@@ -280,10 +313,14 @@ struct sun8i_layer *sun8i_ui_layer_init_one(struct drm_device *drm,
 	layer->cfg = cfg;
 
 	ch_base = sun8i_channel_base(layer);
-	layer->layer_rdma = sun8i_rdma_add_unit(rdma, reg_base + ch_base,
-						(layer->cfg->de_type == SUN8I_MIXER_DE33 ?
-						 0x100000 : 0) + ch_base,
-						0x100, ui_regions);
+	if (layer->cfg->de_type == SUN8I_MIXER_DE33)
+		layer->layer_rdma = sun8i_rdma_add_unit(rdma, reg_base + ch_base,
+							0x100000 + ch_base,
+							0x100, de33_ui_regions);
+	else
+		layer->layer_rdma = sun8i_rdma_add_unit(rdma, reg_base + ch_base,
+							ch_base, 0x100,
+							ui_regions);
 	if (!layer->layer_rdma)
 		return ERR_PTR(-ENOMEM);
 
