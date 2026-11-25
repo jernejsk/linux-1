@@ -57,19 +57,19 @@
 #define SUN8I_SCALER_VSU_CTRL_EN		BIT(0)
 #define SUN8I_SCALER_VSU_CTRL_COEFF_RDY		BIT(4)
 
-#define SUN50I_SCALER_VSU_SUB_ZERO_DIR_THR(x)	(((x) << 24) & 0xFF)
-#define SUN50I_SCALER_VSU_ZERO_DIR_THR(x)		(((x) << 16) & 0xFF)
-#define SUN50I_SCALER_VSU_HORZ_DIR_THR(x)		(((x) << 8) & 0xFF)
+#define SUN50I_SCALER_VSU_SUB_ZERO_DIR_THR(x)	(((x) & 0xFF) << 24)
+#define SUN50I_SCALER_VSU_ZERO_DIR_THR(x)		(((x) & 0xFF) << 16)
+#define SUN50I_SCALER_VSU_HORZ_DIR_THR(x)		(((x) & 0xFF) << 8)
 #define SUN50I_SCALER_VSU_VERT_DIR_THR(x)		((x) & 0xFF)
 
 #define SUN50I_SCALER_VSU_SCALE_MODE_UI		0
 #define SUN50I_SCALER_VSU_SCALE_MODE_NORMAL	1
 #define SUN50I_SCALER_VSU_SCALE_MODE_ED_SCALE	2
 
-#define SUN50I_SCALER_VSU_EDGE_SHIFT(x)		(((x) << 16) & 0xF)
+#define SUN50I_SCALER_VSU_EDGE_SHIFT(x)		(((x) & 0xF) << 16)
 #define SUN50I_SCALER_VSU_EDGE_OFFSET(x)		((x) & 0xFF)
 
-#define SUN50I_SCALER_VSU_ANGLE_SHIFT(x)		(((x) << 16) & 0xF)
+#define SUN50I_SCALER_VSU_ANGLE_SHIFT(x)		(((x) & 0xF) << 16)
 #define SUN50I_SCALER_VSU_ANGLE_OFFSET(x)		((x) & 0xFF)
 
 void sun8i_vi_scaler_enable(struct sun8i_layer *layer, bool enable);
