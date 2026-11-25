@@ -9,6 +9,14 @@
  * warranty of any kind, whether express or implied.
  */
 
+#include <linux/clk.h>
+#include <linux/math64.h>
+
+#include <drm/drm_atomic.h>
+#include <drm/drm_crtc.h>
+#include <drm/drm_print.h>
+
+#include "sun4i_crtc.h"
 #include "sun8i_rdma.h"
 #include "sun8i_vi_scaler.h"
 
@@ -979,6 +987,45 @@ void sun8i_vi_scaler_enable(struct sun8i_layer *layer, bool enable)
 
 	sun8i_rdma_write(layer->scaler_rdma,
 			 SUN8I_SCALER_VSU_CTRL, val);
+}
+
+/*
+ * Reduce source size with coarse scaling when it doesn't fit into the
+ * scaler line buffer or the scaler can't process lines fast enough.
+ */
+void sun8i_vi_scaler_coarse(struct sun8i_layer *layer,
+			    const struct drm_plane_state *state, bool yuv,
+			    u32 *src_w, u32 *src_h, u32 dst_w, u32 dst_h)
+{
+	struct sun4i_crtc *scrtc = drm_crtc_to_sun4i_crtc(state->crtc);
+	struct sun8i_mixer *mixer = engine_to_sun8i_mixer(scrtc->engine);
+	const struct drm_display_mode *mode = &state->crtc->state->mode;
+	unsigned int scanline, required;
+	u64 ability;
+	u32 fps;
+
+	fps = (mode->clock * 1000) / (mode->vtotal * mode->htotal);
+	ability = clk_get_rate(mixer->mod_clk);
+	/* BSP algorithm assumes 80% efficiency of VI scaler unit */
+	ability *= 80;
+	do_div(ability, mode->vdisplay * fps * max(*src_w, dst_w));
+
+	required = *src_h * 100 / dst_h;
+
+	if (ability < required) {
+		DRM_DEBUG_DRIVER("Using vertical coarse scaling\n");
+		*src_h = (u32)ability * dst_h / 100;
+	}
+
+	if (yuv)
+		scanline = layer->cfg->scanline_yuv[layer->channel];
+	else
+		scanline = layer->cfg->scanline_rgb[layer->channel];
+
+	if (*src_w > scanline) {
+		DRM_DEBUG_DRIVER("Using horizontal coarse scaling\n");
+		*src_w = scanline;
+	}
 }
 
 void sun8i_vi_scaler_setup(struct sun8i_layer *layer,

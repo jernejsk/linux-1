@@ -14,7 +14,6 @@
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
 
-#include "sun4i_crtc.h"
 #include "sun8i_csc.h"
 #include "sun8i_mixer.h"
 #include "sun8i_rdma.h"
@@ -62,8 +61,6 @@ static void sun8i_vi_layer_update_coord(struct sun8i_layer *layer,
 					struct drm_plane *plane)
 {
 	struct drm_plane_state *state = plane->state;
-	struct sun4i_crtc *scrtc = drm_crtc_to_sun4i_crtc(state->crtc);
-	struct sun8i_mixer *mixer = engine_to_sun8i_mixer(scrtc->engine);
 	const struct drm_format_info *format = state->fb->format;
 	u32 src_w, src_h, dst_w, dst_h;
 	u32 outsize, insize;
@@ -122,39 +119,23 @@ static void sun8i_vi_layer_update_coord(struct sun8i_layer *layer,
 	subsampled = format->hsub > 1 || format->vsub > 1;
 
 	if (insize != outsize || subsampled || hphase || vphase) {
-		unsigned int scanline, required;
-		struct drm_display_mode *mode;
-		u32 hscale, vscale, fps;
-		u64 ability;
+		u32 hscale, vscale, cs_w, cs_h;
 
 		DRM_DEBUG_DRIVER("HW scaling is enabled\n");
 
-		mode = &plane->state->crtc->state->mode;
-		fps = (mode->clock * 1000) / (mode->vtotal * mode->htotal);
-		ability = clk_get_rate(mixer->mod_clk);
-		/* BSP algorithm assumes 80% efficiency of VI scaler unit */
-		ability *= 80;
-		do_div(ability, mode->vdisplay * fps * max(src_w, dst_w));
-
-		required = src_h * 100 / dst_h;
-
-		if (ability < required) {
-			DRM_DEBUG_DRIVER("Using vertical coarse scaling\n");
-			vm = src_h;
-			vn = (u32)ability * dst_h / 100;
-			src_h = vn;
-		}
-
-		if (subsampled)
-			scanline = layer->cfg->scanline_yuv[layer->channel];
-		else
-			scanline = layer->cfg->scanline_rgb[layer->channel];
-
-		if (src_w > scanline) {
-			DRM_DEBUG_DRIVER("Using horizontal coarse scaling\n");
+		cs_w = src_w;
+		cs_h = src_h;
+		sun8i_vi_scaler_coarse(layer, state, subsampled,
+				       &cs_w, &cs_h, dst_w, dst_h);
+		if (cs_w != src_w) {
 			hm = src_w;
-			hn = scanline;
-			src_w = hn;
+			hn = cs_w;
+			src_w = cs_w;
+		}
+		if (cs_h != src_h) {
+			vm = src_h;
+			vn = cs_h;
+			src_h = cs_h;
 		}
 
 		hscale = (src_w << 16) / dst_w;
